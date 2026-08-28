@@ -1,14 +1,23 @@
+from urllib.parse import quote_plus
+
 from pydantic_settings import BaseSettings
 from sqlalchemy import Enum, String, create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 
 class Settings(BaseSettings):
-    DATABASE_HOST: str = "localhost"
-    DATABASE_PORT: int = 5432
-    DATABASE_NAME: str = "shikhaconnect"
-    DATABASE_USER: str = "ravishukla"
-    DATABASE_PASSWORD: str = ""
+    # DATABASE_HOST: str = "localhost"
+    # DATABASE_PORT: int = 5432
+    # DATABASE_NAME: str = "shikhaconnect"
+    # DATABASE_USER: str = "ravishukla"
+    # DATABASE_PASSWORD: str = ""
+
+    DATABASE_HOST: str = "217.21.91.156"
+    DATABASE_PORT: int = 3306
+    DATABASE_NAME: str = "u671685499_connect"
+    DATABASE_USER: str = "u671685499_connect"
+    DATABASE_PASSWORD: str = "Shiksha@#$12345"
+
 
 
     class Config:
@@ -17,20 +26,41 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# PostgreSQL connection (previous setup)
+# if settings.DATABASE_PASSWORD:
+#     DATABASE_URL = (
+#         f"postgresql+psycopg2://"
+#         f"{settings.DATABASE_USER}:"
+#         f"{settings.DATABASE_PASSWORD}@"
+#         f"{settings.DATABASE_HOST}:"
+#         f"{settings.DATABASE_PORT}/"
+#         f"{settings.DATABASE_NAME}"
+#     )
+# else:
+#     DATABASE_URL = (
+#         f"postgresql+psycopg2://"
+#         f"{settings.DATABASE_USER}@"
+#         f"{settings.DATABASE_HOST}:"
+#         f"{settings.DATABASE_PORT}/"
+#         f"{settings.DATABASE_NAME}"
+#     )
+
+# MySQL connection for remote server
+user = quote_plus(settings.DATABASE_USER)
+password = quote_plus(settings.DATABASE_PASSWORD)
 
 if settings.DATABASE_PASSWORD:
     DATABASE_URL = (
-        f"postgresql+psycopg2://"
-        f"{settings.DATABASE_USER}:"
-        f"{settings.DATABASE_PASSWORD}@"
+        f"mysql+pymysql://"
+        f"{user}:{password}@"
         f"{settings.DATABASE_HOST}:"
         f"{settings.DATABASE_PORT}/"
         f"{settings.DATABASE_NAME}"
     )
 else:
     DATABASE_URL = (
-        f"postgresql+psycopg2://"
-        f"{settings.DATABASE_USER}@"
+        f"mysql+pymysql://"
+        f"{user}@"
         f"{settings.DATABASE_HOST}:"
         f"{settings.DATABASE_PORT}/"
         f"{settings.DATABASE_NAME}"
@@ -53,7 +83,9 @@ Base = declarative_base()
 def _column_sql_type(column):
     if isinstance(column.type, String):
         length = getattr(column.type, "length", None)
-        return "VARCHAR" if length is None else f"VARCHAR({length})"
+        if length is None:
+            return "VARCHAR(255)"
+        return f"VARCHAR({length})"
 
     if isinstance(column.type, Enum):
         return column.type.name
@@ -92,6 +124,12 @@ def sync_missing_columns():
             continue
 
         existing_columns = {col["name"] for col in inspector.get_columns(table_name)}
+        model_columns = {col.name for col in table.columns}
+
+        if "name" in existing_columns and "name" not in model_columns:
+            with engine.begin() as conn:
+                conn.execute(text(f'ALTER TABLE "{table_name}" DROP COLUMN IF EXISTS "name";'))
+            existing_columns.discard("name")
 
         for column in table.columns:
             if column.name in existing_columns:
@@ -127,6 +165,15 @@ def sync_missing_columns():
                             f"ALTER TABLE \"{table_name}\" ALTER COLUMN \"{column.name}\" SET NOT NULL;"
                         )
                     )
+
+
+def test_db_connection():
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return False
 
 
 def get_db():

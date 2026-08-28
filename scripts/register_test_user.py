@@ -6,7 +6,8 @@ def main():
     db = SessionLocal()
     try:
         user = User(
-            name="Test User",
+            first_name="Test",
+            last_name="User",
             email="test@example.com",
             mobile="9876543211",
             school_name="Bright Future School",
@@ -19,7 +20,8 @@ def main():
         print(
             "Inserted user:",
             user.id,
-            user.name,
+            user.first_name,
+            user.last_name,
             user.email,
             user.mobile,
             user.school_name,

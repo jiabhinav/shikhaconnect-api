@@ -8,7 +8,8 @@ def run_test():
     db = SessionLocal()
     try:
         u = UserCreate(
-            name="Script User",
+            first_name="Script",
+            last_name="User",
             email="script@example.com",
             mobile="9876543210",
             school_name="Central Academy",
@@ -16,7 +17,7 @@ def run_test():
             status=UserStatus.ACTIVE,
         )
         user = create_user(u, db=db)
-        print("Created:", user.id, user.name, user.email, user.mobile, user.school_name, user.role.value, user.status.value)
+        print("Created:", user["data"]["id"], user["data"]["first_name"], user["data"]["last_name"], user["data"]["email"], user["data"]["mobile"], user["data"]["school_name"], user["data"]["role"], user["data"]["status"])
 
         try:
             create_user(u, db=db)
