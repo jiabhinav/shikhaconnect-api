@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from dependencies.db import get_db_session
-from models.user import User
+from models.user import User, UserStatus
 from schemas.user import UserCreate, UserLogin, UserLoginResponse, UserRegisterResponse
 
 router = APIRouter(
@@ -51,6 +51,12 @@ def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid mobile number or password",
+        )
+
+    if user.status != UserStatus.ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is disabled",
         )
 
     token = hashlib.sha256(
