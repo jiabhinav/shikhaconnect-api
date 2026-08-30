@@ -15,7 +15,6 @@ router = APIRouter(
     tags=["Schools"],
 )
 
-
 def _role_value(user: User) -> str:
     return user.role.value if hasattr(user.role, "value") else str(user.role)
 
