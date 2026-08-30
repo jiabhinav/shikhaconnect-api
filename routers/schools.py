@@ -54,7 +54,7 @@ def _school_payload(school: School) -> dict:
     }
 
 
-@router.get("/", status_code=status.HTTP_200_OK)
+@router.get("/school", status_code=status.HTTP_200_OK)
 def get_schools(
     db: Session = Depends(get_db_session),
     current_user: User = Depends(get_current_user),
@@ -70,7 +70,7 @@ def get_schools(
     }
 
 
-@router.post("/create_school", status_code=status.HTTP_201_CREATED)
+@router.post("/create_school", status_code=status.HTTP_200_OK)
 def create_school(
     payload: SchoolCreate,
     db: Session = Depends(get_db_session),
