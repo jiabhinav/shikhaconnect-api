@@ -34,6 +34,13 @@ class SchoolInfo(BaseModel):
     principal_name: str = Field(min_length=1)
     exam_coordinator_name: Optional[str] = None
 
+    @field_validator("secondary_email", mode="before")
+    @classmethod
+    def empty_secondary_email_is_none(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @model_validator(mode="after")
     def validate_session_dates(self):
         if self.session_end_date < self.session_start_date:

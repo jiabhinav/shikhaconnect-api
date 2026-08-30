@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -54,6 +53,27 @@ def _school_payload(school: School) -> dict:
     }
 
 
+def _duplicate_school_fields(db: Session, school_info) -> dict[str, str]:
+    unique_fields = {
+        "primary_email": str(school_info.primary_email),
+        "school_code": school_info.school_code,
+        "school_affiliation_no": school_info.school_affiliation_no,
+        "u_dais_code": school_info.u_dais_code,
+    }
+    duplicates = {}
+    for field, value in unique_fields.items():
+        if value and db.query(School.id).filter(getattr(School, field) == value).first():
+            duplicates[field] = value
+    return duplicates
+
+
+def _duplicate_school_detail(duplicates: dict[str, str]) -> dict:
+    return {
+        "message": "School contains duplicate unique details",
+        "fields": duplicates,
+    }
+
+
 @router.get("/school", status_code=status.HTTP_200_OK)
 def get_schools(
     db: Session = Depends(get_db_session),
@@ -83,13 +103,12 @@ def create_school(
     sub_admin_ids = payload.assign_sub_admin.sub_admin_ids
     services = payload.add_services.services
 
-    duplicate_filters = [School.primary_email == str(school_info.primary_email)]
-    for field in ("school_code", "school_affiliation_no", "u_dais_code"):
-        value = getattr(school_info, field)
-        if value:
-            duplicate_filters.append(getattr(School, field) == value)
-    if db.query(School).filter(or_(*duplicate_filters)).first():
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="School code, email, affiliation number, or U-DAIS code already exists")
+    duplicates = _duplicate_school_fields(db, school_info)
+    if duplicates:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_duplicate_school_detail(duplicates),
+        )
 
     user_ids = [admin_id, *sub_admin_ids]
     users = db.query(User).filter(User.id.in_(user_ids)).all()
@@ -124,7 +143,9 @@ def create_school(
         db.refresh(school)
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="School contains duplicate unique details") from exc
+        duplicates = _duplicate_school_fields(db, school_info)
+        detail = _duplicate_school_detail(duplicates) if duplicates else "School contains conflicting unique details"
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
     except Exception:
         db.rollback()
         raise
