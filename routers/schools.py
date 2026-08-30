@@ -1,3 +1,5 @@
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -62,8 +64,9 @@ def _duplicate_school_fields(db: Session, school_info) -> dict[str, str]:
     }
     duplicates = {}
     for field, value in unique_fields.items():
-        if value and db.query(School.id).filter(getattr(School, field) == value).first():
-            duplicates[field] = value
+        normalized_value = value.strip() if isinstance(value, str) else value
+        if normalized_value and db.query(School.id).filter(getattr(School, field) == normalized_value).first():
+            duplicates[field] = normalized_value
     return duplicates
 
 
@@ -71,6 +74,36 @@ def _duplicate_school_detail(duplicates: dict[str, str]) -> dict:
     return {
         "message": "School contains duplicate unique details",
         "fields": duplicates,
+    }
+
+
+def _integrity_error_detail(exc: IntegrityError, school_info) -> dict:
+    """Return the duplicate field and submitted value reported by MySQL."""
+    error_message = str(getattr(exc, "orig", exc))
+    match = re.search(
+        r"Duplicate entry ['\"](?P<value>.*?)['\"] for key ['\"](?P<key>.*?)['\"]",
+        error_message,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return {"message": "School contains conflicting unique details"}
+
+    constraint = match.group("key")
+    constraint_name = constraint.rsplit(".", 1)[-1]
+    unique_fields = (
+        "primary_email",
+        "school_code",
+        "school_affiliation_no",
+        "u_dais_code",
+    )
+    field = next((name for name in unique_fields if name in constraint_name), None)
+    if field:
+        return _duplicate_school_detail({field: str(getattr(school_info, field))})
+
+    return {
+        "message": "School contains conflicting unique details",
+        "constraint": constraint,
+        "value": match.group("value"),
     }
 
 
@@ -144,7 +177,7 @@ def create_school(
     except IntegrityError as exc:
         db.rollback()
         duplicates = _duplicate_school_fields(db, school_info)
-        detail = _duplicate_school_detail(duplicates) if duplicates else "School contains conflicting unique details"
+        detail = _duplicate_school_detail(duplicates) if duplicates else _integrity_error_detail(exc, school_info)
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
     except Exception:
         db.rollback()

@@ -34,6 +34,14 @@ class SchoolInfo(BaseModel):
     principal_name: str = Field(min_length=1)
     exam_coordinator_name: Optional[str] = None
 
+    @field_validator("school_code", "school_affiliation_no", "u_dais_code", mode="before")
+    @classmethod
+    def empty_optional_unique_value_is_none(cls, value):
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
+
     @field_validator("secondary_email", mode="before")
     @classmethod
     def empty_secondary_email_is_none(cls, value):
