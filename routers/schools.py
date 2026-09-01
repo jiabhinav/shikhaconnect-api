@@ -21,7 +21,7 @@ def _role_value(user: User) -> str:
 
 def _require_super_admin(user: User) -> None:
     if _role_value(user) != UserRole.SUPER_ADMIN.value:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admin can create schools")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admin can manage schools")
 
 
 def _school_payload(school: School) -> dict:
@@ -54,7 +54,7 @@ def _school_payload(school: School) -> dict:
     }
 
 
-def _duplicate_school_fields(db: Session, school_info) -> dict[str, str]:
+def _duplicate_school_fields(db: Session, school_info, exclude_school_id: int | None = None) -> dict[str, str]:
     unique_fields = {
         "primary_email": str(school_info.primary_email),
         "school_code": school_info.school_code,
@@ -64,7 +64,10 @@ def _duplicate_school_fields(db: Session, school_info) -> dict[str, str]:
     duplicates = {}
     for field, value in unique_fields.items():
         normalized_value = value.strip() if isinstance(value, str) else value
-        if normalized_value and db.query(School.id).filter(getattr(School, field) == normalized_value).first():
+        query = db.query(School.id).filter(getattr(School, field) == normalized_value)
+        if exclude_school_id is not None:
+            query = query.filter(School.id != exclude_school_id)
+        if normalized_value and query.first():
             duplicates[field] = normalized_value
     return duplicates
 
@@ -186,4 +189,98 @@ def create_school(
         "status": "success",
         "message": "School created successfully",
         "data": _school_payload(school),
+    }
+
+
+@router.put("/update_school/{school_id}", status_code=status.HTTP_200_OK)
+def update_school(
+    school_id: int,
+    payload: SchoolCreate,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    _require_super_admin(current_user)
+
+    school = db.query(School).filter(School.id == school_id).first()
+    if not school:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="School not found")
+
+    school_info = payload.school_info
+    duplicates = _duplicate_school_fields(db, school_info, exclude_school_id=school_id)
+    if duplicates:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_duplicate_school_detail(duplicates),
+        )
+
+    admin_id = payload.assign_admin.admin_id
+    sub_admin_ids = payload.assign_sub_admin.sub_admin_ids
+    user_ids = [admin_id, *sub_admin_ids]
+    users = db.query(User).filter(User.id.in_(user_ids)).all()
+    users_by_id = {user.id: user for user in users}
+    missing_ids = sorted(set(user_ids) - users_by_id.keys())
+    if missing_ids:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Users not found: {missing_ids}")
+    if _role_value(users_by_id[admin_id]) != UserRole.ADMIN.value:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="admin_id must belong to a user with Admin role")
+    invalid_sub_admins = [user_id for user_id in sub_admin_ids if _role_value(users_by_id[user_id]) != UserRole.SUB_ADMIN.value]
+    if invalid_sub_admins:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Users are not Sub Admins: {invalid_sub_admins}")
+    inactive_ids = [user.id for user in users if user.status != UserStatus.ACTIVE]
+    if inactive_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Assigned users are inactive: {inactive_ids}")
+
+    for field, value in payload.school_values().items():
+        setattr(school, field, value)
+    school.assignments = [
+        SchoolUserAssignment(user_id=admin_id, role=UserRole.ADMIN.value),
+        *(SchoolUserAssignment(user_id=user_id, role=UserRole.SUB_ADMIN.value) for user_id in sub_admin_ids),
+    ]
+    school.permissions = [
+        SchoolPermission(service_name=service, is_enabled=True)
+        for service in payload.add_services.services
+    ]
+
+    try:
+        db.commit()
+        db.refresh(school)
+    except IntegrityError as exc:
+        db.rollback()
+        duplicates = _duplicate_school_fields(db, school_info, exclude_school_id=school_id)
+        detail = _duplicate_school_detail(duplicates) if duplicates else _integrity_error_detail(exc, school_info)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "status": "success",
+        "message": "School updated successfully",
+        "data": _school_payload(school),
+    }
+
+
+@router.delete("/delete_school/{school_id}", status_code=status.HTTP_200_OK)
+def delete_school(
+    school_id: int,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    _require_super_admin(current_user)
+
+    school = db.query(School).filter(School.id == school_id).first()
+    if not school:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="School not found")
+
+    try:
+        db.delete(school)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "status": "success",
+        "message": "School deleted successfully",
+        "data": {"id": school_id},
     }
