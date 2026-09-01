@@ -54,6 +54,23 @@ def _school_payload(school: School) -> dict:
     }
 
 
+def _school_detail_payload(school: School) -> dict:
+    """Return every schools-table field along with related assignments and services."""
+    payload = {
+        column.name: getattr(school, column.name)
+        for column in School.__table__.columns
+    }
+    for field in ("session_start_date", "session_end_date"):
+        value = payload[field]
+        payload[field] = value.isoformat() if value else None
+
+    summary = _school_payload(school)
+    payload["admins"] = summary["admins"]
+    payload["sub_admins"] = summary["sub_admins"]
+    payload["services"] = summary["services"]
+    return payload
+
+
 def _duplicate_school_fields(db: Session, school_info, exclude_school_id: int | None = None) -> dict[str, str]:
     unique_fields = {
         "primary_email": str(school_info.primary_email),
@@ -147,7 +164,7 @@ def get_school_by_id(
     return {
         "status": "success",
         "message": "School fetched successfully",
-        "data": _school_payload(school),
+        "data": _school_detail_payload(school),
     }
 
 
