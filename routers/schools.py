@@ -125,6 +125,32 @@ def get_schools(
     }
 
 
+@router.get("/school/{school_id}", status_code=status.HTTP_200_OK)
+def get_school_by_id(
+    school_id: int,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    query = db.query(School).filter(School.id == school_id)
+    if _role_value(current_user) != UserRole.SUPER_ADMIN.value:
+        query = query.join(SchoolUserAssignment).filter(
+            SchoolUserAssignment.user_id == current_user.id
+        )
+
+    school = query.first()
+    if not school:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="School not found",
+        )
+
+    return {
+        "status": "success",
+        "message": "School fetched successfully",
+        "data": _school_payload(school),
+    }
+
+
 @router.post("/create_school", status_code=status.HTTP_200_OK)
 def create_school(
     payload: SchoolCreate,
