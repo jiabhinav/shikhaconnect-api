@@ -275,16 +275,35 @@ def update_school(
 
     for field, value in payload.school_values().items():
         setattr(school, field, value)
-    school.assignments = [
-        SchoolUserAssignment(user_id=admin_id, role=UserRole.ADMIN.value),
-        *(SchoolUserAssignment(user_id=user_id, role=UserRole.SUB_ADMIN.value) for user_id in sub_admin_ids),
-    ]
-    school.permissions = [
-        SchoolPermission(service_name=service, is_enabled=True)
-        for service in payload.add_services.services
-    ]
+    desired_assignments = {
+        admin_id: UserRole.ADMIN.value,
+        **{user_id: UserRole.SUB_ADMIN.value for user_id in sub_admin_ids},
+    }
+    existing_assignments = {
+        assignment.user_id: assignment
+        for assignment in school.assignments
+    }
+    for user_id, assignment in list(existing_assignments.items()):
+        if user_id not in desired_assignments:
+            school.assignments.remove(assignment)
+        else:
+            assignment.role = desired_assignments[user_id]
+    for user_id, role in desired_assignments.items():
+        if user_id not in existing_assignments:
+            school.assignments.append(
+                SchoolUserAssignment(user_id=user_id, role=role)
+            )
 
     try:
+        # Permissions are a complete replacement during an update. Flush the
+        # deletions first so the unique constraint does not conflict when a
+        # previously selected service is inserted again.
+        school.permissions.clear()
+        db.flush()
+        school.permissions.extend(
+            SchoolPermission(service_name=service_name, is_enabled=True)
+            for service_name in payload.add_services.services
+        )
         db.commit()
         db.refresh(school)
     except IntegrityError as exc:
