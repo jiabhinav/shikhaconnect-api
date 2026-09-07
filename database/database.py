@@ -2,42 +2,46 @@ from datetime import date, datetime
 
 from pydantic_settings import BaseSettings
 from sqlalchemy import Boolean, Date, DateTime, Enum, Numeric, String, create_engine, inspect, text
-from sqlalchemy.engine import URL
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 
 class Settings(BaseSettings):
-    DATABASE_HOST: str
+    DATABASE_URL: str | None = None
+    DATABASE_HOST: str | None = None
     DATABASE_PORT: int = 5432
-    DATABASE_NAME: str
-    DATABASE_USER: str
-    DATABASE_PASSWORD: str
+    DATABASE_NAME: str | None = None
+    DATABASE_USER: str | None = None
+    DATABASE_PASSWORD: str | None = None
 
     class Config:
         env_file = ".env"
 
 
+def build_database_url(config: Settings) -> URL:
+    """Prefer a hosted database URL; retain separate fields for local use."""
+    if config.DATABASE_URL:
+        url = make_url(config.DATABASE_URL)
+        if url.drivername not in ("postgres", "postgresql", "postgresql+psycopg2"):
+            raise ValueError("DATABASE_URL must be a PostgreSQL connection URL")
+        return url.set(drivername="postgresql+psycopg2")
+
+    required = ("DATABASE_HOST", "DATABASE_NAME", "DATABASE_USER", "DATABASE_PASSWORD")
+    missing = [name for name in required if getattr(config, name) is None]
+    if missing:
+        raise ValueError("Set DATABASE_URL or provide: " + ", ".join(missing))
+    return URL.create(
+        "postgresql+psycopg2",
+        username=config.DATABASE_USER,
+        password=config.DATABASE_PASSWORD,
+        host=config.DATABASE_HOST,
+        port=config.DATABASE_PORT,
+        database=config.DATABASE_NAME,
+    )
+
+
 settings = Settings()
-
-# PostgreSQL connection (active; uses port 5432).
-DATABASE_URL = URL.create(
-    "postgresql+psycopg2",
-    username=settings.DATABASE_USER,
-    password=settings.DATABASE_PASSWORD,
-    host=settings.DATABASE_HOST,
-    port=settings.DATABASE_PORT,
-    database=settings.DATABASE_NAME,
-)
-
-# MySQL connection (commented out).
-# DATABASE_URL = URL.create(
-#     "mysql+pymysql",
-#     username=settings.DATABASE_USER,
-#     password=settings.DATABASE_PASSWORD,
-#     host=settings.DATABASE_HOST,
-#     port=settings.DATABASE_PORT,
-#     database=settings.DATABASE_NAME,
-# )
+DATABASE_URL = build_database_url(settings)
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
