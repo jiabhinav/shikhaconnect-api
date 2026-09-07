@@ -1,15 +1,15 @@
 # ShikshaConnect API
 
-FastAPI application backed by an existing MySQL database.
+FastAPI application backed by an existing PostgreSQL database.
 
-## MySQL configuration
+## PostgreSQL configuration
 
-Create a MySQL database and a user with schema and data permissions, then set
-`DATABASE_HOST`, `DATABASE_PORT` (default `3306`), `DATABASE_NAME`,
+Create a PostgreSQL database and a user with schema and data permissions, then set
+`DATABASE_HOST`, `DATABASE_PORT` (default `5432`), `DATABASE_NAME`,
 `DATABASE_USER`, and `DATABASE_PASSWORD` in `.env` using `.env.example`.
-The app uses SQLAlchemy with `PyMySQL`; passwords may contain URL special
+The app uses SQLAlchemy with `PyPostgreSQL`; passwords may contain URL special
 characters without manual encoding. Existing `.env` credentials must be
-updated to your MySQL server before starting the app.
+updated to your PostgreSQL server before starting the app.
 
 For local development:
 
@@ -19,14 +19,14 @@ uvicorn main:app --reload
 curl http://127.0.0.1:8000/health
 ```
 
-Startup creates tables in the configured MySQL database. The PostgreSQL
+Startup creates tables in the configured PostgreSQL database. The MySQL
 connection is retained as commented code in `database/database.py`.
 Missing columns are added automatically, but changes to existing columns,
 constraints, indexes, and enum labels require explicit migrations.
 
 ## Deploy to a VPS with Docker Compose
 
-These instructions assume a Linux VPS with SSH access and an existing MySQL
+These instructions assume a Linux VPS with SSH access and an existing PostgreSQL
 server reachable from the VPS. No database container or database migration is
 included. Install Docker Engine and the Compose plugin using the
 [official instructions for your Linux distribution](https://docs.docker.com/engine/install/).

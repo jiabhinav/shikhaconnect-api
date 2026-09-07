@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 
 class Settings(BaseSettings):
     DATABASE_HOST: str
-    DATABASE_PORT: int = 3306
+    DATABASE_PORT: int = 5432
     DATABASE_NAME: str
     DATABASE_USER: str
     DATABASE_PASSWORD: str
@@ -19,25 +19,25 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# PostgreSQL connection (disabled; uses port 5432).
-# DATABASE_URL = URL.create(
-#     "postgresql+psycopg2",
-#     username=settings.DATABASE_USER,
-#     password=settings.DATABASE_PASSWORD,
-#     host=settings.DATABASE_HOST,
-#     port=settings.DATABASE_PORT,
-#     database=settings.DATABASE_NAME,
-# )
-
-# MySQL connection (active; uses port 3306).
+# PostgreSQL connection (active; uses port 5432).
 DATABASE_URL = URL.create(
-    "mysql+pymysql",
+    "postgresql+psycopg2",
     username=settings.DATABASE_USER,
     password=settings.DATABASE_PASSWORD,
     host=settings.DATABASE_HOST,
     port=settings.DATABASE_PORT,
     database=settings.DATABASE_NAME,
 )
+
+# MySQL connection (commented out).
+# DATABASE_URL = URL.create(
+#     "mysql+pymysql",
+#     username=settings.DATABASE_USER,
+#     password=settings.DATABASE_PASSWORD,
+#     host=settings.DATABASE_HOST,
+#     port=settings.DATABASE_PORT,
+#     database=settings.DATABASE_NAME,
+# )
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
@@ -53,7 +53,7 @@ Base = declarative_base()
 
 
 def _column_sql_type(column):
-    # Compile native MySQL types, including inline ENUM definitions.
+    # Compile types for the configured database dialect.
     return column.type.compile(dialect=engine.dialect)
 
 
@@ -83,7 +83,12 @@ def _missing_column_value(column):
 
 
 def sync_missing_columns():
-    """Add missing model columns using additive MySQL DDL."""
+    """Add missing model columns using additive SQL DDL.
+
+    This function is dialect-aware and will issue the appropriate
+    ALTER statements for MySQL and PostgreSQL when adding columns
+    and setting NOT NULL constraints.
+    """
     inspector = inspect(engine)
     quote = engine.dialect.identifier_preparer.quote
 
@@ -106,6 +111,8 @@ def sync_missing_columns():
             column_sql = _column_sql_type(column)
 
             with engine.begin() as conn:
+                if engine.dialect.name == "postgresql" and isinstance(column.type, Enum):
+                    column.type.create(conn, checkfirst=True)
                 # Nullable-first works even when the existing table has rows.
                 conn.execute(
                     text(
@@ -114,17 +121,36 @@ def sync_missing_columns():
                     )
                 )
                 if not column.nullable:
+                    # Fill existing NULLs with a safe default value.
                     conn.execute(
                         table.update()
                         .where(column.is_(None))
                         .values({column.name: _missing_column_value(column)}),
                     )
-                    conn.execute(
-                        text(
-                            f"ALTER TABLE {quoted_table} "
-                            f"MODIFY COLUMN {quoted_column} {column_sql} NOT NULL"
+
+                    # Apply NOT NULL using dialect-appropriate SQL.
+                    if engine.dialect.name == "mysql":
+                        conn.execute(
+                            text(
+                                f"ALTER TABLE {quoted_table} "
+                                f"MODIFY COLUMN {quoted_column} {column_sql} NOT NULL"
+                            )
                         )
-                    )
+                    elif engine.dialect.name in ("postgresql", "postgres"):
+                        conn.execute(
+                            text(
+                                f"ALTER TABLE {quoted_table} "
+                                f"ALTER COLUMN {quoted_column} SET NOT NULL"
+                            )
+                        )
+                    else:
+                        # Fallback: try generic ALTER (may or may not work).
+                        conn.execute(
+                            text(
+                                f"ALTER TABLE {quoted_table} "
+                                f"ALTER COLUMN {quoted_column} SET NOT NULL"
+                            )
+                        )
 
 
 def test_db_connection():
