@@ -1,0 +1,19 @@
+# Use with: docker compose -f compose.yaml -f compose.vps.yaml up -d --build
+services:
+  api:
+    environment:
+      # Clear any URL from .env so the container settings below take precedence.
+      DATABASE_URL: ""
+      DATABASE_HOST: postgresql-xqcn-postgresql-1
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: shikshaconnect
+      DATABASE_USER: shikshaconnect
+      # DATABASE_PASSWORD is read from .env and must match VPS PostgreSQL.
+    networks:
+      - default
+      - vps_postgres
+
+networks:
+  vps_postgres:
+    external: true
+    name: postgresql-xqcn_default
