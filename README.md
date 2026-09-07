@@ -1,0 +1,84 @@
+# ShikshaConnect API
+
+FastAPI application backed by an existing MySQL database.
+
+## Deploy to a VPS with Docker Compose
+
+These instructions assume a Linux VPS with SSH access and an existing MySQL
+server reachable from the VPS. No database container or database migration is
+included. Install Docker Engine and the Compose plugin using the
+[official instructions for your Linux distribution](https://docs.docker.com/engine/install/).
+
+1. Clone or copy this project to the VPS and enter its directory.
+2. Create the configuration (skip the copy if `.env` already exists):
+
+   ```sh
+   cp .env.example .env
+   chmod 600 .env
+   nano .env
+   ```
+
+   Set all five database values. Single-quote passwords containing `$` or `#`.
+   Use the remote database hostname/IP; `localhost` inside the container refers
+   to the API container. Allow the VPS IP in your database provider's remote
+   access settings. Keep `.env` on the server and out of Git.
+
+3. Build and start:
+
+   ```sh
+   docker compose up -d --build
+   docker compose ps
+   docker compose logs --tail=100 api
+   curl http://127.0.0.1:8000/health
+   ```
+
+   A successful health response contains `"database_connected": true`.
+   Startup creates missing tables and adds missing columns using the existing
+   application logic, so back up the database before deploying. The database
+   user needs the corresponding schema permissions. One Uvicorn process runs
+   per container to avoid concurrent startup schema changes.
+
+4. Set up HTTPS: point your API domain's DNS A record to the VPS IP (and an
+   AAAA record only if IPv6 works). Install Caddy on the VPS using its
+   [official installation instructions](https://caddyserver.com/docs/install).
+   Replace `api.example.com` in `deploy/Caddyfile` with your domain. On a
+   dedicated VPS using Caddy's standard systemd installation:
+
+   ```sh
+   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+   sudo caddy validate --config /etc/caddy/Caddyfile
+   sudo systemctl enable --now caddy
+   sudo systemctl reload caddy
+   ```
+
+   If Caddy already serves other sites, add this site's block to its existing
+   configuration instead of replacing that file. Allow inbound TCP ports 80
+   and 443 in the VPS/provider firewall and retain SSH access. Caddy obtains
+   and renews certificates automatically. The API port binds only to VPS
+   loopback; access the API through `https://YOUR_DOMAIN` and its interactive
+   documentation through `https://YOUR_DOMAIN/docs`.
+
+## Operations
+
+After copying updated code to the VPS:
+
+```sh
+docker compose up -d --build
+docker compose logs --tail=100 api
+```
+
+Stop with `docker compose down`. The remote database is unaffected. Containers
+restart after process failures and Docker restarts; a failed health check marks
+the container unhealthy but does not itself trigger a restart.
+
+## Existing security issues to address before public use
+
+Database credentials were previously hardcoded in source; rotate that password
+because older Git history may retain it. Adding `.gitignore` does not untrack
+an already tracked `.env` file.
+
+The current authentication code stores and compares plaintext passwords and
+returns passwords in user payloads. Fix password hashing and remove passwords
+from responses before handling real users on a public deployment.
+
+Container setup follows the [Docker Python guide](https://docs.docker.com/guides/python/).

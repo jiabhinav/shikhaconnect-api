@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+.venv
+venv
+**/__pycache__
+**/*.py[cod]
+.DS_Store
+.agents
+.codex
+scripts

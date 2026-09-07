@@ -7,19 +7,11 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 
 
 class Settings(BaseSettings):
-    # DATABASE_HOST: str = "localhost"
-    # DATABASE_PORT: int = 5432
-    # DATABASE_NAME: str = "shikhaconnect"
-    # DATABASE_USER: str = "ravishukla"
-    # DATABASE_PASSWORD: str = ""
-
-    DATABASE_HOST: str = "217.21.91.156"
+    DATABASE_HOST: str
     DATABASE_PORT: int = 3306
-    DATABASE_NAME: str = "u671685499_connect"
-    DATABASE_USER: str = "u671685499_connect"
-    DATABASE_PASSWORD: str = "Shiksha@#$12345"
-
-
+    DATABASE_NAME: str
+    DATABASE_USER: str
+    DATABASE_PASSWORD: str
 
     class Config:
         env_file = ".env"
