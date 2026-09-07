@@ -1,8 +1,8 @@
 from datetime import date, datetime
-from urllib.parse import quote_plus
 
 from pydantic_settings import BaseSettings
 from sqlalchemy import Boolean, Date, DateTime, Enum, Numeric, String, create_engine, inspect, text
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 
@@ -19,48 +19,27 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# PostgreSQL connection (previous setup)
-# if settings.DATABASE_PASSWORD:
-#     DATABASE_URL = (
-#         f"postgresql+psycopg2://"
-#         f"{settings.DATABASE_USER}:"
-#         f"{settings.DATABASE_PASSWORD}@"
-#         f"{settings.DATABASE_HOST}:"
-#         f"{settings.DATABASE_PORT}/"
-#         f"{settings.DATABASE_NAME}"
-#     )
-# else:
-#     DATABASE_URL = (
-#         f"postgresql+psycopg2://"
-#         f"{settings.DATABASE_USER}@"
-#         f"{settings.DATABASE_HOST}:"
-#         f"{settings.DATABASE_PORT}/"
-#         f"{settings.DATABASE_NAME}"
-#     )
+# PostgreSQL connection (disabled; uses port 5432).
+# DATABASE_URL = URL.create(
+#     "postgresql+psycopg2",
+#     username=settings.DATABASE_USER,
+#     password=settings.DATABASE_PASSWORD,
+#     host=settings.DATABASE_HOST,
+#     port=settings.DATABASE_PORT,
+#     database=settings.DATABASE_NAME,
+# )
 
-# MySQL connection for remote server
-user = quote_plus(settings.DATABASE_USER)
-password = quote_plus(settings.DATABASE_PASSWORD)
+# MySQL connection (active; uses port 3306).
+DATABASE_URL = URL.create(
+    "mysql+pymysql",
+    username=settings.DATABASE_USER,
+    password=settings.DATABASE_PASSWORD,
+    host=settings.DATABASE_HOST,
+    port=settings.DATABASE_PORT,
+    database=settings.DATABASE_NAME,
+)
 
-if settings.DATABASE_PASSWORD:
-    DATABASE_URL = (
-        f"mysql+pymysql://"
-        f"{user}:{password}@"
-        f"{settings.DATABASE_HOST}:"
-        f"{settings.DATABASE_PORT}/"
-        f"{settings.DATABASE_NAME}"
-    )
-else:
-    DATABASE_URL = (
-        f"mysql+pymysql://"
-        f"{user}@"
-        f"{settings.DATABASE_HOST}:"
-        f"{settings.DATABASE_PORT}/"
-        f"{settings.DATABASE_NAME}"
-    )
-
-
-engine = create_engine(DATABASE_URL)
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
 SessionLocal = sessionmaker(
@@ -74,7 +53,7 @@ Base = declarative_base()
 
 
 def _column_sql_type(column):
-    # Use native MySQL definitions, including DECIMAL and ENUM values.
+    # Compile native MySQL types, including inline ENUM definitions.
     return column.type.compile(dialect=engine.dialect)
 
 
@@ -84,14 +63,12 @@ def _missing_column_value(column):
         default_value = getattr(column.default, "arg", column.default)
         if callable(default_value):
             default_value = None
-        if hasattr(default_value, "value"):
-            default_value = default_value.value
         if default_value is not None:
             return default_value
 
     if isinstance(column.type, Enum):
         values = list(getattr(column.type, "enums", []))
-        return values[0] if values else ""
+        return column.type.enum_class[values[0]] if column.type.enum_class else (values[0] if values else "")
     if isinstance(column.type, String):
         return ""
     if isinstance(column.type, Boolean):
@@ -106,7 +83,7 @@ def _missing_column_value(column):
 
 
 def sync_missing_columns():
-    """Add missing model columns using additive, MySQL-compatible DDL."""
+    """Add missing model columns using additive MySQL DDL."""
     inspector = inspect(engine)
     quote = engine.dialect.identifier_preparer.quote
 
@@ -138,11 +115,9 @@ def sync_missing_columns():
                 )
                 if not column.nullable:
                     conn.execute(
-                        text(
-                            f"UPDATE {quoted_table} SET {quoted_column} = :fill_value "
-                            f"WHERE {quoted_column} IS NULL"
-                        ),
-                        {"fill_value": _missing_column_value(column)},
+                        table.update()
+                        .where(column.is_(None))
+                        .values({column.name: _missing_column_value(column)}),
                     )
                     conn.execute(
                         text(
