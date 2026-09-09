@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -6,8 +8,13 @@ from routers.auth import router as auth_router
 from routers.schools import router as school_router
 from routers.users import router as user_router
 
-Base.metadata.create_all(bind=engine)
-sync_missing_columns()
+logger = logging.getLogger(__name__)
+
+try:
+    Base.metadata.create_all(bind=engine)
+    sync_missing_columns()
+except Exception as exc:
+    logger.warning("Database initialization failed during startup: %s", exc)
 
 app = FastAPI(
     title="School Management API",
@@ -25,6 +32,8 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "http://127.0.0.1:4173",
+        "http://localhost:4173",
         "http://127.0.0.1:5173",
         "http://localhost:5173",
         "https://shikshaconnect.com",
