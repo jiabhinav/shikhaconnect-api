@@ -6,16 +6,38 @@ FastAPI application backed by an existing PostgreSQL database.
 
 Create a PostgreSQL database and a user with schema and data permissions, then set
 `DATABASE_HOST`, `DATABASE_PORT` (default `5432`), `DATABASE_NAME`,
-`DATABASE_USER`, and `DATABASE_PASSWORD` in `.env` using `.env.example`.
+`DATABASE_USER`, and `DATABASE_PASSWORD` in the active environment file.
+Use `.env.example` as the template, or create `.env.dev` / `.env.prod` for
+separate development and production settings.
 The app uses SQLAlchemy with `psycopg2`; passwords may contain URL special
-characters without manual encoding. Existing `.env` credentials must be
+characters without manual encoding. Existing environment credentials must be
 updated to your PostgreSQL server before starting the app.
+
+The app automatically loads the active environment file based on `APP_ENV` or
+`ENVIRONMENT`:
+
+```sh
+export APP_ENV=dev
+# loads .env.dev if it exists, otherwise falls back to .env
+
+export APP_ENV=prod
+# loads .env.prod if it exists, otherwise falls back to .env
+```
 
 For local development:
 
 ```sh
 pip install -r requirements.txt
-uvicorn main:app --reload
+export APP_ENV=dev
+uvicorn main:app --reload --host 0.0.0.0 --port 8001
+curl http://127.0.0.1:8001/health
+```
+
+Production runs on port 8000:
+
+```sh
+export APP_ENV=prod
+uvicorn main:app --host 0.0.0.0 --port 8000
 curl http://127.0.0.1:8000/health
 ```
 
@@ -99,10 +121,18 @@ included. Install Docker Engine and the Compose plugin using the
 3. Build and start:
 
    ```sh
-   docker compose up -d --build
+   export APP_ENV=prod
+   docker compose --env-file .env.prod up -d --build
    docker compose ps
    docker compose logs --tail=100 api
    curl http://127.0.0.1:8000/health
+   ```
+
+   For local dev, use:
+
+   ```sh
+   export APP_ENV=dev
+   docker compose --env-file .env.dev up -d --build
    ```
 
    A successful health response contains `"database_connected": true`.

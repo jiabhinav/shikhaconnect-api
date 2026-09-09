@@ -6,7 +6,7 @@ services:
       DATABASE_URL: ""
       DATABASE_HOST: postgresql-xqcn-postgresql-1
       DATABASE_PORT: "5432"
-      DATABASE_NAME: shikshaconnect
+      DATABASE_NAME: shikshaconnect-dev
       DATABASE_USER: shikshaconnect
       # DATABASE_PASSWORD is read from .env and must match VPS PostgreSQL.
     networks:
