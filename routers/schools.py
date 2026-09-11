@@ -1,19 +1,136 @@
+import logging
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy import extract
 from sqlalchemy.orm import Session
 
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
+from database.session_table import ensure_session_table
 from models.school import School, SchoolPermission, SchoolUserAssignment
 from models.user import User, UserRole, UserStatus
 from schemas.school import SchoolCreate
+from models.session import Session as SchoolSession
+from schemas.session import SessionCreate, SessionResult, SessionListResult
+from routers.class_sections import router as class_section_router
+from routers.subjects import router as subject_router
+from routers.streams import router as stream_router
+from routers.fee_categories import router as fee_category_router
+from routers.caste_categories import router as caste_category_router
+from routers.houses import router as house_router
+from routers.generation_settings import router as generation_settings_router
+from routers.timetable_settings import router as timetable_settings_router
+from routers.students import router as student_router
 
 router = APIRouter(
     prefix="/schools",
     tags=["Schools"],
 )
+router.include_router(class_section_router)
+router.include_router(subject_router)
+router.include_router(stream_router)
+router.include_router(fee_category_router)
+router.include_router(caste_category_router)
+router.include_router(house_router)
+router.include_router(generation_settings_router)
+router.include_router(timetable_settings_router)
+router.include_router(student_router)
+
+
+def _require_session_school(db: Session, school_id: int, user: User):
+    query = db.query(School).filter(School.id == school_id)
+    if _role_value(user) != UserRole.SUPER_ADMIN.value:
+        query = query.join(SchoolUserAssignment).filter(
+            SchoolUserAssignment.user_id == user.id,
+            SchoolUserAssignment.role.in_([UserRole.ADMIN.value, UserRole.SUB_ADMIN.value]),
+        )
+    if not query.first():
+        raise HTTPException(status_code=404, detail="School not found")
+    try:
+        ensure_session_table(db.connection())
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logging.getLogger(__name__).exception("Could not initialize the sessions table")
+        raise HTTPException(
+            status_code=503,
+            detail="Session storage is unavailable. Check database connectivity and schema permissions.",
+        ) from exc
+
+
+def _session_duplicate(db, school_id, payload, exclude_id=None):
+    query = db.query(SchoolSession.id).filter(
+        SchoolSession.school_id == school_id,
+        extract("year", SchoolSession.start_date) == payload.start_date.year,
+        extract("year", SchoolSession.end_date) == payload.end_date.year,
+    )
+    if exclude_id is not None:
+        query = query.filter(SchoolSession.id != exclude_id)
+    return query.first() is not None
+
+
+def _save_session(db, session, payload):
+    try:
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+    except IntegrityError as exc:
+        db.rollback()
+        if _session_duplicate(db, session.school_id, payload, session.id):
+            raise HTTPException(status_code=409, detail="A session with these start and end years already exists for this school") from exc
+        raise HTTPException(status_code=409, detail="Session conflicts with existing database records") from exc
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/school/{school_id}/sessions", response_model=SessionResult, status_code=201)
+def create_session(
+    school_id: int,
+    payload: SessionCreate,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    _require_session_school(db, school_id, current_user)
+    if _session_duplicate(db, school_id, payload):
+        raise HTTPException(status_code=409, detail="A session with these start and end years already exists for this school")
+    session = SchoolSession(school_id=school_id, **payload.model_dump())
+    _save_session(db, session, payload)
+    return {"message": "Session created successfully", "data": session}
+
+
+@router.put("/school/{school_id}/sessions/{session_id}", response_model=SessionResult)
+def update_session(
+    school_id: int,
+    session_id: int,
+    payload: SessionCreate,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    _require_session_school(db, school_id, current_user)
+    session = db.query(SchoolSession).filter_by(id=session_id, school_id=school_id).first()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if _session_duplicate(db, school_id, payload, session_id):
+        raise HTTPException(status_code=409, detail="A session with these start and end years already exists for this school")
+    for field, value in payload.model_dump().items():
+        setattr(session, field, value)
+    _save_session(db, session, payload)
+    return {"message": "Session updated successfully", "data": session}
+
+
+@router.get("/school/{school_id}/sessions", response_model=SessionListResult)
+def list_sessions(
+    school_id: int,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    _require_session_school(db, school_id, current_user)
+    sessions = db.query(SchoolSession).filter_by(school_id=school_id).order_by(
+        SchoolSession.start_date.desc(), SchoolSession.id.desc()
+    ).all()
+    return {"message": "Sessions fetched successfully", "data": sessions}
 
 def _role_value(user: User) -> str:
     return user.role.value if hasattr(user.role, "value") else str(user.role)

@@ -167,6 +167,22 @@ def test_db_connection():
 
 
 def get_db():
+    import logging
+    from fastapi import HTTPException
+    from sqlalchemy.exc import SQLAlchemyError
+    from database.table_init import ensure_all_tables
+
+    # Run before authentication queries as users/schools may also be missing.
+    try:
+        with engine.begin() as connection:
+            ensure_all_tables(connection)
+    except SQLAlchemyError as exc:
+        logging.getLogger(__name__).exception("Automatic table creation failed")
+        raise HTTPException(
+            status_code=503,
+            detail="Database unavailable. Check database connectivity and schema creation permissions.",
+        ) from exc
+
     db = SessionLocal()
 
     try:

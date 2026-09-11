@@ -3,18 +3,21 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from database.database import Base, engine, sync_missing_columns, test_db_connection
+from database.database import engine, sync_missing_columns, test_db_connection
 from routers.auth import router as auth_router
 from routers.schools import router as school_router
 from routers.users import router as user_router
 
+from database.table_init import ensure_all_tables
+
 logger = logging.getLogger(__name__)
 
 try:
-    Base.metadata.create_all(bind=engine)
+    with engine.begin() as connection:
+        ensure_all_tables(connection)
     sync_missing_columns()
-except Exception as exc:
-    logger.warning("Database initialization failed during startup: %s", exc)
+except Exception:
+    logger.exception("Database initialization failed; database requests will retry table creation")
 
 app = FastAPI(
     title="School Management API",
