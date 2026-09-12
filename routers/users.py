@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from dependencies.db import get_db_session
 from dependencies.auth import get_current_user
+from models.school import SchoolUserAssignment
 from models.user import User, UserRole, UserStatus
 from schemas.user import UserCreate, UserRegisterResponse, UserStatusUpdate, UserUpdate
 
@@ -351,6 +352,7 @@ def delete_user(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this user")
 
     try:
+        db.query(SchoolUserAssignment).filter(SchoolUserAssignment.user_id == user_id).delete(synchronize_session=False)
         db.delete(user)
         db.commit()
     except Exception:
