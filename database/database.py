@@ -5,7 +5,6 @@ from sqlalchemy import Boolean, Date, DateTime, Enum, Numeric, String, create_en
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-
 class Settings(BaseSettings):
     DATABASE_URL: str | None = None
     DATABASE_HOST: str | None = None
