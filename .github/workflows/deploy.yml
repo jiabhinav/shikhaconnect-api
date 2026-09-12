@@ -8,12 +8,6 @@ on:
 
 jobs:
 
-  # ==========================================
-  # PRODUCTION
-  # GitHub: main
-  # VPS: /root/shikshaconnect-api
-  # Port: 8000
-  # ==========================================
   deploy-production:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -30,7 +24,7 @@ jobs:
             set -e
 
             echo "========================================"
-            echo "Starting PRODUCTION deployment"
+            echo "STARTING PRODUCTION DEPLOYMENT"
             echo "========================================"
 
             cd /root/shikshaconnect-api
@@ -41,30 +35,21 @@ jobs:
             echo "Fetching latest code..."
             git fetch origin
 
-            echo "Checking out main branch..."
-            git checkout main
+            echo "Updating production..."
+            git checkout -f main
+            git reset --hard origin/main
 
-            echo "Pulling latest main branch..."
-            git pull --ff-only origin main
-
-            echo "Building and starting Production API..."
+            echo "Building Production..."
             docker compose up -d --build
 
-            echo "Production containers:"
+            echo "Production status:"
             docker compose ps
 
             echo "========================================"
-            echo "PRODUCTION deployment completed"
+            echo "PRODUCTION DEPLOYMENT COMPLETE"
             echo "========================================"
 
 
-  # ==========================================
-  # DEVELOPMENT
-  # GitHub: dev
-  # VPS: /root/shikshaconnect-api-dev
-  # Docker Compose project: shikshaconnect-dev
-  # Port: 8001
-  # ==========================================
   deploy-development:
     if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
@@ -81,7 +66,7 @@ jobs:
             set -e
 
             echo "========================================"
-            echo "Starting DEVELOPMENT deployment"
+            echo "STARTING DEVELOPMENT DEPLOYMENT"
             echo "========================================"
 
             cd /root/shikshaconnect-api-dev
@@ -89,28 +74,27 @@ jobs:
             echo "Current directory:"
             pwd
 
+            echo "Backing up Dev .env..."
+            cp .env /tmp/shikshaconnect-dev.env
+
             echo "Fetching latest code..."
             git fetch origin
 
-            echo "Checking development branch..."
+            echo "Switching to dev branch..."
+            git checkout -f dev
 
-            if git show-ref --verify --quiet refs/heads/dev; then
-              echo "Local dev branch exists."
-              git checkout dev
-            else
-              echo "Creating local dev branch from origin/dev..."
-              git checkout -b dev origin/dev
-            fi
+            echo "Resetting to latest origin/dev..."
+            git reset --hard origin/dev
 
-            echo "Pulling latest dev branch..."
-            git pull --ff-only origin dev
+            echo "Restoring Dev .env..."
+            cp /tmp/shikshaconnect-dev.env .env
 
-            echo "Building and starting Development API..."
+            echo "Building and starting Dev..."
             docker compose -p shikshaconnect-dev up -d --build
 
-            echo "Development containers:"
+            echo "Development status:"
             docker compose -p shikshaconnect-dev ps
 
             echo "========================================"
-            echo "DEVELOPMENT deployment completed"
+            echo "DEVELOPMENT DEPLOYMENT COMPLETE"
             echo "========================================"
