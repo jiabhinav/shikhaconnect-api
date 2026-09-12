@@ -36,7 +36,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            cd /root/shikshaconnect-dev-api
+            cd /root/shikshaconnect-api-dev
             git checkout dev
             git pull origin dev
             docker compose up -d --build
