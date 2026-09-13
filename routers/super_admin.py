@@ -13,6 +13,7 @@ from models.school import School, SchoolPermission
 from models.session import Session as SchoolSession
 from models.user import User, UserRole
 from schemas.school import SchoolCreate, SchoolUpdate
+from schemas.session import SessionResponse
 from routers.modules import router as module_router
 
 router = APIRouter(
@@ -74,7 +75,15 @@ def _school_payload(school: School, db: Session) -> dict:
 
 
 def _school_detail_payload(school: School, db: Session) -> dict:
-    return _school_payload(school, db)
+    payload = _school_payload(school, db)
+    sessions = db.query(SchoolSession).filter_by(school_id=school.id).order_by(
+        SchoolSession.start_date.desc(), SchoolSession.id.desc()
+    ).all()
+    payload["sessions"] = [
+        SessionResponse.model_validate(session).model_dump(mode="json")
+        for session in sessions
+    ]
+    return payload
 
 
 def _duplicate_school_fields(db: Session, school_info, exclude_school_id: int | None = None) -> dict[str, str]:

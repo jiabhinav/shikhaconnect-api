@@ -60,6 +60,38 @@ class SchoolCreationTests(unittest.TestCase):
                 self.assertEqual(session.start_date, date(2026, 4, 1))
                 self.assertEqual(session.end_date, date(2027, 3, 31))
 
+    def test_get_schools_includes_only_each_schools_sessions(self):
+        school_ids = []
+        for index in range(2):
+            payload = self.payload | {"school_info": self.payload["school_info"] | {
+                "primary_email": f"sessions{index}@example.com"}}
+            response = self.client.post("/super-admin/create_school", json=payload)
+            self.assertEqual(response.status_code, 200, response.text)
+            school_ids.append(response.json()["data"]["id"])
+        historical = SchoolSession(school_id=school_ids[0], name="History",
+            start_date=date(2024, 4, 1), end_date=date(2025, 3, 31))
+        self.db.add(historical)
+        self.db.query(SchoolSession).filter_by(school_id=school_ids[1]).delete()
+        self.db.commit()
+        for prefix in ("/schools", "/super-admin"):
+            with self.subTest(prefix=prefix):
+                response = self.client.get(f"{prefix}/school")
+                self.assertEqual(response.status_code, 200, response.text)
+                schools = {school["id"]: school for school in response.json()["data"]}
+                sessions = schools[school_ids[0]]["sessions"]
+                self.assertEqual(len(sessions), 2)
+                self.assertEqual([item["name"] for item in sessions], ["2026-27", "History"])
+                self.assertTrue(all(item["school_id"] == school_ids[0] for item in sessions))
+                self.assertEqual(sessions[1], {
+                    "id": historical.id, "school_id": school_ids[0], "name": "History",
+                    "start_date": "2024-04-01", "end_date": "2025-03-31",
+                    "status": historical.status})
+                self.assertEqual(schools[school_ids[1]]["sessions"], [])
+                for school_id in school_ids:
+                    response = self.client.get(f"{prefix}/school/{school_id}")
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(response.json()["data"]["sessions"], schools[school_id]["sessions"])
+
     def test_session_failure_rolls_back_school_and_permissions(self):
         def fail_insert(mapper, connection, target):
             raise RuntimeError("Session insert failed")
@@ -161,6 +193,28 @@ class SchoolCreationTests(unittest.TestCase):
                 self.db.refresh(historical)
                 self.assertEqual(original.name, "Renamed")
                 self.assertEqual(historical.name, "History")
+
+    def test_update_removes_legacy_year_index(self):
+        for index, prefix in enumerate(("/schools", "/super-admin")):
+            with self.subTest(prefix=prefix):
+                self.payload["school_info"]["primary_email"] = f"legacy{index}@example.com"
+                response = self.client.post(f"{prefix}/create_school", json=self.payload)
+                self.assertEqual(response.status_code, 200, response.text)
+                school_id = response.json()["data"]["id"]
+                self.db.add(SchoolSession(school_id=school_id, name="Other",
+                    start_date=date(2026, 1, 1), end_date=date(2026, 12, 31)))
+                self.db.execute(text("CREATE UNIQUE INDEX uq_session_school_years ON sessions "
+                    "(school_id, strftime('%Y', start_date), strftime('%Y', end_date))"))
+                self.db.commit()
+                updated = self.payload | {"school_info": self.payload["school_info"] | {
+                    "session_start_date": "2026-01-01", "session_end_date": "2026-12-31"}}
+                response = self.client.put(f"{prefix}/update_school/{school_id}", json=updated)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(self.db.query(SchoolSession).filter_by(school_id=school_id).count(), 2)
+                self.assertIsNone(self.db.execute(text("SELECT name FROM sqlite_master "
+                    "WHERE name = 'uq_session_school_years'")).scalar())
+                self.db.query(SchoolSession).filter_by(school_id=school_id).delete()
+                self.db.commit()
 
     def test_update_creates_missing_session(self):
         response = self.client.post("/super-admin/create_school", json=self.payload)

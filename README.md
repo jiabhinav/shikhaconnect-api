@@ -29,10 +29,11 @@ Invalid dates or blank names return 422. Session names, dates, and year pairs
 may repeat within a school and across schools.
 
 Startup creates the `sessions` table with a school foreign key and date check.
-For existing PostgreSQL tables, apply `migrations/001_session_constraints.sql`
-and then `migrations/004_allow_duplicate_session_dates.sql` to retain date
-validation and remove the legacy unique year-pair index. Automatic column
-synchronization does not update these constraints.
+Startup and school/session requests automatically remove the legacy
+`uq_session_school_years` index from existing databases. The database role needs
+permission to drop this index. Alternatively, apply
+`migrations/004_allow_duplicate_session_dates.sql` manually before deployment.
+The date-order check remains enforced.
 Existing session fields on the school record remain separate from this list.
 
 Run the API and constraint tests against an isolated in-memory database:

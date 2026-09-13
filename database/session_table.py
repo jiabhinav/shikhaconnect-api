@@ -3,11 +3,31 @@ from sqlalchemy import text
 from models.session import Session as SchoolSession
 
 
+def remove_legacy_session_year_index(connection):
+    """Upgrade existing databases to allow duplicate session dates."""
+    if connection.dialect.name == "postgresql":
+        exists = connection.execute(text(
+            "SELECT to_regclass('uq_session_school_years') IS NOT NULL"
+        )).scalar()
+    elif connection.dialect.name == "sqlite":
+        exists = connection.execute(text(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'uq_session_school_years' AND tbl_name = 'sessions'"
+        )).scalar()
+    else:
+        return
+    if exists:
+        if connection.dialect.name == "postgresql":
+            connection.execute(text("SELECT pg_advisory_xact_lock(731904219)"))
+        connection.execute(text("DROP INDEX IF EXISTS uq_session_school_years"))
+
+
 def ensure_session_table(connection):
     """Create the session table if absent, serializing PostgreSQL workers."""
     if connection.dialect.name == "postgresql":
         connection.execute(text("SELECT pg_advisory_xact_lock(731904219)"))
     SchoolSession.__table__.create(bind=connection, checkfirst=True)
+    remove_legacy_session_year_index(connection)
 
 
 def update_school_session(db, school, school_info):
