@@ -24,8 +24,8 @@ class Session(Base):
     @property
     def status(self):
         today = date.today()
-        if self.end_date < today:
-            return "Past"
-        if self.start_date > today:
+        if today < self.start_date:
             return "Upcoming"
-        return "Current"
+        if self.start_date <= today <= self.end_date:
+            return "Current"
+        return "Past"

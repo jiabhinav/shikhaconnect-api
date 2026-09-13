@@ -83,10 +83,35 @@ class SessionTests(unittest.TestCase):
             self.db.rollback()
 
     def test_status(self):
-        today = date.today()
-        self.assertEqual(SchoolSession(start_date=today, end_date=today).status, "Current")
-        self.assertEqual(SchoolSession(start_date=date(2000, 1, 1), end_date=date(2001, 1, 1)).status, "Past")
-        self.assertEqual(SchoolSession(start_date=date(9998, 1, 1), end_date=date(9999, 1, 1)).status, "Upcoming")
+        cases = (
+            (date(2026, 4, 1), date(2027, 3, 31), date(2026, 3, 31), "Upcoming"),
+            (date(2026, 4, 1), date(2027, 3, 31), date(2026, 4, 1), "Current"),
+            (date(2026, 4, 1), date(2027, 3, 31), date(2026, 9, 14), "Current"),
+            (date(2026, 4, 1), date(2027, 3, 31), date(2027, 3, 31), "Current"),
+            (date(2026, 4, 1), date(2027, 3, 31), date(2027, 4, 1), "Past"),
+            (date(2026, 9, 13), date(2026, 9, 13), date(2026, 9, 13), "Current"),
+            (date(2026, 9, 13), date(2026, 9, 13), date(2026, 9, 14), "Past"),
+        )
+        for start, end, today, expected in cases:
+            with self.subTest(start=start, end=end, today=today):
+                with patch("models.session.date") as clock:
+                    clock.today.return_value = today
+                    self.assertEqual(SchoolSession(start_date=start, end_date=end).status, expected)
+
+    def test_api_status_changes_with_today(self):
+        for today, expected in ((date(2025, 3, 31), "Upcoming"),
+                                (date(2025, 4, 1), "Current"),
+                                (date(2026, 3, 31), "Current"),
+                                (date(2026, 4, 1), "Past")):
+            with self.subTest(today=today):
+                with patch("models.session.date") as clock:
+                    clock.today.return_value = today
+                    if self.db.query(SchoolSession).count() == 0:
+                        response = self.client.post(self.url, json=self.payload)
+                        self.assertEqual(response.status_code, 201, response.text)
+                    response = self.client.get(self.url)
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(response.json()["data"][0]["status"], expected)
 
     def test_missing_table_is_created_for_same_day_payload(self):
         SchoolSession.__table__.drop(self.engine)
