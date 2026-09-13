@@ -25,7 +25,6 @@ class SessionResponse(SessionCreate):
     school_id: int
     status: Literal["Past", "Current", "Upcoming"]
 
-
 class SessionResult(BaseModel):
     status: str = "success"
     message: str

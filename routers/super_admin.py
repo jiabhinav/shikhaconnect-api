@@ -119,7 +119,6 @@ def _duplicate_school_detail(duplicates: dict[str, str]) -> dict:
         "fields": duplicates,
     }
 
-
 def _integrity_error_detail(exc: IntegrityError, school_info) -> dict:
     """Extract conflicting fields and values from database integrity errors."""
     error_message = str(getattr(exc, "orig", exc))
