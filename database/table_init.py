@@ -5,6 +5,7 @@ from pkgutil import walk_packages
 from sqlalchemy import inspect, text
 
 from database.database import Base
+from database.school_permissions_table import allow_legacy_service_name_null
 
 
 def register_models():
@@ -16,6 +17,7 @@ def register_models():
 
 def ensure_all_tables(connection):
     register_models()
+    allow_legacy_service_name_null(connection)
     existing = set(inspect(connection).get_table_names())
     if set(Base.metadata.tables).issubset(existing):
         return

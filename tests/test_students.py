@@ -2,7 +2,6 @@ import unittest
 import test_sessions
 from schemas.student import StudentInfo, ParentInfo, StudentAddress
 from models.student import Student
-from models.school import SchoolUserAssignment
 from models.user import UserRole
 from database.table_init import ensure_all_tables
 
@@ -58,19 +57,7 @@ class StudentTests(unittest.TestCase):
         url='/schools/school/1/students'
         for role in (UserRole.ADMIN,UserRole.SUB_ADMIN):
             self.user.role=role
-            self.assertEqual(self.client.post(url,json=nest(payload)).status_code,404)
-            assignment=SchoolUserAssignment(school_id=1,user_id=1,role=role.value)
-            self.db.add(assignment)
-            self.db.commit()
-            response=self.client.post(url,json=nest(payload))
-            self.assertEqual(response.status_code,201,response.text)
-            sid=response.json()['data']['id']
-            self.assertEqual(self.client.put(f'{url}/{sid}',json=nest(payload)).status_code,200)
-            self.assertEqual(self.client.get(f'/schools/school/2/students/{sid}').status_code,404)
-            self.assertEqual(self.client.put(f'/schools/school/2/students/{sid}',json=nest(payload)).status_code,404)
-            self.db.delete(assignment)
-            self.db.commit()
-            self.assertEqual(self.client.get(f'{url}/{sid}').status_code,404)
+            self.assertEqual(self.client.post(url,json=nest(payload)).status_code,403)
 
 
 def nest(payload):

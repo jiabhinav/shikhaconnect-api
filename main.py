@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database.database import engine, sync_missing_columns, test_db_connection
 from routers.auth import router as auth_router
 from routers.schools import router as school_router
+from routers.super_admin import router as super_admin_router
 from routers.users import router as user_router
 
 from database.table_init import ensure_all_tables
@@ -52,6 +53,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(user_router)
+app.include_router(super_admin_router)
 app.include_router(school_router)
 
 

@@ -1,7 +1,6 @@
 import unittest
 import test_sessions
 from models.subject import Subject
-from models.school import SchoolUserAssignment
 from models.user import UserRole
 
 
@@ -9,11 +8,9 @@ class SubjectTests(unittest.TestCase):
     setUp = test_sessions.SessionTests.setUp
     tearDown = test_sessions.SessionTests.tearDown
 
-    def test_admin_and_sub_admin_crud_status(self):
-        for role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
+    def test_super_admin_crud_status(self):
+        for role in (UserRole.SUPER_ADMIN,):
             self.user.role = role
-            assignment = SchoolUserAssignment(school_id=1, user_id=1, role=role.value)
-            self.db.add(assignment)
             self.db.commit()
             url = "/schools/school/1/subjects"
             response = self.client.post(url, json={"name": "English", "code": "ENG"})
@@ -30,7 +27,6 @@ class SubjectTests(unittest.TestCase):
             self.assertEqual(self.client.patch(item_url + "/status", json={"status": "Active"}).status_code, 200)
             self.assertEqual(self.client.delete(item_url).status_code, 200)
             self.assertEqual(self.client.delete(item_url).status_code, 404)
-            self.db.delete(assignment)
             self.db.commit()
 
     def test_auto_creation_duplicates_and_validation(self):
@@ -59,8 +55,8 @@ class SubjectTests(unittest.TestCase):
         self.assertEqual(self.client.delete(other).status_code, 404)
         for role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
             self.user.role = role
-            self.assertEqual(self.client.get(url).status_code, 404)
-            self.assertEqual(self.client.post(url, json={"name": "X"}).status_code, 404)
-            self.assertEqual(self.client.put(f"{url}/{item_id}", json={"name": "X"}).status_code, 404)
-            self.assertEqual(self.client.patch(f"{url}/{item_id}/status", json={"status": "Inactive"}).status_code, 404)
-            self.assertEqual(self.client.delete(f"{url}/{item_id}").status_code, 404)
+            self.assertEqual(self.client.get(url).status_code, 403)
+            self.assertEqual(self.client.post(url, json={"name": "X"}).status_code, 403)
+            self.assertEqual(self.client.put(f"{url}/{item_id}", json={"name": "X"}).status_code, 403)
+            self.assertEqual(self.client.patch(f"{url}/{item_id}/status", json={"status": "Inactive"}).status_code, 403)
+            self.assertEqual(self.client.delete(f"{url}/{item_id}").status_code, 403)

@@ -87,49 +87,28 @@ class TransportPayment(BaseModel):
     transport_status: Optional[str] = None
 
 
-class AssignAdmin(BaseModel):
-    admin_id: int = Field(gt=0)
-
-
-class AssignSubAdmins(BaseModel):
-    sub_admin_ids: list[int] = Field(default_factory=list)
-
-    @field_validator("sub_admin_ids")
-    @classmethod
-    def unique_sub_admins(cls, value: list[int]) -> list[int]:
-        if any(user_id <= 0 for user_id in value):
-            raise ValueError("sub_admin_ids must contain positive user IDs")
-        if len(value) != len(set(value)):
-            raise ValueError("sub_admin_ids cannot contain duplicates")
-        return value
-
-
-class AddServices(BaseModel):
-    services: list[str] = Field(default_factory=list)
-
-    @field_validator("services")
-    @classmethod
-    def clean_services(cls, value: list[str]) -> list[str]:
-        cleaned = [service.strip() for service in value if service.strip()]
-        if len(cleaned) != len(set(cleaned)):
-            raise ValueError("services cannot contain duplicates")
-        return cleaned
-
-
 class SchoolCreate(BaseModel):
     school_info: SchoolInfo
     address: SchoolAddress
     fee_payment: FeePayment = Field(default_factory=FeePayment)
     transport_payment: TransportPayment = Field(default_factory=TransportPayment)
-    assign_admin: AssignAdmin
-    assign_sub_admin: AssignSubAdmins = Field(default_factory=AssignSubAdmins)
-    add_services: AddServices = Field(default_factory=AddServices)
+    services: list[int] = Field(default_factory=list)
 
-    @model_validator(mode="after")
-    def validate_assignments(self):
-        if self.assign_admin.admin_id in self.assign_sub_admin.sub_admin_ids:
-            raise ValueError("The admin cannot also be assigned as a sub admin")
-        return self
+    @field_validator("services")
+    @classmethod
+    def clean_services(cls, value: list[int]) -> list[int]:
+        cleaned = []
+        seen = set()
+        for service in value:
+            if not isinstance(service, int):
+                raise ValueError("services must be integer module IDs")
+            if service <= 0:
+                raise ValueError("service IDs must be positive")
+            if service in seen:
+                raise ValueError("services cannot contain duplicates")
+            seen.add(service)
+            cleaned.append(int(service))
+        return cleaned
 
     def school_values(self) -> dict:
         values = {}
@@ -138,3 +117,7 @@ class SchoolCreate(BaseModel):
         values["primary_email"] = str(self.school_info.primary_email)
         values["secondary_email"] = str(self.school_info.secondary_email) if self.school_info.secondary_email else None
         return values
+
+
+class SchoolUpdate(SchoolCreate):
+    pass

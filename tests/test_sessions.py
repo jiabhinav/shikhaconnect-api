@@ -13,7 +13,7 @@ from sqlalchemy.pool import StaticPool
 from database.database import Base
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
-from models.school import School, SchoolUserAssignment
+from models.school import School
 from models.session import Session as SchoolSession
 from models.user import User, UserRole
 from routers.schools import router
@@ -68,13 +68,8 @@ class SessionTests(unittest.TestCase):
         session_id = self.client.post("/schools/school/2/sessions", json=self.payload).json()["data"]["id"]
         self.assertEqual(self.client.put(f"{self.url}/{session_id}", json=self.payload).status_code, 404)
         self.user.role = UserRole.ADMIN
-        self.assertEqual(self.client.get(self.url).status_code, 404)
-        self.assertEqual(self.client.post(self.url, json=self.payload).status_code, 404)
-        self.db.add(SchoolUserAssignment(school_id=1, user_id=1, role=UserRole.ADMIN.value))
-        self.db.commit()
-        self.assertEqual(self.client.post(self.url, json=self.payload).status_code, 201)
-        self.assertEqual(self.client.get(self.url).status_code, 200)
-        self.assertEqual(self.client.get("/schools/school/2/sessions").status_code, 404)
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+        self.assertEqual(self.client.post(self.url, json=self.payload).status_code, 403)
 
     def test_database_constraints(self):
         self.client.post(self.url, json=self.payload)

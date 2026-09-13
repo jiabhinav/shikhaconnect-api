@@ -5,7 +5,6 @@ import test_sessions
 from database import database
 from dependencies.db import get_db_session
 from models.fee_category import FeeCategory
-from models.school import SchoolUserAssignment
 from models.user import UserRole
 
 
@@ -37,21 +36,7 @@ class FeeCategoryTests(unittest.TestCase):
         url = "/schools/school/1/fee_categories"
         for role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
             self.user.role = role
-            self.assertEqual(self.client.post(url, json={"name": "BIO"}).status_code, 404)
-            assignment = SchoolUserAssignment(school_id=1, user_id=1, role=role.value)
-            self.db.add(assignment)
-            self.db.commit()
-            response = self.client.post(url, json={"name": "BIO"})
-            self.assertEqual(response.status_code, 201, response.text)
-            item_id = response.json()["data"]["id"]
-            self.assertEqual(self.client.get(url).status_code, 200)
-            other = f"/schools/school/2/fee_categories/{item_id}"
-            self.assertEqual(self.client.put(other, json={"name": "X"}).status_code, 404)
-            self.assertEqual(self.client.delete(other).status_code, 404)
-            self.assertEqual(self.client.put(f"{url}/{item_id}", json={"name": "MATHS"}).status_code, 200)
-            self.assertEqual(self.client.delete(f"{url}/{item_id}").status_code, 200)
-            self.db.delete(assignment)
-            self.db.commit()
+            self.assertEqual(self.client.post(url, json={"name": "BIO"}).status_code, 403)
 
     def test_auto_creation_through_database_dependency(self):
         FeeCategory.__table__.drop(self.engine)

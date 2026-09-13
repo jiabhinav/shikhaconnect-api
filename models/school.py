@@ -61,30 +61,16 @@ class School(Base):
     vehicle_type = Column(String(100), nullable=True)
     transport_status = Column(String(50), nullable=True)
 
-    assignments = relationship("SchoolUserAssignment", cascade="all, delete-orphan", back_populates="school")
     permissions = relationship("SchoolPermission", cascade="all, delete-orphan", back_populates="school")
-
-
-class SchoolUserAssignment(Base):
-    __tablename__ = "school_user_assignments"
-    __table_args__ = (UniqueConstraint("school_id", "user_id", name="uq_school_user_assignment"),)
-
-    id = Column(Integer, primary_key=True)
-    school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
-    role = Column(String(50), nullable=False)
-
-    school = relationship("School", back_populates="assignments")
-    user = relationship("User")
 
 
 class SchoolPermission(Base):
     __tablename__ = "school_permissions"
-    __table_args__ = (UniqueConstraint("school_id", "service_name", name="uq_school_permission"),)
+    __table_args__ = (UniqueConstraint("school_id", "module_id", name="uq_school_permission"),)
 
     id = Column(Integer, primary_key=True)
     school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, index=True)
-    service_name = Column(String(100), nullable=False)
+    module_id = Column(Integer, nullable=False)
     is_enabled = Column(Boolean, nullable=False, default=True)
 
     school = relationship("School", back_populates="permissions")

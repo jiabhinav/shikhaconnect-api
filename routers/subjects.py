@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from database.subject_table import ensure_subject_table
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
-from models.school import School, SchoolUserAssignment
+from models.school import School
 from models.subject import Subject
 from models.user import User, UserRole
 from schemas.subject import SubjectWrite, SubjectStatusUpdate, SubjectStatus, SubjectResult, SubjectListResult
@@ -19,12 +19,7 @@ def subject_storage(school_id: int, db: Session = Depends(get_db_session),
                     current_user: User = Depends(get_current_user)):
     query = db.query(School).filter(School.id == school_id)
     if current_user.role != UserRole.SUPER_ADMIN:
-        if current_user.role not in (UserRole.ADMIN, UserRole.SUB_ADMIN):
-            raise HTTPException(403, "Only school administrators can manage subjects")
-        query = query.join(SchoolUserAssignment).filter(
-            SchoolUserAssignment.user_id == current_user.id,
-            SchoolUserAssignment.role.in_([UserRole.ADMIN.value, UserRole.SUB_ADMIN.value]),
-        )
+        raise HTTPException(status_code=403, detail="Only Super Admin can access schools")
     if query.first() is None:
         raise HTTPException(404, "School not found")
     try:

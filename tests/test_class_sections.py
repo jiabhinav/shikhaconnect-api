@@ -52,7 +52,7 @@ class ClassSectionTests(unittest.TestCase):
         self.user.role = UserRole.ADMIN
         for resource in ("classes", "sections"):
             url = f"/schools/school/1/{resource}"
-            self.assertEqual(self.client.get(url).status_code, 404)
-            self.assertEqual(self.client.post(url, json={"name": "B"}).status_code, 404)
-            self.assertEqual(self.client.put(f"{url}/1", json={"name": "B"}).status_code, 404)
-            self.assertEqual(self.client.delete(f"{url}/1").status_code, 404)
+            self.assertEqual(self.client.get(url).status_code, 403)
+            self.assertEqual(self.client.post(url, json={"name": "B"}).status_code, 403)
+            self.assertEqual(self.client.put(f"{url}/1", json={"name": "B"}).status_code, 403)
+            self.assertEqual(self.client.delete(f"{url}/1").status_code, 403)

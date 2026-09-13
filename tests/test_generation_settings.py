@@ -1,7 +1,6 @@
 import unittest
 import test_sessions
 from models.generation_settings import FeeGenerationSettings, TransportGenerationSettings
-from models.school import SchoolUserAssignment
 from models.user import UserRole
 from database.table_init import ensure_all_tables
 
@@ -41,15 +40,8 @@ class GenerationSettingsTests(unittest.TestCase):
         self.assertEqual(self.client.put(transport, json={'generation_day':1,'payment_due_day':32}).status_code, 422)
         for role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
             self.user.role = role
-            self.assertEqual(self.client.put(url, json=payload).status_code, 404)
-            self.assertEqual(self.client.get(url).status_code, 404)
-            assignment = SchoolUserAssignment(school_id=1,user_id=1,role=role.value)
-            self.db.add(assignment)
-            self.db.commit()
-            self.assertEqual(self.client.put(url,json=payload).status_code, 200)
-            self.assertEqual(self.client.get(url).status_code, 200)
-            self.db.delete(assignment)
-            self.db.commit()
+            self.assertEqual(self.client.put(url, json=payload).status_code, 403)
+            self.assertEqual(self.client.get(url).status_code, 403)
 
     def test_missing_tables_recreated(self):
         for model in (FeeGenerationSettings, TransportGenerationSettings):

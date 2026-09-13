@@ -11,7 +11,8 @@ class TableInitializationTests(unittest.TestCase):
         try:
             with engine.begin() as connection:
                 ensure_all_tables(connection)
-                expected = {"users", "schools", "school_user_assignments", "school_permissions", "sessions", "classes", "sections", "subjects"}
+                self.assertNotIn("school_user_assignments", inspect(connection).get_table_names())
+                expected = {"users", "schools", "school_permissions", "sessions", "classes", "sections", "subjects"}
                 self.assertTrue(expected.issubset(set(inspect(connection).get_table_names())))
                 connection.execute(text("INSERT INTO users (id, first_name, last_name, email, mobile, password, role, status) VALUES (1, 'Test', 'User', 'test@example.com', '12345', '', 'ADMIN', 'ACTIVE')"))
                 ensure_all_tables(connection)

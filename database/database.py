@@ -6,6 +6,8 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 class Settings(BaseSettings):
+    APP_ENV: str = "dev"
+    PORT: int = 8000
     DATABASE_URL: str | None = None
     DATABASE_HOST: str | None = None
     DATABASE_PORT: int = 5432
@@ -15,6 +17,7 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 
 def build_database_url(config: Settings) -> URL:

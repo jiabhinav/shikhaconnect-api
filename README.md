@@ -254,7 +254,7 @@ New subjects default to Active. Responses follow the existing
 All modules under `models` are discovered automatically. At startup and before
 requests using the database dependency (including authentication), missing model
 tables are created in foreign-key dependency order. This includes users, schools,
-assignments, permissions, sessions, classes, sections, and subjects. PostgreSQL
+permissions, sessions, classes, sections, and subjects. PostgreSQL
 initialization uses a transaction advisory lock to coordinate concurrent workers.
 Existing tables and rows are preserved. The database must already exist and its
 configured user must have schema creation permissions. If initialization cannot
@@ -475,3 +475,8 @@ PUT requires all starred fields and clears omitted optional fields. Responses
 include the same three sections plus top-level `id` and `school_id` in the existing response envelope. The database remains a single students table. Flat request bodies are no longer accepted.
 Invalid input returns 422; missing/inaccessible students or reference IDs return
 404; database reference conflicts return 409. No student sample data is inserted.
+
+School-scoped APIs currently require Super Admin access. School permissions
+are linked by `school_id`; users no longer have school assignments. Apply
+`migrations/003_drop_school_user_assignments.sql` to remove the legacy table
+and its records from existing databases.

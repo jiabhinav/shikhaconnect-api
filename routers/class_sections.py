@@ -9,7 +9,7 @@ from database.class_section_tables import ensure_class_section_tables
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
 from models.class_section import SchoolClass, Section
-from models.school import School, SchoolUserAssignment
+from models.school import School
 from models.user import User, UserRole
 from schemas.class_section import (
     ClassWrite, SectionWrite, ClassResult, ClassListResult, SectionResult, SectionListResult,
@@ -22,10 +22,7 @@ def school_storage(school_id: int, db: Session = Depends(get_db_session),
                    current_user: User = Depends(get_current_user)):
     query = db.query(School).filter(School.id == school_id)
     if current_user.role != UserRole.SUPER_ADMIN:
-        query = query.join(SchoolUserAssignment).filter(
-            SchoolUserAssignment.user_id == current_user.id,
-            SchoolUserAssignment.role.in_([UserRole.ADMIN.value, UserRole.SUB_ADMIN.value]),
-        )
+        raise HTTPException(status_code=403, detail="Only Super Admin can access schools")
     if query.first() is None:
         raise HTTPException(404, "School not found")
     try:
