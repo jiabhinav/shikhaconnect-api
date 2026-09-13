@@ -1,3 +1,5 @@
+from datetime import date
+
 import logging
 import re
 
@@ -8,7 +10,7 @@ from sqlalchemy.orm import Session
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
 from database.module_names import get_module_names
-from database.session_table import ensure_session_table, update_school_session
+from database.session_table import ensure_session_table, update_school_session, validate_session_years
 from models.school import School, SchoolPermission
 from models.user import User, UserRole
 from schemas.school import SchoolCreate, SchoolUpdate
@@ -59,6 +61,7 @@ def _require_session_school(db: Session, school_id: int, user: User):
 
 def _save_session(db, session):
     try:
+        validate_session_years(db, session.school_id, session.start_date, session.end_date, session.id)
         db.add(session)
         db.commit()
         db.refresh(session)
@@ -150,7 +153,12 @@ def _school_payload(school: School, db: Session) -> dict:
 
 def _school_detail_payload(school: School, db: Session) -> dict:
     payload = _school_payload(school, db)
-    sessions = db.query(SchoolSession).filter_by(school_id=school.id).order_by(
+    year = date.today().year
+    sessions = db.query(SchoolSession).filter(
+        SchoolSession.school_id == school.id,
+        SchoolSession.start_date <= date(year, 12, 31),
+        SchoolSession.end_date >= date(year, 1, 1),
+    ).order_by(
         SchoolSession.start_date.desc(), SchoolSession.id.desc()
     ).all()
     payload["sessions"] = [
@@ -333,6 +341,7 @@ def create_school(
         ensure_session_table(db.connection())
         db.add(school)
         db.flush()
+        validate_session_years(db, school.id, school_info.session_start_date, school_info.session_end_date)
         db.add(SchoolSession(
             school_id=school.id,
             name=school_info.session_name,

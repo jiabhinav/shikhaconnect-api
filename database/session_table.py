@@ -1,4 +1,5 @@
-from sqlalchemy import text
+from fastapi import HTTPException
+from sqlalchemy import extract, text
 
 from models.session import Session as SchoolSession
 
@@ -30,6 +31,25 @@ def ensure_session_table(connection):
     remove_legacy_session_year_index(connection)
 
 
+def validate_session_years(db, school_id, start_date, end_date, exclude_id=None):
+    """Check the year pair while the session initialization lock is held."""
+    with db.no_autoflush:
+        query = db.query(SchoolSession.id).filter(
+            SchoolSession.school_id == school_id,
+            extract("year", SchoolSession.start_date) == start_date.year,
+            extract("year", SchoolSession.end_date) == end_date.year,
+        )
+        if exclude_id is not None:
+            query = query.filter(SchoolSession.id != exclude_id)
+        if query.first() is not None:
+            raise HTTPException(status_code=409, detail={
+                "message": "A session with these start and end years already exists for this school",
+                "school_id": school_id,
+                "start_year": start_date.year,
+                "end_year": end_date.year,
+            })
+
+
 def update_school_session(db, school, school_info):
     """Synchronize the school's configured session, preserving other sessions."""
     ensure_session_table(db.connection())
@@ -39,6 +59,8 @@ def update_school_session(db, school, school_info):
         start_date=school.session_start_date,
         end_date=school.session_end_date,
     ).order_by(SchoolSession.id).first()
+    validate_session_years(db, school.id, school_info.session_start_date,
+        school_info.session_end_date, session.id if session else None)
     if session is None:
         session = SchoolSession(school_id=school.id)
         db.add(session)

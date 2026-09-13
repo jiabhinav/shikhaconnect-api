@@ -51,12 +51,12 @@ class SessionTests(unittest.TestCase):
         session_id = response.json()["data"]["id"]
         self.assertEqual(response.json()["data"]["school_id"], 1)
         duplicate = dict(self.payload, start_date="2025-06-01", end_date="2026-06-30")
-        self.assertEqual(self.client.post(self.url, json=duplicate).status_code, 201)
+        self.assertEqual(self.client.post(self.url, json=duplicate).status_code, 409)
         self.assertEqual(self.client.post("/schools/school/2/sessions", json=duplicate).status_code, 201)
         self.assertEqual(self.client.put(f"{self.url}/{session_id}", json=dict(self.payload, name="Updated")).status_code, 200)
         self.assertEqual(next(item for item in self.client.get(self.url).json()["data"] if item["id"] == session_id)["name"], "Updated")
         other = self.client.post(self.url, json=dict(self.payload, start_date="2027-01-01", end_date="2028-01-01")).json()["data"]["id"]
-        self.assertEqual(self.client.put(f"{self.url}/{other}", json=duplicate).status_code, 200)
+        self.assertEqual(self.client.put(f"{self.url}/{other}", json=duplicate).status_code, 409)
 
     def test_invalid_input_and_missing_resources(self):
         for changes in ({"name": "  "}, {"end_date": "2024-01-01"}, {"start_date": "bad"}, {"name": None}):
@@ -94,7 +94,7 @@ class SessionTests(unittest.TestCase):
         response = self.client.post(self.url, json=payload)
         self.assertEqual(response.status_code, 201, response.text)
         self.assertEqual(self.client.get(self.url).json()["data"][0]["start_date"], "2026-09-11")
-        self.assertEqual(self.client.post(self.url, json=payload).status_code, 201)
+        self.assertEqual(self.client.post(self.url, json=payload).status_code, 409)
 
     def test_table_initialization_failure_is_service_unavailable(self):
         with patch("routers.schools.ensure_session_table", side_effect=OperationalError("create", {}, Exception("denied"))):

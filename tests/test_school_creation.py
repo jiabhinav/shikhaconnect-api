@@ -60,17 +60,27 @@ class SchoolCreationTests(unittest.TestCase):
                 self.assertEqual(session.start_date, date(2026, 4, 1))
                 self.assertEqual(session.end_date, date(2027, 3, 31))
 
-    def test_get_schools_includes_only_each_schools_sessions(self):
+    def test_get_schools_includes_only_current_year_sessions(self):
+        year = date.today().year
         school_ids = []
         for index in range(2):
             payload = self.payload | {"school_info": self.payload["school_info"] | {
-                "primary_email": f"sessions{index}@example.com"}}
+                "primary_email": f"sessions{index}@example.com",
+                "session_start_date": f"{year}-04-01",
+                "session_end_date": f"{year + 1}-03-31"}}
             response = self.client.post("/super-admin/create_school", json=payload)
             self.assertEqual(response.status_code, 200, response.text)
             school_ids.append(response.json()["data"]["id"])
-        historical = SchoolSession(school_id=school_ids[0], name="History",
-            start_date=date(2024, 4, 1), end_date=date(2025, 3, 31))
-        self.db.add(historical)
+        self.db.add_all([
+            SchoolSession(school_id=school_ids[0], name="History",
+                start_date=date(year - 2, 4, 1), end_date=date(year - 1, 12, 31)),
+            SchoolSession(school_id=school_ids[0], name="Future",
+                start_date=date(year + 1, 1, 1), end_date=date(year + 2, 3, 31)),
+            SchoolSession(school_id=school_ids[0], name="Ends this year",
+                start_date=date(year - 1, 4, 1), end_date=date(year, 1, 1)),
+            SchoolSession(school_id=school_ids[0], name="Starts this year",
+                start_date=date(year, 12, 31), end_date=date(year + 1, 3, 31)),
+        ])
         self.db.query(SchoolSession).filter_by(school_id=school_ids[1]).delete()
         self.db.commit()
         for prefix in ("/schools", "/super-admin"):
@@ -79,13 +89,10 @@ class SchoolCreationTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200, response.text)
                 schools = {school["id"]: school for school in response.json()["data"]}
                 sessions = schools[school_ids[0]]["sessions"]
-                self.assertEqual(len(sessions), 2)
-                self.assertEqual([item["name"] for item in sessions], ["2026-27", "History"])
+                self.assertEqual([item["name"] for item in sessions],
+                    ["Starts this year", "2026-27", "Ends this year"])
                 self.assertTrue(all(item["school_id"] == school_ids[0] for item in sessions))
-                self.assertEqual(sessions[1], {
-                    "id": historical.id, "school_id": school_ids[0], "name": "History",
-                    "start_date": "2024-04-01", "end_date": "2025-03-31",
-                    "status": historical.status})
+                self.assertEqual(sessions[2]["end_date"], f"{year}-01-01")
                 self.assertEqual(schools[school_ids[1]]["sessions"], [])
                 for school_id in school_ids:
                     response = self.client.get(f"{prefix}/school/{school_id}")
@@ -173,26 +180,19 @@ class SchoolCreationTests(unittest.TestCase):
                 self.assertEqual(original.end_date, date(2028, 3, 31))
                 self.assertEqual(historical.name, "History")
                 self.assertEqual(self.db.query(SchoolSession).filter_by(school_id=school_id).count(), 2)
-                # Exact duplicate dates are allowed without changing the other session.
-                updated["school_info"].update(session_start_date="2024-04-01",
-                    session_end_date="2025-03-31", school_name="Updated School")
+                # The same year pair must be rejected even when month/day differ.
+                updated["school_info"].update(session_start_date="2024-05-01",
+                    session_end_date="2025-02-28", school_name="Rejected")
                 updated["services"] = [3]
                 response = self.client.put(f"{prefix}/update_school/{school_id}", json=updated)
-                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.status_code, 409, response.text)
+                self.assertEqual(response.json()["detail"]["start_year"], 2024)
                 self.db.expire_all()
                 school = self.db.get(School, school_id)
-                self.assertEqual(school.school_name, "Updated School")
-                self.assertEqual(school.session_start_date, date(2024, 4, 1))
-                self.assertEqual(original.start_date, date(2024, 4, 1))
+                self.assertEqual(school.school_name, "Test School")
+                self.assertEqual(original.start_date, date(2027, 4, 1))
                 self.assertEqual(historical.name, "History")
-                self.assertEqual(sorted(p.module_id for p in school.permissions), [3])
-                updated["school_info"]["session_name"] = "Renamed"
-                response = self.client.put(f"{prefix}/update_school/{school_id}", json=updated)
-                self.assertEqual(response.status_code, 200, response.text)
-                self.db.refresh(original)
-                self.db.refresh(historical)
-                self.assertEqual(original.name, "Renamed")
-                self.assertEqual(historical.name, "History")
+                self.assertEqual(sorted(p.module_id for p in school.permissions), [1, 2])
 
     def test_update_removes_legacy_year_index(self):
         for index, prefix in enumerate(("/schools", "/super-admin")):
@@ -207,7 +207,7 @@ class SchoolCreationTests(unittest.TestCase):
                     "(school_id, strftime('%Y', start_date), strftime('%Y', end_date))"))
                 self.db.commit()
                 updated = self.payload | {"school_info": self.payload["school_info"] | {
-                    "session_start_date": "2026-01-01", "session_end_date": "2026-12-31"}}
+                    "session_start_date": "2028-01-01", "session_end_date": "2028-12-31"}}
                 response = self.client.put(f"{prefix}/update_school/{school_id}", json=updated)
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(self.db.query(SchoolSession).filter_by(school_id=school_id).count(), 2)

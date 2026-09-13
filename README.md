@@ -25,8 +25,10 @@ Each session includes `id`, `school_id`, `name`, dates, and a date-derived
 `status` of `Past`, `Current`, or `Upcoming` (using the server's date).
 Super Admins can access all schools; assigned Admins and Sub Admins can
 access their schools. Missing or inaccessible schools/sessions return 404.
-Invalid dates or blank names return 422. Session names, dates, and year pairs
-may repeat within a school and across schools.
+Invalid dates or blank names return 422. The start-year/end-year pair must be unique within each school when creating
+or updating a session, including through school APIs. Duplicates return 409 even
+when the month or day differs. Different schools may use the same years.
+Existing duplicate rows are preserved; API validation prevents new conflicts.
 
 Startup creates the `sessions` table with a school foreign key and date check.
 Startup and school/session requests automatically remove the legacy
