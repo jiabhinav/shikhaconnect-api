@@ -15,6 +15,7 @@ COPY dependencies/ dependencies/
 COPY models/ models/
 COPY routers/ routers/
 COPY schemas/ schemas/
+COPY utils/ utils/
 
 USER appuser
 EXPOSE 8000
