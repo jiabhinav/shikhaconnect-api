@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
 from database.module_names import get_module_names
-from database.session_table import ensure_session_table
+from database.session_table import ensure_session_table, update_school_session
 from models.school import School, SchoolPermission
 from models.user import User, UserRole
 from schemas.school import SchoolCreate, SchoolUpdate
@@ -387,10 +387,11 @@ def update_school(
             detail=_duplicate_school_detail(duplicates),
         )
 
-    for field, value in payload.school_values().items():
-        setattr(school, field, value)
-
     try:
+        update_school_session(db, school, school_info)
+        for field, value in payload.school_values().items():
+            setattr(school, field, value)
+
         # Permissions are a complete replacement during an update. Flush the
         # deletions first so the unique constraint does not conflict when a
         # previously selected service is inserted again.

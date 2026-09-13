@@ -8,3 +8,19 @@ def ensure_session_table(connection):
     if connection.dialect.name == "postgresql":
         connection.execute(text("SELECT pg_advisory_xact_lock(731904219)"))
     SchoolSession.__table__.create(bind=connection, checkfirst=True)
+
+
+def update_school_session(db, school, school_info):
+    """Synchronize the school's configured session, preserving other sessions."""
+    ensure_session_table(db.connection())
+    session = db.query(SchoolSession).filter_by(
+        school_id=school.id,
+        start_date=school.session_start_date,
+        end_date=school.session_end_date,
+    ).first()
+    if session is None:
+        session = SchoolSession(school_id=school.id)
+        db.add(session)
+    session.name = school_info.session_name
+    session.start_date = school_info.session_start_date
+    session.end_date = school_info.session_end_date
