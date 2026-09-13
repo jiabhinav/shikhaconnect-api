@@ -1,6 +1,7 @@
 import unittest
 from datetime import date
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -61,7 +62,12 @@ class SchoolCreationTests(unittest.TestCase):
                 self.assertEqual(session.end_date, date(2027, 3, 31))
 
     def test_get_schools_includes_only_current_year_sessions(self):
-        year = date.today().year
+        year = 2026
+        for module in ("routers.schools", "routers.super_admin"):
+            clock = patch(f"{module}.date", wraps=date)
+            mocked_date = clock.start()
+            mocked_date.today.return_value = date(year, 9, 14)
+            self.addCleanup(clock.stop)
         school_ids = []
         for index in range(2):
             payload = self.payload | {"school_info": self.payload["school_info"] | {
@@ -88,12 +94,15 @@ class SchoolCreationTests(unittest.TestCase):
                 response = self.client.get(f"{prefix}/school")
                 self.assertEqual(response.status_code, 200, response.text)
                 schools = {school["id"]: school for school in response.json()["data"]}
-                sessions = schools[school_ids[0]]["sessions"]
-                self.assertEqual([item["name"] for item in sessions],
-                    ["Starts this year", "2026-27", "Ends this year"])
-                self.assertTrue(all(item["school_id"] == school_ids[0] for item in sessions))
-                self.assertEqual(sessions[2]["end_date"], f"{year}-01-01")
-                self.assertEqual(schools[school_ids[1]]["sessions"], [])
+                session = schools[school_ids[0]]["sessions"]
+                self.assertIsInstance(session, dict)
+                self.assertEqual(session["name"], "2026-27")
+                self.assertEqual(session["school_id"], school_ids[0])
+                self.assertEqual(session["start_date"], f"{year}-04-01")
+                self.assertEqual(session["end_date"], f"{year + 1}-03-31")
+                self.assertIn("id", session)
+                self.assertIn("status", session)
+                self.assertIsNone(schools[school_ids[1]]["sessions"])
                 for school_id in school_ids:
                     response = self.client.get(f"{prefix}/school/{school_id}")
                     self.assertEqual(response.status_code, 200, response.text)

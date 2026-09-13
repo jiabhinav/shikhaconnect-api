@@ -483,3 +483,9 @@ School-scoped APIs currently require Super Admin access. School permissions
 are linked by `school_id`; users no longer have school assignments. Apply
 `migrations/003_drop_school_user_assignments.sql` to remove the legacy table
 and its records from existing databases.
+
+School list and detail GET responses return `sessions` as a single session object
+(or `null` when no session overlaps the current calendar year). When several
+sessions overlap the year, a session active today is preferred, then the latest
+start date and highest ID. The dedicated sessions list endpoint still returns
+an array.

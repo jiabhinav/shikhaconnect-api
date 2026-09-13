@@ -78,18 +78,20 @@ def _school_payload(school: School, db: Session) -> dict:
 
 def _school_detail_payload(school: School, db: Session) -> dict:
     payload = _school_payload(school, db)
-    year = date.today().year
-    sessions = db.query(SchoolSession).filter(
+    today = date.today()
+    year = today.year
+    session = db.query(SchoolSession).filter(
         SchoolSession.school_id == school.id,
         SchoolSession.start_date <= date(year, 12, 31),
         SchoolSession.end_date >= date(year, 1, 1),
     ).order_by(
-        SchoolSession.start_date.desc(), SchoolSession.id.desc()
-    ).all()
-    payload["sessions"] = [
+        ((SchoolSession.start_date <= today) & (SchoolSession.end_date >= today)).desc(),
+        SchoolSession.start_date.desc(), SchoolSession.id.desc(),
+    ).first()
+    payload["sessions"] = (
         SessionResponse.model_validate(session).model_dump(mode="json")
-        for session in sessions
-    ]
+        if session is not None else None
+    )
     return payload
 
 
