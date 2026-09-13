@@ -15,9 +15,10 @@ def update_school_session(db, school, school_info):
     ensure_session_table(db.connection())
     session = db.query(SchoolSession).filter_by(
         school_id=school.id,
+        name=school.session_name,
         start_date=school.session_start_date,
         end_date=school.session_end_date,
-    ).first()
+    ).order_by(SchoolSession.id).first()
     if session is None:
         session = SchoolSession(school_id=school.id)
         db.add(session)

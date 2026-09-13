@@ -25,14 +25,14 @@ Each session includes `id`, `school_id`, `name`, dates, and a date-derived
 `status` of `Past`, `Current`, or `Upcoming` (using the server's date).
 Super Admins can access all schools; assigned Admins and Sub Admins can
 access their schools. Missing or inaccessible schools/sessions return 404.
-Invalid dates or blank names return 422. The same start-year/end-year pair
-within a school returns 409, even if the days or months differ; different
-schools may use the same years. Update excludes the session being edited.
+Invalid dates or blank names return 422. Session names, dates, and year pairs
+may repeat within a school and across schools.
 
-Startup creates the `sessions` table with a school foreign key, date check,
-and unique year-pair index. If the table already exists, apply
-`migrations/001_session_constraints.sql` to PostgreSQL before using these
-endpoints; automatic column synchronization does not add these constraints.
+Startup creates the `sessions` table with a school foreign key and date check.
+For existing PostgreSQL tables, apply `migrations/001_session_constraints.sql`
+and then `migrations/004_allow_duplicate_session_dates.sql` to retain date
+validation and remove the legacy unique year-pair index. Automatic column
+synchronization does not update these constraints.
 Existing session fields on the school record remain separate from this list.
 
 Run the API and constraint tests against an isolated in-memory database:

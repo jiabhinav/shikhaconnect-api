@@ -3,7 +3,6 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy import extract
 from sqlalchemy.orm import Session
 
 from dependencies.auth import get_current_user
@@ -37,40 +36,6 @@ def _require_session_school(db: Session, school_id: int, user: User):
             status_code=503,
             detail="Session storage is unavailable. Check database connectivity and schema permissions.",
         ) from exc
-
-
-def _session_duplicate(db, school_id, payload, exclude_id=None):
-    query = db.query(SchoolSession.id).filter(
-        SchoolSession.school_id == school_id,
-        extract("year", SchoolSession.start_date) == payload.start_date.year,
-        extract("year", SchoolSession.end_date) == payload.end_date.year,
-    )
-    if exclude_id is not None:
-        query = query.filter(SchoolSession.id != exclude_id)
-    return query.first() is not None
-
-
-def _save_session(db, session, payload):
-    try:
-        db.add(session)
-        db.commit()
-        db.refresh(session)
-    except IntegrityError as exc:
-        db.rollback()
-        if _session_duplicate(db, session.school_id, payload, session.id):
-            raise HTTPException(status_code=409, detail="A session with these start and end years already exists for this school") from exc
-        raise HTTPException(status_code=409, detail="Session conflicts with existing database records") from exc
-    except Exception:
-        db.rollback()
-        raise
-
-
-    _require_session_school(db, school_id, current_user)
-    if _session_duplicate(db, school_id, payload):
-        raise HTTPException(status_code=409, detail="A session with these start and end years already exists for this school")
-    session = SchoolSession(school_id=school_id, **payload.model_dump())
-    _save_session(db, session, payload)
-    return {"message": "Session created successfully", "data": session}
 
 
 def _role_value(user: User) -> str:

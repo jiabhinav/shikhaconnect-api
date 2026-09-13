@@ -141,18 +141,26 @@ class SchoolCreationTests(unittest.TestCase):
                 self.assertEqual(original.end_date, date(2028, 3, 31))
                 self.assertEqual(historical.name, "History")
                 self.assertEqual(self.db.query(SchoolSession).filter_by(school_id=school_id).count(), 2)
-                # Moving into another session's years must roll back every change.
-                updated["school_info"].update(session_start_date="2024-05-01",
-                    session_end_date="2025-02-28", school_name="Should roll back")
+                # Exact duplicate dates are allowed without changing the other session.
+                updated["school_info"].update(session_start_date="2024-04-01",
+                    session_end_date="2025-03-31", school_name="Updated School")
                 updated["services"] = [3]
                 response = self.client.put(f"{prefix}/update_school/{school_id}", json=updated)
-                self.assertEqual(response.status_code, 409, response.text)
+                self.assertEqual(response.status_code, 200, response.text)
                 self.db.expire_all()
                 school = self.db.get(School, school_id)
-                self.assertEqual(school.school_name, "Test School")
-                self.assertEqual(school.session_start_date, date(2027, 4, 1))
-                self.assertEqual(original.start_date, date(2027, 4, 1))
-                self.assertEqual(sorted(p.module_id for p in school.permissions), [1, 2])
+                self.assertEqual(school.school_name, "Updated School")
+                self.assertEqual(school.session_start_date, date(2024, 4, 1))
+                self.assertEqual(original.start_date, date(2024, 4, 1))
+                self.assertEqual(historical.name, "History")
+                self.assertEqual(sorted(p.module_id for p in school.permissions), [3])
+                updated["school_info"]["session_name"] = "Renamed"
+                response = self.client.put(f"{prefix}/update_school/{school_id}", json=updated)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.db.refresh(original)
+                self.db.refresh(historical)
+                self.assertEqual(original.name, "Renamed")
+                self.assertEqual(historical.name, "History")
 
     def test_update_creates_missing_session(self):
         response = self.client.post("/super-admin/create_school", json=self.payload)
