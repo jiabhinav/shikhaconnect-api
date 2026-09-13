@@ -50,20 +50,14 @@ def validate_session_years(db, school_id, start_date, end_date, exclude_id=None)
             })
 
 
-def update_school_session(db, school, school_info):
-    """Synchronize the school's configured session, preserving other sessions."""
+def update_school_session(db, school, school_info, session_id):
+    """Update only the session identified by both its ID and school ID."""
     ensure_session_table(db.connection())
-    session = db.query(SchoolSession).filter_by(
-        school_id=school.id,
-        name=school.session_name,
-        start_date=school.session_start_date,
-        end_date=school.session_end_date,
-    ).order_by(SchoolSession.id).first()
-    validate_session_years(db, school.id, school_info.session_start_date,
-        school_info.session_end_date, session.id if session else None)
+    session = db.query(SchoolSession).filter_by(id=session_id, school_id=school.id).first()
     if session is None:
-        session = SchoolSession(school_id=school.id)
-        db.add(session)
+        raise HTTPException(status_code=404, detail="Session not found for this school")
+    validate_session_years(db, school.id, school_info.session_start_date,
+        school_info.session_end_date, session.id)
     session.name = school_info.session_name
     session.start_date = school_info.session_start_date
     session.end_date = school_info.session_end_date

@@ -489,3 +489,9 @@ School list and detail GET responses return `sessions` as a single session objec
 sessions overlap the year, a session active today is preferred, then the latest
 start date and highest ID. The dedicated sessions list endpoint still returns
 an array.
+
+School updates require a positive top-level `session_id`. The URL's `school_id`
+and this session ID must match the same row in `sessions`; otherwise the API
+returns 404. Missing or null session IDs return 422. Updates never create a
+replacement session or match by name/date. Session name/date changes are stored
+in `sessions`, leaving the legacy school session columns unchanged.

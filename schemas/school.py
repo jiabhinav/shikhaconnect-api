@@ -120,4 +120,10 @@ class SchoolCreate(BaseModel):
 
 
 class SchoolUpdate(SchoolCreate):
-    pass
+    session_id: int = Field(gt=0, description="Existing sessions.id belonging to this school")
+
+    def school_values(self) -> dict:
+        values = super().school_values()
+        for field in ("session_name", "session_start_date", "session_end_date"):
+            values.pop(field, None)
+        return values

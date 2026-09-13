@@ -390,7 +390,7 @@ def update_school(
         )
 
     try:
-        update_school_session(db, school, school_info)
+        update_school_session(db, school, school_info, payload.session_id)
         for field, value in payload.school_values().items():
             setattr(school, field, value)
 
