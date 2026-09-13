@@ -88,10 +88,12 @@ def _school_detail_payload(school: School, db: Session) -> dict:
         ((SchoolSession.start_date <= today) & (SchoolSession.end_date >= today)).desc(),
         SchoolSession.start_date.desc(), SchoolSession.id.desc(),
     ).first()
+
     payload["sessions"] = (
         SessionResponse.model_validate(session).model_dump(mode="json")
         if session is not None else None
     )
+    
     return payload
 
 
