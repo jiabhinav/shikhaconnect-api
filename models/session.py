@@ -1,9 +1,8 @@
-from datetime import date
-
 from sqlalchemy import CheckConstraint, Column, Date, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 
 from database.database import Base
+from utils.dates import today as get_today
 
 
 class Session(Base):
@@ -23,7 +22,7 @@ class Session(Base):
 
     @property
     def status(self):
-        today = date.today()
+        today = get_today()
         if today < self.start_date:
             return "Upcoming"
         if self.start_date <= today <= self.end_date:

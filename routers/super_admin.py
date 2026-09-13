@@ -1,4 +1,5 @@
 from datetime import date
+from utils.dates import today as get_today
 
 import logging
 import re
@@ -78,7 +79,7 @@ def _school_payload(school: School, db: Session) -> dict:
 
 def _school_detail_payload(school: School, db: Session) -> dict:
     payload = _school_payload(school, db)
-    today = date.today()
+    today = get_today()
     year = today.year
     session = db.query(SchoolSession).filter(
         SchoolSession.school_id == school.id,
