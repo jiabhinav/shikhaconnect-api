@@ -19,7 +19,7 @@ from schemas.school_assets import SchoolAssetField, SchoolAssetsResult
 router = APIRouter()
 STORAGE_ROOT = Path(__file__).resolve().parents[1] / "uploads" / "schools"
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
-TARGET_IMAGE_SIZE_KB = 250
+TARGET_IMAGE_SIZE_KB = 100
 TARGET_IMAGE_SIZE_BYTES = TARGET_IMAGE_SIZE_KB * 1024
 FORMATS = {"PNG": (".png", "image/png"), "JPEG": (".jpg", "image/jpeg"), "WEBP": (".webp", "image/webp")}
 logger = logging.getLogger(__name__)

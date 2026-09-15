@@ -17,5 +17,5 @@ class SchoolAssetUploadCompressionTests(unittest.TestCase):
         compressed, extension = validate_image(upload)
 
         self.assertEqual(extension, ".jpg")
-        self.assertLessEqual(len(compressed), 250 * 1024)
+        self.assertLessEqual(len(compressed), 100 * 1024)
         self.assertGreater(len(compressed), 0)
