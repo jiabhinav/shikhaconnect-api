@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
 from models.school import School
-from models.school_mapping import SchoolMapping
+from models.school_mapping import SchoolMapping, SchoolMappingStatus
 from models.user import User, UserRole
 from schemas.school_mapping import (
     SchoolMappingWrite, SchoolMappingStatusUpdate, SchoolMappingResult, SchoolUserListResult,
@@ -93,10 +93,13 @@ def delete_mapping(mapping_id: int, db: Session = Depends(mapping_db)):
 
 
 @router.get("/school/{school_id}/users", response_model=SchoolUserListResult)
-def list_school_users(school_id: int, db: Session = Depends(mapping_db)):
+def list_school_users(school_id: int, status: SchoolMappingStatus | None = None,
+                      db: Session = Depends(mapping_db)):
     require_school(db, school_id)
     query = db.query(SchoolMapping, User).join(User, User.id == SchoolMapping.user_id).filter(
         SchoolMapping.school_id == school_id)
+    if status is not None:
+        query = query.filter(SchoolMapping.status == status)
     data = [
         {"id": item.id, "school_id": item.school_id, "user_id": user.id, "status": item.status,
          "first_name": user.first_name, "middle_name": user.middle_name, "last_name": user.last_name,
