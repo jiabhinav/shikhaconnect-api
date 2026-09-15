@@ -10,6 +10,13 @@ class UserRole(PyEnum):
     ADMIN = "Admin"
     SUB_ADMIN = "Sub Admin"
 
+    @classmethod
+    def _missing_(cls, value):
+        # Accept compact client labels while retaining canonical enum values.
+        if isinstance(value, str):
+            return {"SuperAdmin": cls.SUPER_ADMIN, "SubAdmin": cls.SUB_ADMIN}.get(value)
+        return None
+
 
 class UserStatus(PyEnum):
     ACTIVE = "Active"

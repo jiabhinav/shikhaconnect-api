@@ -84,6 +84,27 @@ class UserDeleteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertIsNone(self.db.query(User).filter_by(id=2).first())
 
+    def test_update_accepts_compact_and_canonical_roles(self):
+        for role, expected in (
+            ("SubAdmin", UserRole.SUB_ADMIN),
+            ("SuperAdmin", UserRole.SUPER_ADMIN),
+            ("Sub Admin", UserRole.SUB_ADMIN),
+            ("Super Admin", UserRole.SUPER_ADMIN),
+            ("Admin", UserRole.ADMIN),
+        ):
+            with self.subTest(role=role):
+                response = self.client.put("/users/2", json={"role": role})
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["data"]["role"], expected.value)
+                self.db.expire_all()
+                self.assertEqual(self.db.get(User, 2).role, expected)
+
+    def test_update_rejects_unknown_role(self):
+        response = self.client.put("/users/2", json={"role": "Unknown"})
+
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(self.db.get(User, 2).role, UserRole.ADMIN)
+
     def test_super_admin_route_lists_only_super_admin_users(self):
         self.db.add(
             User(
