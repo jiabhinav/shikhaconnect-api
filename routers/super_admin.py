@@ -18,12 +18,14 @@ from models.user import User, UserRole
 from schemas.school import SchoolCreate, SchoolUpdate
 from schemas.session import SessionResponse
 from routers.modules import router as module_router
+from routers.school_assets import router as school_assets_router
 from routers.school_mappings import router as school_mapping_router
 
 router = APIRouter(
     prefix="/super-admin",
     tags=["Super Admin"],)
 router.include_router(module_router)
+router.include_router(school_assets_router)
 router.include_router(school_mapping_router)
 
 

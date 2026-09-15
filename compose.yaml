@@ -5,6 +5,8 @@ services:
     init: true
     env_file:
       - .env
+    volumes:
+      - ./uploads:/app/uploads
     ports:
       - "127.0.0.1:8001:8000"
     extra_hosts:
