@@ -2,7 +2,7 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
+from fastapi.staticfiles import StaticFiles
 from database.database import engine, sync_missing_columns, test_db_connection
 from routers.auth import router as auth_router
 from routers.schools import router as school_router
@@ -24,6 +24,7 @@ app = FastAPI(
     title="School Management API",
     version="1.0.0"
 )
+app.mount("/uploads", StaticFiles(directory="/app/uploads"), name="uploads")
 
 # app.add_middleware(
 #     CORSMiddleware,
