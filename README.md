@@ -480,9 +480,45 @@ Invalid input returns 422; missing/inaccessible students or reference IDs return
 404; database reference conflicts return 409. No student sample data is inserted.
 
 School-scoped APIs currently require Super Admin access. School permissions
-are linked by `school_id`; users no longer have school assignments. Apply
-`migrations/003_drop_school_user_assignments.sql` to remove the legacy table
-and its records from existing databases.
+are linked by `school_id`. User assignments are stored in `school_mapping`.
+The legacy `school_user_assignments` table is separate from this new table;
+legacy records are not automatically migrated.
+
+### Super Admin school user assignments
+
+All endpoints require a Super Admin bearer token and appear under **Super Admin**
+in the API docs. The application creates `school_mapping` automatically during
+database initialization, including on existing databases where the table is missing.
+Each row has `id`, `school_id`, `user_id`, and `status`. A user may belong to
+multiple schools; each school/user pair is unique. Deleting a school or user
+cascades to its mappings.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| POST | `/super-admin/school-mappings` | Create assignment (201) |
+| PUT | `/super-admin/school-mappings/{mapping_id}` | Replace school, user, and status |
+| PATCH | `/super-admin/school-mappings/{mapping_id}/status` | Activate/deactivate assignment |
+| DELETE | `/super-admin/school-mappings/{mapping_id}` | Delete assignment |
+| GET | `/super-admin/school/{school_id}/users` | List assigned users |
+
+POST and PUT require all three fields:
+
+```json
+{"school_id": 1, "user_id": 2, "status": "active"}
+```
+
+PATCH accepts `{"status": "deactive"}` or `{"status": "active"}`.
+Status strings are case insensitive; `inactive` is also accepted as `deactive`.
+Assignment status applies only to this school mapping and does not change the
+user's global account status or grant access to existing Super Admin APIs.
+
+GET returns all assigned users regardless of assignment or account status;
+the `status` query parameter is ignored. Each item contains mapping `id`, `school_id`, `user_id`, mapping
+`status`, user name fields, `email`, `mobile`, `role`, and global `user_status`.
+Passwords are excluded. Responses use the `status`, `message`, `data` envelope.
+A school with no assignments returns an empty list. Missing schools, users, or
+mappings return 404, duplicate assignments return 409, invalid input returns
+422, and non-Super-Admin access returns 403.
 
 School list and detail GET responses return `sessions` as a single session object
 (or `null` when no session overlaps the current calendar year). When several
