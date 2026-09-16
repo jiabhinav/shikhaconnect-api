@@ -45,8 +45,8 @@ router.include_router(student_router)
 
 def _require_session_school(db: Session, school_id: int, user: User):
     query = db.query(School).filter(School.id == school_id)
-    if _role_value(user) != UserRole.SUPER_ADMIN.value:
-        raise HTTPException(status_code=403, detail="Only Super Admin can access schools")
+    # if _role_value(user) != UserRole.SUPER_ADMIN.value:
+    #     raise HTTPException(status_code=403, detail="Only Super Admin can access schools")
     if not query.first():
         raise HTTPException(status_code=404, detail="School not found")
     try:
