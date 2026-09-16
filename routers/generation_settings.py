@@ -15,8 +15,8 @@ router = APIRouter(prefix="/school/{school_id}/sessions/{session_id}")
 def settings_session(school_id: int, session_id: int, db: Session = Depends(get_db_session),
                      current_user: User = Depends(get_current_user)):
     query = db.query(SchoolSession).filter_by(id=session_id, school_id=school_id)
-    if current_user.role != UserRole.SUPER_ADMIN:
-        raise HTTPException(status_code=403, detail="Only Super Admin can access schools")
+    # if current_user.role != UserRole.SUPER_ADMIN:
+    #     raise HTTPException(status_code=403, detail="Only Super Admin can access schools")
     if query.first() is None:
         raise HTTPException(404, "School session not found")
     return db

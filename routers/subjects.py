@@ -18,8 +18,8 @@ router = APIRouter()
 def subject_storage(school_id: int, db: Session = Depends(get_db_session),
                     current_user: User = Depends(get_current_user)):
     query = db.query(School).filter(School.id == school_id)
-    if current_user.role != UserRole.SUPER_ADMIN:
-        raise HTTPException(status_code=403, detail="Only Super Admin can access schools")
+    # if current_user.role != UserRole.SUPER_ADMIN:
+    #     raise HTTPException(status_code=403, detail="Only Super Admin can access schools")
     if query.first() is None:
         raise HTTPException(404, "School not found")
     try:
