@@ -17,6 +17,7 @@ from models.user import User, UserRole
 from schemas.school import SchoolCreate, SchoolUpdate
 from schemas.session import SessionResponse
 from models.session import Session as SchoolSession
+from models.student import Student
 from schemas.session import SessionCreate, SessionResult, SessionListResult
 from routers.class_sections import router as class_section_router
 from routers.subjects import router as subject_router
@@ -103,6 +104,36 @@ def update_session(
         setattr(session, field, value)
     _save_session(db, session)
     return {"message": "Session updated successfully", "data": session}
+
+
+@router.delete("/school/{school_id}/sessions/{session_id}")
+def delete_session(
+    school_id: int,
+    session_id: int,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    _require_session_school(db, school_id, current_user)
+    session = db.query(SchoolSession).filter_by(
+        id=session_id, school_id=school_id
+    ).with_for_update().first()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    assigned_message = "Session already assigned to a student. You cannot delete this session."
+    if db.query(Student.id).filter(Student.session_id == session_id).first() is not None:
+        raise HTTPException(status_code=409, detail=assigned_message)
+
+    try:
+        db.delete(session)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=assigned_message) from exc
+    except Exception:
+        db.rollback()
+        raise
+    return {"status": "success", "message": "Session deleted successfully", "data": {"id": session_id}}
 
 
 @router.get("/school/{school_id}/sessions", response_model=SessionListResult)
