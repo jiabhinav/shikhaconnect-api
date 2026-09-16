@@ -28,13 +28,20 @@ def require_school(db, school_id):
 
 def validate_assignment(db, payload, mapping_id=None):
     require_school(db, payload.school_id)
-    if db.get(User, payload.user_id) is None:
+    user = db.query(User).filter_by(id=payload.user_id).with_for_update().first()
+    if user is None:
         raise HTTPException(404, "User not found")
     query = db.query(SchoolMapping).filter_by(school_id=payload.school_id, user_id=payload.user_id)
     if mapping_id is not None:
         query = query.filter(SchoolMapping.id != mapping_id)
     if query.first() is not None:
         raise HTTPException(409, "User is already assigned to this school")
+    if user.role == UserRole.SUB_ADMIN:
+        assignments = db.query(SchoolMapping).filter_by(user_id=user.id)
+        if mapping_id is not None:
+            assignments = assignments.filter(SchoolMapping.id != mapping_id)
+        if assignments.first() is not None:
+            raise HTTPException(409, "Sub Admin can only be assigned to one school")
 
 
 def find_mapping(db, mapping_id):

@@ -5,7 +5,7 @@ from typing import Optional
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 
-class SchoolInfo(BaseModel):
+class SchoolDetails(BaseModel):
     school_name: str = Field(min_length=1, max_length=255)
     branch_name: str = Field(min_length=1, max_length=255)
     school_code: Optional[str] = None
@@ -26,10 +26,6 @@ class SchoolInfo(BaseModel):
     start_employee_no: int = Field(ge=0)
     sender_id: Optional[str] = None
     u_dais_code: Optional[str] = None
-    season: str = Field(min_length=1)
-    session_name: str = Field(min_length=1)
-    session_start_date: date
-    session_end_date: date
     description: Optional[str] = None
     principal_name: str = Field(min_length=1)
     exam_coordinator_name: Optional[str] = None
@@ -48,6 +44,13 @@ class SchoolInfo(BaseModel):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+
+class SchoolInfo(SchoolDetails):
+    season: str = Field(min_length=1)
+    session_name: str = Field(min_length=1)
+    session_start_date: date
+    session_end_date: date
 
     @model_validator(mode="after")
     def validate_session_dates(self):

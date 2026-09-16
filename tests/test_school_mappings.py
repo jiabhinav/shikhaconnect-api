@@ -63,6 +63,21 @@ class SchoolMappingTests(unittest.TestCase):
         self.assertEqual(self.client.put(f'{self.url}/999', json=self.payload).status_code, 404)
         self.assertEqual(self.client.patch(f'{self.url}/999/status', json={'status': 'active'}).status_code, 404)
 
+    def test_sub_admin_can_only_have_one_school(self):
+        self.db.get(User, 1).role = UserRole.SUB_ADMIN
+        self.db.commit()
+        mapping_id = self.create()
+        response = self.client.post(self.url, json=dict(self.payload, school_id=2))
+        self.assertEqual(response.status_code, 409, response.text)
+        response = self.client.put(f'{self.url}/{mapping_id}', json=dict(self.payload, school_id=2))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.db.add(User(id=2, first_name='Other', last_name='Admin', email='other@example.com',
+                         mobile='23456', role=UserRole.ADMIN))
+        self.db.commit()
+        other_id = self.create(user_id=2)
+        response = self.client.put(f'{self.url}/{other_id}', json=self.payload)
+        self.assertEqual(response.status_code, 409, response.text)
+
     def test_super_admin_required_for_every_endpoint(self):
         mapping_id = self.create()
         for role in (UserRole.ADMIN, UserRole.SUB_ADMIN):

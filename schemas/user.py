@@ -1,7 +1,9 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 
 from models.user import UserRole, UserStatus
+from schemas.school import SchoolAddress, SchoolDetails
+from schemas.session import SessionResponse
 
 
 class UserCreate(BaseModel):
@@ -104,9 +106,20 @@ class UserRegisterResponse(BaseModel):
     data: UserResponse
 
 
+class LoginSchool(SchoolDetails, SchoolAddress):
+    id: int
+    sessions: list[SessionResponse] = Field(default_factory=list)
+
+    model_config = {"from_attributes": True}
+
+
+class UserLoginData(UserResponse):
+    schools: Optional[list[LoginSchool]] = None
+
+
 class UserLoginResponse(BaseModel):
     status: str = "success"
     message: str = "Login successful"
-    data: UserResponse
+    data: UserLoginData
     token: str
     token_type: str = "bearer"

@@ -5,8 +5,12 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from dependencies.db import get_db_session
-from models.user import User, UserStatus
-from schemas.user import UserCreate, UserLogin, UserLoginResponse, UserRegisterResponse
+from models.school import School
+from models.school_mapping import SchoolMapping, SchoolMappingStatus
+from models.session import Session as SchoolSession
+from models.user import User, UserRole, UserStatus
+from schemas.user import LoginSchool, UserCreate, UserLogin, UserLoginResponse, UserRegisterResponse
+from schemas.session import SessionResponse
 
 router = APIRouter(
     prefix="/auth",
@@ -56,14 +60,40 @@ def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
     if user.status != UserStatus.ACTIVE:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is disabled",
+            detail="User not active yet, please contact the administrator",
         )
+
+    payload = _build_user_payload(user)
+    if user.role != UserRole.SUPER_ADMIN:
+        assignments = db.query(SchoolMapping, School).join(
+            School, School.id == SchoolMapping.school_id
+        ).filter(SchoolMapping.user_id == user.id).order_by(School.id).all()
+        schools = [school for mapping, school in assignments if mapping.status == SchoolMappingStatus.ACTIVE]
+        if not assignments:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Still no school assigned for this user",
+            )
+        if not schools:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User not active yet, please contact the administrator",
+            )
+        sessions_by_school = {school.id: [] for school in schools}
+        sessions = db.query(SchoolSession).filter(
+            SchoolSession.school_id.in_(sessions_by_school)
+        ).order_by(SchoolSession.start_date.desc(), SchoolSession.id.desc()).all()
+        for session in sessions:
+            sessions_by_school[session.school_id].append(SessionResponse.model_validate(session))
+        payload["schools"] = []
+        for school in schools:
+            school_data = LoginSchool.model_validate(school)
+            school_data.sessions = sessions_by_school[school.id]
+            payload["schools"].append(school_data.model_dump(mode="json"))
 
     token = hashlib.sha256(
         f"{user.id}:{user.mobile}:{user.email}:{user.password}".encode("utf-8")
     ).hexdigest()
-
-    payload = _build_user_payload(user)
 
     return JSONResponse(
         content={
