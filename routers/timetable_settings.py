@@ -11,7 +11,6 @@ from schemas.timetable_settings import TimetableSettingsWrite, TimetableSettings
 
 router = APIRouter(prefix="/school/{school_id}/sessions/{session_id}")
 
-
 def settings_session(school_id: int, session_id: int, db: Session = Depends(get_db_session),
                      current_user: User = Depends(get_current_user)):
     query = db.query(SchoolSession).filter_by(id=session_id, school_id=school_id)
