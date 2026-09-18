@@ -7,17 +7,49 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from dependencies.db import get_db_session
+from dependencies.auth import get_current_user
 from models.school import School
+from models.school_assets import SchoolAssets
 from models.school_mapping import SchoolMapping, SchoolMappingStatus
 from models.session import Session as SchoolSession
 from models.user import User, UserRole, UserStatus
 from schemas.user import LoginSchool, UserCreate, UserLogin, UserLoginResponse, UserRegisterResponse
 from schemas.session import SessionResponse
+from schemas.user import PasswordResetRequest, PasswordResetResponse
 
 router = APIRouter(
     prefix="/auth",
     tags=["Auth"],
 )
+
+
+@router.post("/reset-password", response_model=PasswordResetResponse)
+def reset_password(
+    payload: PasswordResetRequest,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Allow a super admin to reset an account's password by mobile number."""
+    if current_user.role != UserRole.SUPER_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only Super Admin can reset passwords",
+        )
+
+    user = db.query(User).filter(User.mobile == payload.mobile).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    user.password = hash_password(
+        payload.new_password if payload.new_password is not None else user.mobile
+    )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return PasswordResetResponse()
 
 
 def _build_user_payload(user: User):
@@ -66,10 +98,13 @@ def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
 
     payload = _build_user_payload(user)
     if user.role != UserRole.SUPER_ADMIN:
-        assignments = db.query(SchoolMapping, School).join(
+        assignments = db.query(SchoolMapping, School, SchoolAssets.school_logo).join(
             School, School.id == SchoolMapping.school_id
+        ).outerjoin(
+            SchoolAssets, SchoolAssets.school_id == School.id
         ).filter(SchoolMapping.user_id == user.id).order_by(School.id).all()
-        schools = [school for mapping, school in assignments if mapping.status == SchoolMappingStatus.ACTIVE]
+        schools = [(school, logo) for mapping, school, logo in assignments
+                   if mapping.status == SchoolMappingStatus.ACTIVE]
         if not assignments:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -80,15 +115,16 @@ def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="User not active yet, please contact the administrator",
             )
-        sessions_by_school = {school.id: [] for school in schools}
+        sessions_by_school = {school.id: [] for school, logo in schools}
         sessions = db.query(SchoolSession).filter(
             SchoolSession.school_id.in_(sessions_by_school)
         ).order_by(SchoolSession.start_date.desc(), SchoolSession.id.desc()).all()
         for session in sessions:
             sessions_by_school[session.school_id].append(SessionResponse.model_validate(session))
         payload["schools"] = []
-        for school in schools:
+        for school, logo in schools:
             school_data = LoginSchool.model_validate(school)
+            school_data.school_logo = logo
             school_data.sessions = sessions_by_school[school.id]
             payload["schools"].append(school_data.model_dump(mode="json"))
 

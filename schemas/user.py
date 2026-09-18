@@ -99,6 +99,19 @@ class UserLogin(BaseModel):
     password: str
 
 
+class PasswordResetRequest(BaseModel):
+    mobile: str = Field(min_length=1)
+    new_password: Optional[str] = Field(
+        default=None, min_length=1,
+        description="New password. Omit or send null to use the user's mobile number.",
+    )
+
+
+class PasswordResetResponse(BaseModel):
+    status: str = "success"
+    message: str = "Password reset successfully"
+
+
 class UserRegisterResponse(BaseModel):
     status: str = "success"
     message: str = "User registered successfully"
@@ -107,6 +120,7 @@ class UserRegisterResponse(BaseModel):
 
 class LoginSchool(SchoolDetails, SchoolAddress):
     id: int
+    school_logo: Optional[str] = None
     sessions: list[SessionResponse] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
