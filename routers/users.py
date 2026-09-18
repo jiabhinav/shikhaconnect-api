@@ -1,3 +1,5 @@
+from utils.passwords import hash_password
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -83,7 +85,7 @@ def create_user(user: UserCreate, db: Session = Depends(get_db_session)):
         last_name=user.last_name,
         email=user.email,
         mobile=user.mobile,
-        password=user.password or user.mobile,
+        password=hash_password(user.password or user.mobile),
         date_of_birth=user.date_of_birth,
         designation=user.designation,
         aadhaar_number=user.aadhaar_number,
@@ -118,7 +120,6 @@ def create_user(user: UserCreate, db: Session = Depends(get_db_session)):
         "last_name": new_user.last_name,
         "email": str(new_user.email),
         "mobile": new_user.mobile,
-        "password": new_user.password,
         "date_of_birth": new_user.date_of_birth,
         "designation": new_user.designation,
         "aadhaar_number": new_user.aadhaar_number,
@@ -159,7 +160,6 @@ def get_user(user_id: int, db: Session = Depends(get_db_session)):
         "last_name": user.last_name,
         "email": str(user.email),
         "mobile": user.mobile,
-        "password": user.password,
         "date_of_birth": user.date_of_birth,
         "designation": user.designation,
         "aadhaar_number": user.aadhaar_number,
@@ -200,7 +200,6 @@ def list_users(db: Session = Depends(get_db_session)):
                 "last_name": user.last_name,
                 "email": str(user.email),
                 "mobile": user.mobile,
-                "password": user.password,
                 "date_of_birth": user.date_of_birth,
                 "designation": user.designation,
                 "aadhaar_number": user.aadhaar_number,
@@ -242,6 +241,11 @@ def update_user(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this user")
 
     update_data = user_update.dict(exclude_unset=True)
+    if "password" in update_data:
+        if update_data["password"] is None:
+            update_data.pop("password")
+        else:
+            update_data["password"] = hash_password(update_data["password"])
 
     if "status" in update_data:
         raise HTTPException(
@@ -277,7 +281,6 @@ def update_user(
         "last_name": user.last_name,
         "email": str(user.email),
         "mobile": user.mobile,
-        "password": user.password,
         "date_of_birth": user.date_of_birth,
         "designation": user.designation,
         "aadhaar_number": user.aadhaar_number,

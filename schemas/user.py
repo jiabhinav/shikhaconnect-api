@@ -71,7 +71,6 @@ class UserResponse(BaseModel):
     last_name: str
     email: EmailStr
     mobile: str
-    password: Optional[str] = None
     date_of_birth: Optional[str] = None
     designation: Optional[str] = None
     aadhaar_number: Optional[str] = None

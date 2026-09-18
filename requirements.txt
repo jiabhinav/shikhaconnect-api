@@ -8,3 +8,4 @@ pydantic-settings
 email-validator
 python-multipart
 Pillow
+argon2-cffi==25.1.0

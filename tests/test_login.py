@@ -133,3 +133,56 @@ class LoginTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["data"]["id"], 1)
         self.assertNotIn("schools", response.json()["data"])
+
+    def test_argon2_login_and_hash_cannot_be_used_as_password(self):
+        from utils.passwords import hash_password
+        user = self.db.get(User, 1)
+        user.password = hash_password("secret")
+        self.db.commit()
+        stored = user.password
+        self.assertEqual(self.login(mobile=user.mobile).status_code, 200)
+        self.assertEqual(user.password, stored)
+        self.assertEqual(self.login(mobile=user.mobile, password="wrong").status_code, 401)
+        self.assertEqual(self.login(mobile=user.mobile, password=stored).status_code, 401)
+
+    def test_legacy_password_migrates_and_token_still_authenticates(self):
+        from fastapi.security import HTTPAuthorizationCredentials
+        from dependencies.auth import get_current_user
+        from utils.passwords import verify_password
+        response = self.login(mobile="1111111111")
+        self.assertEqual(response.status_code, 200)
+        user = self.db.get(User, 1)
+        self.assertTrue(user.password.startswith("$argon2id$"))
+        self.assertTrue(verify_password("secret", user.password))
+        self.assertNotIn("password", response.json()["data"])
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=response.json()["token"])
+        self.assertEqual(get_current_user(credentials, self.db).id, user.id)
+
+    def test_malformed_hash_rejected(self):
+        self.db.get(User, 1).password = "$argon2id$invalid"
+        self.db.commit()
+        self.assertEqual(self.login(mobile="1111111111").status_code, 401)
+
+    def test_register_hashes_explicit_and_default_passwords(self):
+        from utils.passwords import verify_password
+        for index, extra in enumerate(({}, {"password": None}, {"password": ""}, {"password": "chosen-password"})):
+            mobile = f"333333333{index}"
+            response = self.client.post("/auth/register", json={
+                "first_name": "New", "last_name": "User", "email": f"new{index}@example.com",
+                "mobile": mobile, "role": "Super Admin", **extra,
+            })
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertNotIn("password", response.json()["data"])
+            user = self.db.query(User).filter_by(mobile=mobile).one()
+            password = extra.get("password") or mobile
+            self.assertTrue(user.password.startswith("$argon2id$"))
+            self.assertTrue(verify_password(password, user.password))
+            self.assertEqual(self.login(mobile=mobile, password=password).status_code, 200)
+
+    def test_user_password_update_hashes_and_can_log_in(self):
+        response = self.client.put("/users/1", json={"password": "updated-password"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn("password", response.json()["data"])
+        self.assertTrue(self.db.get(User, 1).password.startswith("$argon2id$"))
+        self.assertEqual(self.login(mobile="1111111111", password="updated-password").status_code, 200)
+        self.assertEqual(self.login(mobile="1111111111").status_code, 401)

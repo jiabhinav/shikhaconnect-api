@@ -1,5 +1,7 @@
 import hashlib
 
+from utils.passwords import hash_password, needs_rehash, verify_password
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -26,7 +28,6 @@ def _build_user_payload(user: User):
         "last_name": user.last_name,
         "email": str(user.email),
         "mobile": user.mobile,
-        "password": user.password,
         "date_of_birth": user.date_of_birth,
         "designation": user.designation,
         "aadhaar_number": user.aadhaar_number,
@@ -51,7 +52,7 @@ def _build_user_payload(user: User):
 @router.post("/login", response_model=UserLoginResponse, status_code=status.HTTP_200_OK)
 def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
     user = db.query(User).filter(User.mobile == credentials.mobile).first()
-    if not user or user.password != credentials.password:
+    if not user or not verify_password(credentials.password, user.password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid mobile number or password",
@@ -91,6 +92,15 @@ def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
             school_data.sessions = sessions_by_school[school.id]
             payload["schools"].append(school_data.model_dump(mode="json"))
 
+    if needs_rehash(user.password):
+        user.password = hash_password(credentials.password)
+        try:
+            db.commit()
+            db.refresh(user)
+        except Exception:
+            db.rollback()
+            raise
+
     token = hashlib.sha256(
         f"{user.id}:{user.mobile}:{user.email}:{user.password}".encode("utf-8")
     ).hexdigest()
@@ -127,7 +137,7 @@ def register_auth(user: UserCreate, db: Session = Depends(get_db_session)):
         last_name=user.last_name,
         email=user.email,
         mobile=user.mobile,
-        password=user.password or user.mobile,
+        password=hash_password(user.password or user.mobile),
         date_of_birth=user.date_of_birth,
         designation=user.designation,
         aadhaar_number=user.aadhaar_number,
@@ -163,7 +173,6 @@ def register_auth(user: UserCreate, db: Session = Depends(get_db_session)):
         "last_name": new_user.last_name,
         "email": str(new_user.email),
         "mobile": new_user.mobile,
-        "password": new_user.password,
         "date_of_birth": new_user.date_of_birth,
         "designation": new_user.designation,
         "aadhaar_number": new_user.aadhaar_number,
