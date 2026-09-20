@@ -65,6 +65,7 @@ class StaffCreate(BaseModel):
 class StaffPermissionResponse(StaffPermissionWrite):
     id: int
     staff_id: int
+    name: str | None = None
 
 
 class StaffAddressResponse(StaffAddressInfo):

@@ -10,6 +10,7 @@ from models.school import School
 from models.staff import Staff, StaffAddress, StaffPermission
 from models.user import User, UserRole
 from schemas.staff import StaffCreate, StaffListResult, StaffResult
+from database.module_names import get_module_names
 
 router = APIRouter()
 
@@ -67,6 +68,11 @@ def create_staff(school_id: int, payload: StaffCreate, db: Session = Depends(sta
     except Exception:
         db.rollback()
         raise
+    # Attach module names for permissions in response
+    module_ids = [p.staff_module_id for p in item.permissions]
+    names = get_module_names(db, module_ids)
+    for p in item.permissions:
+        setattr(p, "name", names.get(p.staff_module_id))
     return {"message": "Staff created successfully", "data": item}
 
 
@@ -76,6 +82,12 @@ def list_staff(school_id: int, offset: int = Query(0, ge=0),
     items = db.query(Staff).options(selectinload(Staff.address), selectinload(Staff.permissions)).filter_by(
         school_id=school_id
     ).order_by(Staff.id).offset(offset).limit(limit).all()
+    # Populate permission names
+    all_module_ids = [p.staff_module_id for item in items for p in item.permissions]
+    names = get_module_names(db, all_module_ids)
+    for item in items:
+        for p in item.permissions:
+            setattr(p, "name", names.get(p.staff_module_id))
     return {"message": "Staff fetched successfully", "data": items}
 
 
@@ -84,4 +96,74 @@ def get_staff(school_id: int, staff_id: int, db: Session = Depends(staff_school)
     item = db.query(Staff).filter_by(id=staff_id, school_id=school_id).first()
     if item is None:
         raise HTTPException(404, "Staff not found")
+    module_ids = [p.staff_module_id for p in item.permissions]
+    names = get_module_names(db, module_ids)
+    for p in item.permissions:
+        setattr(p, "name", names.get(p.staff_module_id))
     return {"message": "Staff fetched successfully", "data": item}
+
+
+@router.put("/school/{school_id}/staff/{staff_id}", response_model=StaffResult)
+def update_staff(school_id: int, staff_id: int, payload: StaffCreate, db: Session = Depends(staff_school)):
+    item = db.query(Staff).options(selectinload(Staff.address), selectinload(Staff.permissions)).filter_by(
+        id=staff_id, school_id=school_id
+    ).first()
+    if item is None:
+        raise HTTPException(404, "Staff not found")
+
+    validate_references(db, school_id, payload)
+
+    # Update staff fields
+    for field, value in payload.staff_info.model_dump().items():
+        setattr(item, field, value)
+
+    # Update or create address
+    address_values = payload.address.model_dump()
+    if item.address is None:
+        item.address = StaffAddress(**address_values)
+    else:
+        for k, v in address_values.items():
+            setattr(item.address, k, v)
+
+    # Replace permissions atomically
+    item.permissions.clear()
+    db.flush()
+    item.permissions = [StaffPermission(**permission.model_dump()) for permission in payload.permissions]
+
+    try:
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "Staff references conflict with database constraints") from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    # attach module names
+    module_ids = [p.staff_module_id for p in item.permissions]
+    names = get_module_names(db, module_ids)
+    for p in item.permissions:
+        setattr(p, "name", names.get(p.staff_module_id))
+
+    return {"status": "success", "message": "Staff updated successfully", "data": item}
+
+
+@router.delete("/school/{school_id}/staff/{staff_id}")
+def delete_staff(school_id: int, staff_id: int, db: Session = Depends(staff_school)):
+    item = db.query(Staff).filter_by(id=staff_id, school_id=school_id).first()
+    if item is None:
+        raise HTTPException(404, "Staff not found")
+
+    try:
+        db.delete(item)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "Staff is in use and cannot be deleted") from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    return {"status": "success", "message": "Staff deleted successfully", "data": {"id": staff_id}}
