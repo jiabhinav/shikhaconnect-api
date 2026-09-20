@@ -56,7 +56,11 @@ def validate_references(db, school_id, payload):
 def create_staff(school_id: int, payload: StaffCreate, db: Session = Depends(staff_school)):
     validate_references(db, school_id, payload)
     item = Staff(school_id=school_id, **payload.staff_info.model_dump())
-    item.address = StaffAddress(**payload.address.model_dump())
+    # Ignore any incoming address `id`/`staff_id` and let the relationship assign staff_id
+    addr_vals = payload.address.model_dump()
+    addr_vals.pop("id", None)
+    addr_vals.pop("staff_id", None)
+    item.address = StaffAddress(**addr_vals)
     item.permissions = [StaffPermission(**permission.model_dump()) for permission in payload.permissions]
     try:
         db.add(item)
@@ -117,13 +121,22 @@ def update_staff(school_id: int, staff_id: int, payload: StaffCreate, db: Sessio
     for field, value in payload.staff_info.model_dump().items():
         setattr(item, field, value)
 
-    # Update or create address
+    # Update or create address. Ignore incoming `id`/`staff_id` to avoid PK inconsistencies.
     address_values = payload.address.model_dump()
     if item.address is None:
-        item.address = StaffAddress(**address_values)
+        av = address_values.copy()
+        av.pop("id", None)
+        av.pop("staff_id", None)
+        item.address = StaffAddress(**av)
+        # ensure FK points to this staff
+        item.address.staff_id = item.id
     else:
         for k, v in address_values.items():
+            if k in ("id", "staff_id"):
+                continue
             setattr(item.address, k, v)
+        # ensure FK remains correct
+        item.address.staff_id = item.id
 
     # Replace permissions atomically
     item.permissions.clear()

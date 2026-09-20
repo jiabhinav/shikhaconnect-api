@@ -40,6 +40,8 @@ class StaffAddressInfo(FormSection):
     country: str = Field(min_length=1, max_length=100)
     state: str = Field(min_length=1, max_length=255)
     pin_code: str = Field(min_length=1, max_length=20)
+    id: int | None = None
+    staff_id: int | None = None
 
 
 class StaffPermissionWrite(BaseModel):
