@@ -1,8 +1,9 @@
 import unittest
 from datetime import date
+from sqlalchemy import text
 
 import test_users
-from models.school import School
+from models.school import School, SchoolPermission
 from models.school_mapping import SchoolMapping, SchoolMappingStatus
 from models.session import Session as SchoolSession
 from models.user import User, UserRole, UserStatus
@@ -87,6 +88,32 @@ class LoginTests(unittest.TestCase):
         self.assertEqual(len(self.login().json()["data"]["schools"]), 1)
         self.assign(2, SchoolMappingStatus.DEACTIVE)
         self.assertEqual([school["id"] for school in self.login().json()["data"]["schools"]], [1])
+
+    def test_permissions_match_each_assigned_school(self):
+        self.second_school()
+        self.assign(1)
+        self.db.execute(text("CREATE TABLE modules (id INTEGER PRIMARY KEY, name VARCHAR(255))"))
+        self.db.execute(text("INSERT INTO modules (id, name) VALUES (10, 'Students')"))
+        self.db.add_all([
+            SchoolPermission(id=2, school_id=1, module_id=20, is_enabled=False),
+            SchoolPermission(id=1, school_id=1, module_id=10, is_enabled=True),
+            SchoolPermission(id=3, school_id=2, module_id=10, is_enabled=True),
+        ])
+        self.db.commit()
+        response = self.login()
+        self.assertEqual(response.status_code, 200, response.text)
+        UserLoginResponse.model_validate(response.json())
+        schools = response.json()["data"]["schools"]
+        self.assertEqual(len(schools), 1)
+        self.assertEqual(schools[0]["permissions"], [
+            {"id": 1, "school_id": 1, "module_id": 10, "name": "Students", "is_enabled": True},
+            {"id": 2, "school_id": 1, "module_id": 20, "name": None, "is_enabled": False},
+        ])
+        self.assign(2)
+        schools = self.login().json()["data"]["schools"]
+        self.assertEqual(schools[1]["permissions"], [
+            {"id": 3, "school_id": 2, "module_id": 10, "name": "Students", "is_enabled": True},
+        ])
 
     def test_sessions_come_from_sessions_table_and_match_school(self):
         self.second_school()

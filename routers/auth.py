@@ -4,9 +4,10 @@ from utils.passwords import hash_password, needs_rehash, verify_password
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from dependencies.db import get_db_session
+from database.module_names import get_module_names
 from dependencies.auth import get_current_user
 from models.school import School
 from models.school_assets import SchoolAssets
@@ -102,7 +103,9 @@ def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
             School, School.id == SchoolMapping.school_id
         ).outerjoin(
             SchoolAssets, SchoolAssets.school_id == School.id
-        ).filter(SchoolMapping.user_id == user.id).order_by(School.id).all()
+        ).options(selectinload(School.permissions)).filter(
+            SchoolMapping.user_id == user.id
+        ).order_by(School.id).all()
         schools = [(school, logo) for mapping, school, logo in assignments
                    if mapping.status == SchoolMappingStatus.ACTIVE]
         if not assignments:
@@ -122,10 +125,18 @@ def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
         for session in sessions:
             sessions_by_school[session.school_id].append(SessionResponse.model_validate(session))
         payload["schools"] = []
+        module_names = get_module_names(db, list({
+            permission.module_id
+            for school, logo in schools
+            for permission in school.permissions
+        }))
         for school, logo in schools:
             school_data = LoginSchool.model_validate(school)
             school_data.school_logo = logo
             school_data.sessions = sessions_by_school[school.id]
+            school_data.permissions.sort(key=lambda permission: permission.id)
+            for permission in school_data.permissions:
+                permission.name = module_names.get(permission.module_id)
             payload["schools"].append(school_data.model_dump(mode="json"))
 
     if needs_rehash(user.password):

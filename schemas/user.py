@@ -118,10 +118,21 @@ class UserRegisterResponse(BaseModel):
     data: UserResponse
 
 
+class LoginSchoolPermission(BaseModel):
+    id: int
+    school_id: int
+    module_id: int
+    name: Optional[str] = None
+    is_enabled: bool
+
+    model_config = {"from_attributes": True}
+
+
 class LoginSchool(SchoolDetails, SchoolAddress):
     id: int
     school_logo: Optional[str] = None
     sessions: list[SessionResponse] = Field(default_factory=list)
+    permissions: list[LoginSchoolPermission] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
