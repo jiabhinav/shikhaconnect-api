@@ -7,6 +7,7 @@ from sqlalchemy import inspect, text
 from database.database import Base
 from database.school_permissions_table import allow_legacy_service_name_null
 from database.session_table import remove_legacy_session_year_index
+from database.staff_permission_table import rename_staff_module_id
 
 
 def register_models():
@@ -18,6 +19,7 @@ def register_models():
 
 def ensure_all_tables(connection):
     register_models()
+    rename_staff_module_id(connection)
     allow_legacy_service_name_null(connection)
     remove_legacy_session_year_index(connection)
     existing = set(inspect(connection).get_table_names())

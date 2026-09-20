@@ -30,6 +30,8 @@ from routers.houses import router as house_router
 from routers.generation_settings import router as generation_settings_router
 from routers.timetable_settings import router as timetable_settings_router
 from routers.students import router as student_router
+from routers.staff import router as staff_router
+from routers.staff_modules import router as staff_module_router
 
 router = APIRouter(
     prefix="/schools",
@@ -44,6 +46,8 @@ router.include_router(house_router)
 router.include_router(generation_settings_router)
 router.include_router(timetable_settings_router)
 router.include_router(student_router)
+router.include_router(staff_router)
+router.include_router(staff_module_router)
 
 
 def _require_session_school(db: Session, school_id: int, user: User):

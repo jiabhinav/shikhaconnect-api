@@ -531,3 +531,62 @@ and this session ID must match the same row in `sessions`; otherwise the API
 returns 404. Missing or null session IDs return 422. Updates never create a
 replacement session or match by name/date. Session name/date changes are stored
 in `sessions`, leaving the legacy school session columns unchanged.
+
+### School staff
+
+The application automatically creates `staff`, `staff_address`, and
+`staff_permission` when missing, using the existing startup and database-request
+initialization. Existing tables and rows are preserved. Staff belongs to a school;
+each staff member has one address and a list of module permissions.
+
+These endpoints require Super Admin authentication, matching the existing student
+routes:
+
+- `POST /schools/school/{school_id}/staff` — save all three form sections atomically.
+- `GET /schools/school/{school_id}/staff?offset=0&limit=50` — list staff for the school.
+- `GET /schools/school/{school_id}/staff/{staff_id}` — fetch all three sections.
+
+Example create body:
+
+```json
+{
+  "staff_info": {
+    "first_name": "Anita",
+    "date_of_birth": "1990-01-15",
+    "designation": "Teacher",
+    "mobile_number": "9876543210",
+    "email": "anita@example.com",
+    "father_name": "Father",
+    "mother_name": "Mother",
+    "nationality": "Indian",
+    "aadhaar_number": "123456789012",
+    "caste_category_id": 1,
+    "role": "Teacher",
+    "gender": "Female"
+  },
+  "address": {
+    "line_1": "12 Main Road",
+    "city": "Delhi",
+    "country": "India",
+    "state": "Delhi",
+    "pin_code": "110001"
+  },
+  "permissions": [
+    {"staff_module_id": 1, "is_enabled": true},
+    {"staff_module_id": 2, "is_enabled": false}
+  ]
+}
+```
+
+`caste_category_id` must belong to the URL's school. Permission `staff_module_id` values
+come from `GET /schools/staff-modules` and must reference active modules. Duplicate
+module IDs are rejected; an empty permissions list grants no modules. The existing
+`staff_modules` catalog is not created or seeded by these routes.
+
+Optional personal fields are `middle_name`, `last_name`, `spouse_name`, `religion`,
+`qualification`, `joining_date`, `biometric_code`, `experience`, `mode_of_transport`,
+`salary`, `blood_group`, and `feedback`. Address `line_2` is optional. Dates use
+`YYYY-MM-DD`; salary is a nonnegative decimal with at most two fractional digits.
+Responses contain `status`, `message`, and `data`, including staff/school IDs,
+`staff_info`, `address`, and `permissions`. This stores staff profiles and selected
+permissions; it does not create login accounts or change authorization rules.
