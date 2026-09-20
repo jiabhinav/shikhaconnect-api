@@ -13,6 +13,7 @@ from database.database import Base
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
 from models.school import School, SchoolPermission
+from models.school_assets import SchoolAssets
 from models.session import Session as SchoolSession
 from models.user import UserRole
 from routers.schools import router as school_router
@@ -48,6 +49,31 @@ class SchoolCreationTests(unittest.TestCase):
         self.client.close()
         self.db.close()
         self.engine.dispose()
+
+    def test_get_school_by_id_includes_assets(self):
+        response = self.client.post("/schools/create_school", json=self.payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        school_id = response.json()["data"]["id"]
+        expected = {
+            "school_id": school_id,
+            "school_logo": None,
+            "board_logo": None,
+            "principal_signature": None,
+            "exam_coordinator_signature": None,
+        }
+        for has_assets in (False, True):
+            if has_assets:
+                expected.update({
+                    field: f"{school_id}/{field}.png"
+                    for field in expected if field != "school_id"
+                })
+                self.db.add(SchoolAssets(**expected))
+                self.db.commit()
+            for prefix in ("/schools", "/super-admin"):
+                with self.subTest(prefix=prefix, has_assets=has_assets):
+                    response = self.client.get(f"{prefix}/school/{school_id}")
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(response.json()["data"]["school_assets"], expected)
 
     def test_creation_inserts_session_for_each_school(self):
         for index, prefix in enumerate(("/schools", "/super-admin")):

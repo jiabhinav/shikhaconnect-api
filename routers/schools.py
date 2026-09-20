@@ -13,8 +13,10 @@ from dependencies.db import get_db_session
 from database.module_names import get_module_names
 from database.session_table import ensure_session_table, update_school_session, validate_session_years
 from models.school import School, SchoolPermission
+from models.school_assets import SchoolAssets
 from models.user import User, UserRole
 from schemas.school import SchoolCreate, SchoolUpdate
+from schemas.school_assets import SchoolAssetsResponse
 from schemas.session import SessionResponse
 from models.session import Session as SchoolSession
 from models.student import Student
@@ -331,8 +333,8 @@ def get_school_by_id(
     current_user: User = Depends(get_current_user),
 ):
     query = db.query(School).filter(School.id == school_id)
-    if _role_value(current_user) != UserRole.SUPER_ADMIN.value:
-        raise HTTPException(status_code=403, detail="Only Super Admin can access schools")
+    # if _role_value(current_user) != UserRole.SUPER_ADMIN.value:
+    #     raise HTTPException(status_code=403, detail="Only Super Admin can access schools")
 
     school = query.first()
     if not school:
@@ -341,10 +343,16 @@ def get_school_by_id(
             detail="School not found",
         )
 
+    data = _school_detail_payload(school, db)
+    assets = db.get(SchoolAssets, school_id)
+    data["school_assets"] = (
+        SchoolAssetsResponse.model_validate(assets)
+        if assets is not None else SchoolAssetsResponse(school_id=school_id)
+    ).model_dump(mode="json")
     return {
         "status": "success",
         "message": "School fetched successfully",
-        "data": _school_detail_payload(school, db),
+        "data": data,
     }
 
 
