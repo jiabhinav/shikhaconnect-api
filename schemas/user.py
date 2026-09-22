@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, EmailStr, Field
 from typing import Optional
 
 from models.user import UserRole, UserStatus
@@ -64,7 +64,8 @@ class UserStatusUpdate(BaseModel):
 
 
 class UserResponse(BaseModel):
-    id: int
+    id: int = Field(validation_alias=AliasChoices("login_user_id", "id"),
+                    description="Login user ID (login_user.id)")
     first_name: str
     middle_name: Optional[str] = None
     last_name: Optional[str] = None

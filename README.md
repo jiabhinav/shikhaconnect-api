@@ -501,6 +501,9 @@ cascades to its mappings.
 | DELETE | `/super-admin/school-mappings/{mapping_id}` | Delete assignment |
 | GET | `/super-admin/school/{school_id}/users` | List assigned users |
 
+The mapping API accepts and returns `login_user.id` in the `user_id` field.
+Mappings reference `login_user` directly; a linked `users` profile is not required.
+
 POST and PUT require all three fields:
 
 ```json
@@ -626,3 +629,17 @@ Account status is stored only in `login_user.status`. User and staff API status
 fields read and update this shared value. Initialization moves legacy statuses
 from users/staff and removes their status columns. If linked legacy statuses
 differ, Inactive takes precedence over Pending, which takes precedence over Active.
+
+### User account IDs
+
+User registration, login, user detail, user list, and user update responses expose
+`login_user.id` as `data.id` (or each list item's `id`). GET, PUT, DELETE
+`/users/{user_id}` and PATCH `/users/{login_user_id}/status` accept that login
+user ID. School mapping payloads and their `user_id` responses use the same ID.
+User profile endpoints require a linked `users` profile. Staff resources continue
+to expose their profile `id` and separate `login_user_id`.
+
+School mapping PUT, PATCH, and DELETE URLs use the assignment's `mapping_id`,
+not an account ID, because one account can have assignments to several schools.
+Database initialization automatically migrates existing PostgreSQL school mappings
+from `users.id` to `users.login_user_id` and changes the foreign key to `login_user.id`.

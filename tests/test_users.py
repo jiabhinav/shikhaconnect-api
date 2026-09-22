@@ -66,7 +66,7 @@ class UserDeleteTests(unittest.TestCase):
         )
         self.db.commit()
 
-        self.user = SimpleNamespace(id=1, role=UserRole.SUPER_ADMIN)
+        self.user = SimpleNamespace(id=1, login_user_id=1, role=UserRole.SUPER_ADMIN)
         app = FastAPI()
         app.include_router(router)
         app.dependency_overrides[get_db_session] = lambda: self.db
@@ -295,3 +295,26 @@ class UserDeleteTests(unittest.TestCase):
         self.assertEqual(self.client.patch('/users/99999/status', json={'status': False}).status_code, 404)
         self.user = self.db.get(User, 2)
         self.assertEqual(self.client.patch('/users/70/status', json={'status': False}).status_code, 403)
+
+    def test_mapping_consumers_use_login_ids_when_profile_id_differs(self):
+        from models.user import LoginUser
+        from models.school_mapping import SchoolMapping, SchoolMappingStatus
+        from routers.auth import router as auth_router
+        self.client.app.include_router(auth_router)
+        account = LoginUser(id=80, first_name='Mapped', email='mapped@example.com',
+                            mobile='8080', password='secret', role=UserRole.ADMIN)
+        self.db.add(User(id=20, login_user=account))
+        self.db.flush()
+        self.db.add(SchoolMapping(school_id=1, user_id=80, status=SchoolMappingStatus.ACTIVE))
+        self.db.commit()
+        response = self.client.get('/users/80')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([s['id'] for s in response.json()['data']['schools']], [1])
+        listing = self.client.get('/users/').json()['data']
+        self.assertEqual(next(u for u in listing if u['id'] == 80), response.json()['data'])
+        response = self.client.post('/auth/login', json={'mobile': '8080', 'password': 'secret'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([s['id'] for s in response.json()['data']['schools']], [1])
+        self.assertEqual(self.client.delete('/users/80').status_code, 200)
+        self.assertIsNone(self.db.get(LoginUser, 80))
+        self.assertEqual(self.db.query(SchoolMapping).filter_by(user_id=80).count(), 0)

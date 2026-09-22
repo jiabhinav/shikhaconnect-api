@@ -11,7 +11,7 @@ class SchoolMappingStatusUpdate(BaseModel):
 
 class SchoolMappingWrite(SchoolMappingStatusUpdate):
     school_id: int = Field(gt=0)
-    user_id: int = Field(gt=0)
+    user_id: int = Field(gt=0, description="Login user ID (login_user.id)")
 
 
 class SchoolMappingResponse(SchoolMappingWrite):
@@ -32,10 +32,10 @@ class MappedUserResponse(BaseModel):
     status: SchoolMappingStatus
     first_name: str
     middle_name: str | None
-    last_name: str
+    last_name: str | None
     email: str
     mobile: str
-    role: UserRole
+    role: UserRole | str
     user_status: UserStatus
 
 

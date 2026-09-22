@@ -22,7 +22,7 @@ class SchoolMapping(Base):
 
     id = Column(Integer, primary_key=True)
     school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("login_user.id", ondelete="CASCADE"), nullable=False, index=True)
     status = Column(Enum(SchoolMappingStatus, native_enum=False, create_constraint=True,
                          values_callable=lambda enum: [item.value for item in enum],
                          name="school_mapping_status"), nullable=False)

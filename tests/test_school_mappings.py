@@ -6,7 +6,7 @@ from database import database
 from dependencies.db import get_db_session
 from models.school import School
 from models.school_mapping import SchoolMapping
-from models.user import User, UserRole, UserStatus
+from models.user import LoginUser, User, UserRole, UserStatus
 from routers.super_admin import router
 from sqlalchemy.exc import IntegrityError
 
@@ -25,6 +25,36 @@ class SchoolMappingTests(unittest.TestCase):
         response = self.client.post(self.url, json=dict(self.payload, **changes))
         self.assertEqual(response.status_code, 201, response.text)
         return response.json()['data']['id']
+
+    def test_login_user_ids_are_resolved_for_all_mapping_responses(self):
+        # Deliberately separate profile IDs from login IDs.
+        self.db.add(User(id=20, first_name='Linked', last_name='Admin',
+                         email='linked@example.com', mobile='54321',
+                         role=UserRole.SUB_ADMIN))
+        self.db.commit()
+        user = self.db.get(User, 20)
+        login_id = user.login_user_id
+        self.assertNotEqual(login_id, user.id)
+        mapping_id = self.create(user_id=login_id)
+        self.assertEqual(self.db.get(SchoolMapping, mapping_id).user_id, login_id)
+        self.assertEqual(self.client.get(self.list_url).json()['data'][0]['user_id'], login_id)
+        item_url = f'{self.url}/{mapping_id}'
+        response = self.client.patch(item_url + '/status', json={'status': 'deactive'})
+        self.assertEqual(response.json()['data']['user_id'], login_id)
+        response = self.client.post(self.url, json=dict(self.payload, user_id=login_id))
+        self.assertEqual(response.status_code, 409)
+        response = self.client.post(self.url, json=dict(self.payload, school_id=2, user_id=login_id))
+        self.assertEqual(response.status_code, 409)
+        response = self.client.put(item_url, json=dict(self.payload, school_id=2, user_id=login_id))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['user_id'], login_id)
+        self.assertEqual(self.db.get(SchoolMapping, mapping_id).user_id, login_id)
+        response = self.client.post(self.url, json=dict(self.payload, user_id=20))
+        self.assertEqual(response.status_code, 404)
+        response = self.client.delete(item_url)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIsNone(self.db.get(SchoolMapping, mapping_id))
+        self.assertIsNotNone(self.db.get(User, 20))
 
     def test_crud_status_and_school_scope(self):
         mapping_id = self.create()
@@ -132,3 +162,42 @@ class SchoolMappingTests(unittest.TestCase):
             database, 'SessionLocal', lambda: database.sessionmaker(bind=self.engine)()
         ):
             self.create()
+
+    def test_account_without_user_profile_supports_all_mapping_operations(self):
+        account = LoginUser(id=80, first_name='Teacher', email='teacher@example.com',
+                            mobile='8080', role='Teacher')
+        self.db.add(account)
+        self.db.commit()
+        self.assertIsNone(self.db.get(User, 80))
+        mapping_id = self.create(user_id=80)
+        item_url = f'{self.url}/{mapping_id}'
+        data = self.client.get(self.list_url).json()['data'][0]
+        self.assertEqual(data['user_id'], 80)
+        self.assertEqual(data['role'], 'Teacher')
+        self.assertIsNone(data['last_name'])
+        self.assertEqual(self.client.patch(item_url + '/status', json={'status': 'deactive'}).status_code, 200)
+        response = self.client.put(item_url, json=dict(self.payload, school_id=2, user_id=80))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['user_id'], 80)
+        self.assertEqual(self.client.delete(item_url).status_code, 200)
+        self.assertIsNotNone(self.db.get(LoginUser, 80))
+        self.create(user_id=80)
+        self.db.delete(account)
+        self.db.commit()
+        self.assertEqual(self.db.query(SchoolMapping).filter_by(user_id=80).count(), 0)
+
+    def test_admin_without_profile_can_be_assigned_multiple_schools(self):
+        self.db.add(LoginUser(id=90, first_name='Admin', email='multi@example.com',
+                              mobile='9090', role=UserRole.ADMIN))
+        self.db.commit()
+        first = self.create(user_id=90, school_id=1)
+        second = self.create(user_id=90, school_id=2)
+        self.assertNotEqual(first, second)
+        for school_id in (1, 2):
+            response = self.client.get(f'/super-admin/school/{school_id}/users')
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual([u['user_id'] for u in response.json()['data']], [90])
+        duplicate = self.client.post(self.url, json=dict(self.payload, user_id=90))
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(self.client.delete(f'{self.url}/{first}').status_code, 200)
+        self.assertIsNotNone(self.db.get(SchoolMapping, second))

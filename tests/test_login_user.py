@@ -29,7 +29,7 @@ class LoginUserTests(unittest.TestCase):
         app = FastAPI()
         app.include_router(router)
         app.dependency_overrides[get_db_session] = lambda: self.db
-        self.actor = SimpleNamespace(id=999, role=UserRole.SUPER_ADMIN)
+        self.actor = SimpleNamespace(id=999, login_user_id=999, role=UserRole.SUPER_ADMIN)
         app.dependency_overrides[get_current_user] = lambda: self.actor
         self.client = TestClient(app)
 
@@ -43,7 +43,7 @@ class LoginUserTests(unittest.TestCase):
                        mobile="1234567890", designation="Principal")
         response = self.client.post("/users/", json=payload)
         self.assertEqual(response.status_code, 200, response.text)
-        profile = self.db.get(User, response.json()["data"]["id"])
+        profile = self.db.query(User).filter_by(login_user_id=response.json()["data"]["id"]).one()
         account = profile.login_user
         self.assertEqual(account.email, payload["email"])
         self.assertTrue(verify_password(payload["mobile"], account.password))
@@ -76,10 +76,10 @@ class LoginUserTests(unittest.TestCase):
         ))
         self.assertEqual(created.status_code, 200, created.text)
         expected = created.json()["data"]
-        profile = self.db.get(User, expected["id"])
+        profile = self.db.query(User).filter_by(login_user_id=expected["id"]).one()
         self.db.expire_all()
 
-        single = self.client.get(f"/users/{profile.id}")
+        single = self.client.get(f"/users/{profile.login_user_id}")
         self.assertEqual(single.status_code, 200, single.text)
         self.assertEqual(single.json(), {
             "status": "success", "message": "User fetched successfully",
@@ -117,7 +117,7 @@ class LoginUserTests(unittest.TestCase):
         ))
         self.assertEqual(response.status_code, 200, response.text)
         self.db.expire_all()
-        profile = self.db.get(User, user_id)
+        profile = self.db.query(User).filter_by(login_user_id=user_id).first()
         self.assertEqual(profile.first_name, "Updated")
         self.assertEqual(profile.email, "updated@example.com")
         self.assertEqual(profile.mobile, "777")
@@ -137,18 +137,18 @@ class LoginUserTests(unittest.TestCase):
             })
             self.assertEqual(response.status_code, 400, response.text)
             self.db.expire_all()
-            profile = self.db.get(User, user_id)
+            profile = self.db.query(User).filter_by(login_user_id=user_id).first()
             self.assertEqual(profile.first_name, "Test")
             self.assertIsNone(profile.city)
 
     def test_delete_removes_only_linked_account(self):
         user_id = self._create_profile()
-        account_id = self.db.get(User, user_id).login_user_id
+        account_id = self.db.query(User).filter_by(login_user_id=user_id).first().login_user_id
         response = self.client.delete(f"/users/{user_id}")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json(), {"status": "success", "message": "User deleted successfully"})
         self.db.expire_all()
-        self.assertIsNone(self.db.get(User, user_id))
+        self.assertIsNone(self.db.query(User).filter_by(login_user_id=user_id).first())
         self.assertEqual(self.db.query(UserAddress).filter_by(login_user_id=account_id).count(), 0)
         self.assertIsNotNone(self.db.get(User, 50))
 
@@ -157,7 +157,7 @@ class LoginUserTests(unittest.TestCase):
         self.actor.role = UserRole.ADMIN
         self.assertEqual(self.client.put(f"/users/{user_id}", json={"city": "Delhi"}).status_code, 403)
         self.assertEqual(self.client.delete(f"/users/{user_id}").status_code, 403)
-        self.assertIsNotNone(self.db.get(User, user_id))
+        self.assertIsNotNone(self.db.query(User).filter_by(login_user_id=user_id).first())
         self.assertEqual(self.client.put("/users/99999", json={"city": "Delhi"}).status_code, 404)
         self.assertEqual(self.client.delete("/users/99999").status_code, 404)
 
@@ -173,7 +173,59 @@ class LoginUserTests(unittest.TestCase):
         self.assertEqual(response.json()["data"]["pin_code"], "110001")
         self.assertIsNone(response.json()["data"]["line_1"])
         self.db.expire_all()
-        account_id = self.db.get(User, user_id).login_user_id
+        account_id = self.db.query(User).filter_by(login_user_id=user_id).first().login_user_id
         address = self.db.query(UserAddress).filter_by(login_user_id=account_id).one()
         self.assertEqual(address.city, "Mumbai")
         self.assertIsNone(address.line_1)
+
+    def test_profile_ids_are_not_accepted_as_account_ids(self):
+        login_id = self._create_profile()
+        profile = self.db.query(User).filter_by(login_user_id=login_id).one()
+        self.assertNotEqual(login_id, profile.id)
+        for method, body in (("get", None), ("put", {"first_name": "Wrong"}), ("delete", None)):
+            response = self.client.request(method, f"/users/{profile.id}",
+                                           **({"json": body} if body else {}))
+            self.assertEqual(response.status_code, 404, response.text)
+        self.assertEqual(profile.first_name, "Test")
+
+    def test_ownership_uses_login_id_when_profile_ids_overlap(self):
+        login_id = self._create_profile()
+        profile = self.db.query(User).filter_by(login_user_id=login_id).one()
+        # This other profile's primary key equals the actor's login ID.
+        other = User(id=login_id, first_name="Unrelated", last_name="User",
+                     email="unrelated@example.com", mobile="456")
+        self.db.add(other)
+        self.db.commit()
+        self.actor = profile
+        self.assertEqual(self.client.put(f"/users/{other.login_user_id}",
+                                        json={"city": "Wrong"}).status_code, 403)
+        self.assertEqual(self.client.delete(f"/users/{other.login_user_id}").status_code, 403)
+        response = self.client.put(f"/users/{login_id}", json={"city": "Delhi"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["data"]["id"], login_id)
+        self.assertEqual(profile.city, "Delhi")
+        self.assertIsNone(other.city)
+        self.assertEqual(self.client.delete(f"/users/{login_id}").status_code, 200)
+        self.assertIsNotNone(self.db.get(User, other.id))
+
+    def test_login_register_and_self_delete_use_account_id(self):
+        from routers.auth import router as auth_router
+        self.client.app.include_router(auth_router)
+        self.db.add(LoginUser(id=50, first_name="Reserved", email="reserved@example.com",
+                              mobile="reserved"))
+        self.db.commit()
+        response = self.client.post("/auth/register", json=dict(
+            first_name="Super", last_name="Admin", email="admin@example.com",
+            mobile="123", password="secret", role="Super Admin"))
+        self.assertEqual(response.status_code, 200, response.text)
+        login_id = response.json()["data"]["id"]
+        profile = self.db.query(User).filter_by(login_user_id=login_id).one()
+        self.assertNotEqual(login_id, profile.id)
+        response = self.client.post("/auth/login", json={"mobile": "123", "password": "secret"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["data"]["id"], login_id)
+        self.actor = profile
+        self.assertEqual(self.client.delete(f"/users/{login_id}").status_code, 403)
+        self.assertEqual(self.client.patch(f"/users/{login_id}/status",
+                                          json={"status": False}).status_code, 400)
+        self.assertIsNotNone(self.db.get(LoginUser, login_id))

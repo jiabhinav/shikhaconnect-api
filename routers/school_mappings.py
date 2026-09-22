@@ -6,7 +6,7 @@ from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
 from models.school import School
 from models.school_mapping import SchoolMapping, SchoolMappingStatus
-from models.user import User, UserRole
+from models.user import LoginUser, User, UserRole
 from schemas.school_mapping import (
     SchoolMappingWrite, SchoolMappingStatusUpdate, SchoolMappingResult, SchoolUserListResult,
 )
@@ -28,10 +28,10 @@ def require_school(db, school_id):
 
 def validate_assignment(db, payload, mapping_id=None):
     require_school(db, payload.school_id)
-    user = db.query(User).filter_by(id=payload.user_id).with_for_update().first()
+    user = db.query(LoginUser).filter_by(id=payload.user_id).with_for_update(of=LoginUser).first()
     if user is None:
-        raise HTTPException(404, "User not found")
-    query = db.query(SchoolMapping).filter_by(school_id=payload.school_id, user_id=payload.user_id)
+        raise HTTPException(404, "Login user not found")
+    query = db.query(SchoolMapping).filter_by(school_id=payload.school_id, user_id=user.id)
     if mapping_id is not None:
         query = query.filter(SchoolMapping.id != mapping_id)
     if query.first() is not None:
@@ -42,6 +42,8 @@ def validate_assignment(db, payload, mapping_id=None):
             assignments = assignments.filter(SchoolMapping.id != mapping_id)
         if assignments.first() is not None:
             raise HTTPException(409, "Sub Admin can only be assigned to one school")
+
+    return user
 
 
 def find_mapping(db, mapping_id):
@@ -62,20 +64,27 @@ def save_mapping(db, item, message):
     except Exception:
         db.rollback()
         raise
-    return {"message": message, "data": item}
+    return {"message": message, "data": {
+        "id": item.id, "school_id": item.school_id,
+        "user_id": item.user_id, "status": item.status,
+    }}
 
 
 @router.post("/school-mappings", response_model=SchoolMappingResult, status_code=201)
 def create_mapping(payload: SchoolMappingWrite, db: Session = Depends(mapping_db)):
-    validate_assignment(db, payload)
-    return save_mapping(db, SchoolMapping(**payload.model_dump()), "User assigned to school successfully")
+    user = validate_assignment(db, payload)
+    values = payload.model_dump()
+    values["user_id"] = user.id
+    return save_mapping(db, SchoolMapping(**values), "User assigned to school successfully")
 
 
 @router.put("/school-mappings/{mapping_id}", response_model=SchoolMappingResult)
 def update_mapping(mapping_id: int, payload: SchoolMappingWrite, db: Session = Depends(mapping_db)):
     item = find_mapping(db, mapping_id)
-    validate_assignment(db, payload, mapping_id)
-    for key, value in payload.model_dump().items():
+    user = validate_assignment(db, payload, mapping_id)
+    values = payload.model_dump()
+    values["user_id"] = user.id
+    for key, value in values.items():
         setattr(item, key, value)
     return save_mapping(db, item, "School mapping updated successfully")
 
@@ -103,7 +112,7 @@ def delete_mapping(mapping_id: int, db: Session = Depends(mapping_db)):
 def list_school_users(school_id: int, status: SchoolMappingStatus | None = None,
                       db: Session = Depends(mapping_db)):
     require_school(db, school_id)
-    query = db.query(SchoolMapping, User).join(User, User.id == SchoolMapping.user_id).filter(
+    query = db.query(SchoolMapping, LoginUser).join(LoginUser, LoginUser.id == SchoolMapping.user_id).filter(
         SchoolMapping.school_id == school_id)
     if status is not None:
         query = query.filter(SchoolMapping.status == status)

@@ -50,7 +50,7 @@ def reset_password(
 
 def _build_user_payload(user, *, include_address=True):
     payload = {
-        "id": user.id,
+        "id": user.login_user_id,
         "first_name": user.first_name,
         "middle_name": user.middle_name,
         "last_name": user.last_name,
@@ -110,7 +110,7 @@ def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
             ).outerjoin(
                 SchoolAssets, SchoolAssets.school_id == School.id
             ).options(selectinload(School.permissions)).filter(
-                SchoolMapping.user_id == user.id
+                SchoolMapping.user_id == account.id
             ).order_by(School.id).all()
             schools = [(school, logo) for mapping, school, logo in assignments
                        if mapping.status == SchoolMappingStatus.ACTIVE]

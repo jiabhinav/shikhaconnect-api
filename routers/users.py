@@ -122,7 +122,7 @@ def create_user(user: UserCreate, db: Session = Depends(get_db_session)):
         raise
 
     response_data = {
-        "id": new_user.id,
+        "id": new_user.login_user_id,
         "first_name": new_user.first_name,
         "middle_name": new_user.middle_name,
         "last_name": new_user.last_name,
@@ -170,17 +170,18 @@ def schools_by_user(db, user_ids):
 
 @router.get("/{user_id}", response_model=UserDetailResult, status_code=status.HTTP_200_OK)
 def get_user(user_id: int, db: Session = Depends(get_db_session)):
+    """Fetch a user profile by login_user.id."""
     user = (
         db.query(User)
         .options(joinedload(User.login_user).joinedload(LoginUser.address))
-        .filter(User.id == user_id)
+        .filter(User.login_user_id == user_id)
         .first()
     )
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     data = UserResponse.model_validate(user).model_dump(mode="json")
-    data["schools"] = schools_by_user(db, [user.id])[user.id]
+    data["schools"] = schools_by_user(db, [user.login_user_id])[user.login_user_id]
     return {
         "status": "success",
         "message": "User fetched successfully",
@@ -196,13 +197,13 @@ def list_users(db: Session = Depends(get_db_session)):
         .order_by(User.id)
         .all()
     )
-    assigned_schools = schools_by_user(db, [user.id for user in users])
+    assigned_schools = schools_by_user(db, [user.login_user_id for user in users])
     return {
         "status": "success",
         "message": "Users fetched successfully",
         "data": [
             {**UserResponse.model_validate(user).model_dump(mode="json"),
-             "schools": assigned_schools[user.id]}
+             "schools": assigned_schools[user.login_user_id]}
             for user in users
         ],
     }
@@ -215,12 +216,13 @@ def update_user(
     db: Session = Depends(get_db_session),
     current_user: User = Depends(get_current_user),
 ):
-    user = db.query(User).options(joinedload(User.login_user).joinedload(LoginUser.address)).filter(User.id == user_id).first()
+    """Resolve user_id through login_user.id before changing the profile."""
+    user = db.query(User).options(joinedload(User.login_user).joinedload(LoginUser.address)).filter(User.login_user_id == user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     role_value = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
-    if role_value != UserRole.SUPER_ADMIN.value and (not isinstance(current_user, User) or current_user.id != user_id):
+    if role_value != UserRole.SUPER_ADMIN.value and (not isinstance(current_user, User) or current_user.login_user_id != user_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this user")
 
     update_data = user_update.model_dump(exclude_unset=True)
@@ -285,21 +287,22 @@ def update_user(
 def delete_user(
     user_id: int, db: Session = Depends(get_db_session), current_user: User = Depends(get_current_user)
 ):
-    user = db.query(User).options(joinedload(User.login_user).joinedload(LoginUser.address)).filter(User.id == user_id).first()
+    """Resolve user_id through login_user.id before changing the profile."""
+    user = db.query(User).options(joinedload(User.login_user).joinedload(LoginUser.address)).filter(User.login_user_id == user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     role_value = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
-    if role_value == UserRole.SUPER_ADMIN.value and current_user.id == user_id:
+    if role_value == UserRole.SUPER_ADMIN.value and current_user.login_user_id == user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="Super Admin cannot delete their own account")
-    if role_value != UserRole.SUPER_ADMIN.value and (not isinstance(current_user, User) or current_user.id != user_id):
+    if role_value != UserRole.SUPER_ADMIN.value and (not isinstance(current_user, User) or current_user.login_user_id != user_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this user")
 
     try:
         # Remove profile references before the account cascade. Shared schools
         # and module catalogs are not owned by this user.
-        db.query(SchoolMapping).filter(SchoolMapping.user_id == user.id).delete(synchronize_session="fetch")
+        db.query(SchoolMapping).filter(SchoolMapping.user_id == user.login_user_id).delete(synchronize_session="fetch")
         db.query(Staff).filter(Staff.login_user_id == user.login_user_id).delete(synchronize_session="fetch")
         # User -> LoginUser cascades also remove its address and permissions.
         db.delete(user)
