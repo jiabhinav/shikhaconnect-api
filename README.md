@@ -592,8 +592,8 @@ Responses contain `status`, `message`, and `data`, including staff/school IDs,
 
 Staff creation writes all records in one transaction:
 
-- `login_user`: first_name, middle_name, last_name, email, mobile, hashed password, and role.
-- `staff`: school_id, login_user_id, status, and all remaining staff_info fields, including dates, designation, family details, qualification, salary, and feedback.
+- `login_user`: first_name, middle_name, last_name, email, mobile, hashed password, role, and account status.
+- `staff`: school_id, login_user_id, and all remaining staff_info fields, including dates, designation, family details, qualification, salary, and feedback.
 - `staff_address`: address fields linked by login_user_id.
 - `staff_permission`: module permissions linked by login_user_id.
 
@@ -621,3 +621,8 @@ User address fields are stored in staff_address. Legacy address columns and
 staff_addrers rows are migrated automatically. General user API responses keep
 flat address fields; staff responses keep their three sections. Address and
 permission responses expose login_user_id as their owner.
+
+Account status is stored only in `login_user.status`. User and staff API status
+fields read and update this shared value. Initialization moves legacy statuses
+from users/staff and removes their status columns. If linked legacy statuses
+differ, Inactive takes precedence over Pending, which takes precedence over Active.

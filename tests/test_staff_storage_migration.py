@@ -185,3 +185,25 @@ class StaffStorageMigrationTests(unittest.TestCase):
         self.migrate()
         self.assertNotIn('user_id', {c['name'] for c in inspect(self.connection).get_columns('staff')})
         self.assertEqual(self.connection.execute(text('SELECT login_user_id FROM staff')).scalar(), 50)
+
+    def test_status_moves_to_login_account_and_preserves_disabled_state(self):
+        from database.staff_account_table import migrate_account_status
+        self.connection.execute(text("ALTER TABLE staff ADD COLUMN status VARCHAR(20); UPDATE staff SET status='Inactive'"))
+        self.migrate()
+        migrate_account_status(self.connection)
+        migrate_account_status(self.connection)
+        self.assertEqual(self.connection.execute(text('SELECT status FROM login_user WHERE id=50')).scalar(), 'INACTIVE')
+        for table in ('users', 'staff'):
+            self.assertNotIn('status', {c['name'] for c in inspect(self.connection).get_columns(table)})
+        row = self.connection.execute(text("""
+            INSERT INTO login_user (first_name,email,mobile,password,role)
+            VALUES ('New','new@example.com','456','hash','Teacher') RETURNING status
+        """)).scalar_one()
+        self.assertEqual(row, 'ACTIVE')
+
+    def test_pending_status_remains_pending_on_shared_account(self):
+        from database.staff_account_table import migrate_account_status
+        self.connection.execute(text("UPDATE users SET status='PENDING'"))
+        self.migrate()
+        migrate_account_status(self.connection)
+        self.assertEqual(self.connection.execute(text('SELECT status FROM login_user WHERE id=50')).scalar(), 'PENDING')

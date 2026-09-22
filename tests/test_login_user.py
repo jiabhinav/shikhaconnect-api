@@ -83,13 +83,13 @@ class LoginUserTests(unittest.TestCase):
         self.assertEqual(single.status_code, 200, single.text)
         self.assertEqual(single.json(), {
             "status": "success", "message": "User fetched successfully",
-            "data": expected,
+            "data": {**expected, "schools": []},
         })
         listing = self.client.get("/users/")
         self.assertEqual(listing.status_code, 200, listing.text)
         self.assertEqual(listing.json(), {
             "status": "success", "message": "Users fetched successfully",
-            "data": [expected],
+            "data": [{**expected, "schools": []}],
         })
         self.assertEqual(self.client.get("/users/99999").status_code, 404)
 
@@ -126,7 +126,7 @@ class LoginUserTests(unittest.TestCase):
         self.assertEqual(profile.city, "Delhi")
         self.assertEqual(profile.address.city, "Delhi")
         self.assertNotIn("city", User.__table__.columns)
-        self.assertEqual(response.json()["data"], self.client.get(f"/users/{user_id}").json()["data"])
+        self.assertEqual({**response.json()["data"], "schools": []}, self.client.get(f"/users/{user_id}").json()["data"])
         self.assertNotIn("password", response.json()["data"])
 
     def test_update_conflict_keeps_both_records_unchanged(self):

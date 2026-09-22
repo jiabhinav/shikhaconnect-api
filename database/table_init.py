@@ -8,7 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from database.database import Base
 from database.user_address_table import migrate_user_addresses
-from database.staff_account_table import migrate_user_accounts, migrate_staff_profiles
+from database.staff_account_table import migrate_user_accounts, migrate_staff_profiles, migrate_account_status
 from database.school_permissions_table import allow_legacy_service_name_null
 from database.session_table import remove_legacy_session_year_index
 from database.staff_permission_table import rename_staff_module_id
@@ -53,9 +53,24 @@ def migrate_legacy_users(connection):
     connection.exec_driver_sql(sql)
 
 
+def remove_user_school_name(connection):
+    """Schools are linked through school_mapping, not a name on users."""
+    inspector = inspect(connection)
+    if not inspector.has_table("users"):
+        return
+    if "school_name" not in {column["name"] for column in inspector.get_columns("users")}:
+        return
+    if connection.dialect.name == "postgresql":
+        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+        if "school_name" not in {column["name"] for column in inspect(connection).get_columns("users")}:
+            return
+    connection.execute(text("ALTER TABLE users DROP COLUMN school_name"))
+
+
 def ensure_all_tables(connection):
     register_models()
     migrate_user_accounts(connection)
+    remove_user_school_name(connection)
     rename_staff_module_id(connection)
     allow_legacy_service_name_null(connection)
     remove_legacy_session_year_index(connection)
@@ -63,6 +78,7 @@ def ensure_all_tables(connection):
     if set(Base.metadata.tables).issubset(existing):
         migrate_staff_profiles(connection)
         migrate_user_addresses(connection)
+        migrate_account_status(connection)
         return
     if connection.dialect.name == "postgresql":
         # Recheck within create_all after serializing concurrent initialization.
@@ -70,3 +86,4 @@ def ensure_all_tables(connection):
     Base.metadata.create_all(bind=connection, checkfirst=True)
     migrate_staff_profiles(connection)
     migrate_user_addresses(connection)
+    migrate_account_status(connection)

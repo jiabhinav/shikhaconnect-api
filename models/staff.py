@@ -35,7 +35,7 @@ class Staff(Base):
     login_user_id = Column(Integer, ForeignKey("login_user.id"), nullable=False, unique=True)
     school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, index=True)
     login_user = relationship("LoginUser", lazy="joined")
-    status = Column(String(20), nullable=False, default="Active")
+    status = association_proxy("login_user", "status")
 
     first_name = login_account_field("first_name")
     middle_name = login_account_field("middle_name")

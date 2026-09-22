@@ -121,7 +121,7 @@ def migrate_staff_profiles(connection):
     existing = columns(connection, 'staff')
     identities = {('mobile_number' if f == 'mobile' else f) for f in ACCOUNT_COLUMNS}
     if (set(PROFILE_COLUMNS).issubset(existing) and 'login_user_id' in existing
-            and 'status' in existing and 'user_id' not in existing and not identities.intersection(existing)
+            and 'user_id' not in existing and not identities.intersection(existing)
             and existing['login_user_id']['nullable'] is False):
         return
     lock(connection)
@@ -134,15 +134,6 @@ def migrate_staff_profiles(connection):
         user_columns = columns(connection, 'users')
     if 'login_user_id' not in existing:
         connection.execute(text('ALTER TABLE staff ADD COLUMN login_user_id INTEGER'))
-    if 'status' not in existing:
-        connection.execute(text("ALTER TABLE staff ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'Active'"))
-        if 'user_id' in existing and 'status' in user_columns:
-            connection.execute(text("""
-                UPDATE staff s SET status=CASE u.status::text
-                WHEN 'ACTIVE' THEN 'Active' WHEN 'INACTIVE' THEN 'Inactive'
-                WHEN 'PENDING' THEN 'Pending' ELSE u.status::text END
-                FROM users u WHERE u.id=s.user_id AND u.status IS NOT NULL
-            """))
     if 'user_id' in existing:
         if connection.execute(text("""
             SELECT 1 FROM staff s LEFT JOIN users u ON u.id=s.user_id
@@ -252,3 +243,43 @@ def migrate_staff_accounts(connection):
     """Compatibility entry point for the direct staff-to-login_user migration."""
     migrate_user_accounts(connection)
     migrate_staff_profiles(connection)
+
+
+def migrate_account_status(connection):
+    """Consolidate profile status on login_user; retain the most restrictive state."""
+    inspector = inspect(connection)
+    account_columns = columns(connection, 'login_user')
+    sources = [table for table in ('users', 'staff')
+               if inspector.has_table(table) and 'status' in columns(connection, table)]
+    if 'status' in account_columns and not sources:
+        return
+    lock(connection)
+    connection.execute(text('LOCK TABLE login_user IN ACCESS EXCLUSIVE MODE'))
+    for table in sources:
+        connection.execute(text(f'LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE'))
+    # Refresh after concurrent startup workers finish.
+    sources = [table for table in ('users', 'staff')
+               if inspect(connection).has_table(table) and 'status' in columns(connection, table)]
+    if 'status' not in columns(connection, 'login_user'):
+        connection.execute(text('ALTER TABLE login_user ADD COLUMN status VARCHAR(8)'))
+    parts = ['SELECT id AS account_id, UPPER(status::text) AS status FROM login_user']
+    for table in sources:
+        parts.append(f'SELECT login_user_id AS account_id, UPPER(status::text) AS status FROM {table}')
+    states = ' UNION ALL '.join(parts)
+    if connection.execute(text(f"""
+        SELECT 1 FROM ({states}) states WHERE status IS NOT NULL
+        AND status NOT IN ('ACTIVE', 'INACTIVE', 'PENDING') LIMIT 1
+    """)).first():
+        raise SQLAlchemyError('Cannot migrate account status: unsupported legacy status')
+    connection.execute(text(f"""
+        UPDATE login_user l SET status=CASE states.severity
+            WHEN 2 THEN 'INACTIVE' WHEN 1 THEN 'PENDING' ELSE 'ACTIVE' END
+        FROM (SELECT account_id, MAX(CASE status WHEN 'INACTIVE' THEN 2
+                    WHEN 'PENDING' THEN 1 ELSE 0 END) AS severity
+              FROM ({states}) all_states GROUP BY account_id) states
+        WHERE states.account_id=l.id
+    """))
+    connection.execute(text("ALTER TABLE login_user ALTER COLUMN status SET DEFAULT 'ACTIVE'"))
+    connection.execute(text('ALTER TABLE login_user ALTER COLUMN status SET NOT NULL'))
+    for table in sources:
+        connection.execute(text(f'ALTER TABLE {table} DROP COLUMN status'))

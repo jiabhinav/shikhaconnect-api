@@ -63,6 +63,11 @@ class LoginUser(Base):
         default=UserRole.ADMIN,
     )
 
+    status = Column(
+        SQLAlchemyEnum(UserStatus, name="account_status", native_enum=False),
+        nullable=False, default=UserStatus.ACTIVE, server_default="ACTIVE",
+    )
+
     address = relationship("StaffAddress", back_populates="login_user", uselist=False,
                            cascade="all, delete-orphan", lazy="joined")
     permissions = relationship("StaffPermission", back_populates="login_user",
@@ -114,9 +119,4 @@ class User(Base):
     state = association_proxy("login_user", "state")
     pin_code = association_proxy("login_user", "pin_code")
 
-    school_name = Column(String(255), nullable=True)
-    status = Column(
-        SQLAlchemyEnum(UserStatus, name="user_status"),
-        nullable=False,
-        default=UserStatus.ACTIVE,
-    )
+    status = association_proxy("login_user", "status", creator=lambda value: LoginUser(status=value))

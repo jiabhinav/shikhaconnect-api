@@ -7,8 +7,11 @@ from sqlalchemy.exc import IntegrityError
 
 from dependencies.db import get_db_session
 from dependencies.auth import get_current_user
+from models.staff import Staff
+from models.school import School
+from models.school_mapping import SchoolMapping
 from models.user import LoginUser, User, UserAddress, UserRole, UserStatus
-from schemas.user import UserCreate, UserRegisterResponse, UserResponse, UserStatusUpdate, UserUpdate
+from schemas.user import UserAssignedSchool, UserDetailResult, UserListResult, UserCreate, UserRegisterResponse, UserResponse, UserStatusUpdate, UserUpdate
 
 router = APIRouter(
     prefix="/users",
@@ -25,51 +28,43 @@ def _require_super_admin(current_user: User) -> None:
         )
 
 
-def _set_user_status(user_id: int, new_status: UserStatus, db: Session, current_user: User):
+def _set_login_user_status(login_user_id: int, new_status: UserStatus, db: Session, current_user: User):
     _require_super_admin(current_user)
+    account = db.get(LoginUser, login_user_id)
+    if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Login account not found")
 
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if account.id == current_user.login_user_id and new_status == UserStatus.INACTIVE:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="You cannot disable your own account")
 
-    if user.id == current_user.id and new_status == UserStatus.INACTIVE:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You cannot disable your own account",
-        )
-
-    user.status = new_status
+    account.status = new_status
     try:
         db.commit()
-        db.refresh(user)
+        db.refresh(account)
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=400, detail="Account data conflicts with an existing record")
     except Exception:
         db.rollback()
         raise
-
     return {
         "status": "success",
-        "message": f"User {'enabled' if new_status == UserStatus.ACTIVE else 'disabled'} successfully",
-        "data": {
-            "id": user.id,
-            "status": user.status.value,
-        },
+        "message": f"Login account {'enabled' if new_status == UserStatus.ACTIVE else 'disabled'} successfully",
+        "data": {"id": account.id, "status": account.status.value},
     }
 
 
-@router.patch("/{user_id}/status", status_code=status.HTTP_200_OK)
-def update_user_status(
-    user_id: int,
+@router.patch("/{login_user_id}/status", status_code=status.HTTP_200_OK)
+def update_login_user_status(
+    login_user_id: int,
     payload: UserStatusUpdate,
     db: Session = Depends(get_db_session),
     current_user: User = Depends(get_current_user),
 ):
+    """Enable/disable any login account by login_user.id, including staff accounts."""
     new_status = UserStatus.ACTIVE if payload.status else UserStatus.INACTIVE
-    return _set_user_status(user_id, new_status, db, current_user)
-
-
+    return _set_login_user_status(login_user_id, new_status, db, current_user)
 
 
 @router.post("/", response_model=UserRegisterResponse, status_code=status.HTTP_200_OK)
@@ -113,7 +108,6 @@ def create_user(user: UserCreate, db: Session = Depends(get_db_session)):
             state=user.state,
             pin_code=user.pin_code,
         ),
-        school_name=user.school_name,
         status=user.status,
     )
     try:
@@ -149,7 +143,6 @@ def create_user(user: UserCreate, db: Session = Depends(get_db_session)):
         "country": new_user.country,
         "state": new_user.state,
         "pin_code": new_user.pin_code,
-        "school_name": new_user.school_name,
         "role": new_user.role.value if hasattr(new_user.role, "value") else str(new_user.role),
         "status": new_user.status.value if hasattr(new_user.status, "value") else str(new_user.status),
     }
@@ -161,7 +154,21 @@ def create_user(user: UserCreate, db: Session = Depends(get_db_session)):
     }
 
 
-@router.get("/{user_id}", status_code=status.HTTP_200_OK)
+def schools_by_user(db, user_ids):
+    result = {user_id: [] for user_id in user_ids}
+    if not result:
+        return result
+    assignments = db.query(SchoolMapping.user_id, School, SchoolMapping.status).join(
+        School, School.id == SchoolMapping.school_id
+    ).filter(SchoolMapping.user_id.in_(user_ids)).order_by(School.id).all()
+    for user_id, school, mapping_status in assignments:
+        result[user_id].append(UserAssignedSchool.model_validate(school).model_copy(
+            update={"mapping_status": mapping_status}
+        ).model_dump(mode="json"))
+    return result
+
+
+@router.get("/{user_id}", response_model=UserDetailResult, status_code=status.HTTP_200_OK)
 def get_user(user_id: int, db: Session = Depends(get_db_session)):
     user = (
         db.query(User)
@@ -172,14 +179,16 @@ def get_user(user_id: int, db: Session = Depends(get_db_session)):
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
+    data = UserResponse.model_validate(user).model_dump(mode="json")
+    data["schools"] = schools_by_user(db, [user.id])[user.id]
     return {
         "status": "success",
         "message": "User fetched successfully",
-        "data": UserResponse.model_validate(user).model_dump(mode="json"),
+        "data": data,
     }
 
 
-@router.get("/", status_code=status.HTTP_200_OK)
+@router.get("/", response_model=UserListResult, status_code=status.HTTP_200_OK)
 def list_users(db: Session = Depends(get_db_session)):
     users = (
         db.query(User)
@@ -187,10 +196,15 @@ def list_users(db: Session = Depends(get_db_session)):
         .order_by(User.id)
         .all()
     )
+    assigned_schools = schools_by_user(db, [user.id for user in users])
     return {
         "status": "success",
         "message": "Users fetched successfully",
-        "data": [UserResponse.model_validate(user).model_dump(mode="json") for user in users],
+        "data": [
+            {**UserResponse.model_validate(user).model_dump(mode="json"),
+             "schools": assigned_schools[user.id]}
+            for user in users
+        ],
     }
 
 
@@ -276,11 +290,18 @@ def delete_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     role_value = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
+    if role_value == UserRole.SUPER_ADMIN.value and current_user.id == user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Super Admin cannot delete their own account")
     if role_value != UserRole.SUPER_ADMIN.value and (not isinstance(current_user, User) or current_user.id != user_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this user")
 
     try:
-        # Relationship cascades delete the address and permissions in this transaction.
+        # Remove profile references before the account cascade. Shared schools
+        # and module catalogs are not owned by this user.
+        db.query(SchoolMapping).filter(SchoolMapping.user_id == user.id).delete(synchronize_session="fetch")
+        db.query(Staff).filter(Staff.login_user_id == user.login_user_id).delete(synchronize_session="fetch")
+        # User -> LoginUser cascades also remove its address and permissions.
         db.delete(user)
         db.commit()
     except IntegrityError:

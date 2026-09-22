@@ -72,7 +72,6 @@ def _build_user_payload(user, *, include_address=True):
         "mother_name": user.mother_name,
         "description": getattr(user, "description", None),
         "gender": user.gender,
-        "school_name": getattr(user, "school_name", None),
         "role": user.role.value if hasattr(user.role, "value") else str(user.role),
         "status": user.status.value if hasattr(user.status, "value") else str(user.status),
     }

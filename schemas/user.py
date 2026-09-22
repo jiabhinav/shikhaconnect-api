@@ -2,6 +2,7 @@ from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 
 from models.user import UserRole, UserStatus
+from models.school_mapping import SchoolMappingStatus
 from schemas.school import SchoolAddress, SchoolDetails
 from schemas.session import SessionResponse
 
@@ -28,7 +29,6 @@ class UserCreate(BaseModel):
     country: Optional[str] = None
     state: Optional[str] = None
     pin_code: Optional[str] = None
-    school_name: Optional[str] = None
     role: UserRole = UserRole.ADMIN
     status: UserStatus = UserStatus.ACTIVE
 
@@ -55,7 +55,6 @@ class UserUpdate(BaseModel):
     country: Optional[str] = None
     state: Optional[str] = None
     pin_code: Optional[str] = None
-    school_name: Optional[str] = None
     role: Optional[UserRole] = None
     status: Optional[UserStatus] = None
 
@@ -86,12 +85,34 @@ class UserResponse(BaseModel):
     country: Optional[str] = None
     state: Optional[str] = None
     pin_code: Optional[str] = None
-    school_name: Optional[str] = None
     role: UserRole | str
     status: UserStatus
 
     class Config:
         from_attributes = True
+
+
+class UserAssignedSchool(SchoolDetails, SchoolAddress):
+    id: int
+    mapping_status: SchoolMappingStatus = SchoolMappingStatus.ACTIVE
+
+    model_config = {"from_attributes": True}
+
+
+class UserDetail(UserResponse):
+    schools: list[UserAssignedSchool] = Field(default_factory=list)
+
+
+class UserDetailResult(BaseModel):
+    status: str = "success"
+    message: str
+    data: UserDetail
+
+
+class UserListResult(BaseModel):
+    status: str = "success"
+    message: str
+    data: list[UserDetail]
 
 
 class UserLogin(BaseModel):
