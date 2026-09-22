@@ -4,6 +4,7 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 from schemas.student import FormSection
+from models.staff import StaffRole
 
 
 class StaffInfo(FormSection):
@@ -28,9 +29,13 @@ class StaffInfo(FormSection):
     mode_of_transport: str | None = Field(default=None, max_length=100)
     salary: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2)
     blood_group: str | None = Field(default=None, max_length=10)
-    role: str = Field(min_length=1, max_length=100)
+    role: StaffRole
     gender: str = Field(min_length=1, max_length=50)
     feedback: str | None = None
+
+
+class StaffInfoWrite(StaffInfo):
+    password: str | None = Field(default=None, min_length=1)
 
 
 class StaffAddressInfo(FormSection):
@@ -41,7 +46,7 @@ class StaffAddressInfo(FormSection):
     state: str = Field(min_length=1, max_length=255)
     pin_code: str = Field(min_length=1, max_length=20)
     id: int | None = None
-    staff_id: int | None = None
+    login_user_id: int | None = None
 
 
 class StaffPermissionWrite(BaseModel):
@@ -52,7 +57,7 @@ class StaffPermissionWrite(BaseModel):
 
 class StaffCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    staff_info: StaffInfo
+    staff_info: StaffInfoWrite
     address: StaffAddressInfo
     permissions: list[StaffPermissionWrite] = Field(default_factory=list)
 
@@ -66,17 +71,18 @@ class StaffCreate(BaseModel):
 
 class StaffPermissionResponse(StaffPermissionWrite):
     id: int
-    staff_id: int
+    login_user_id: int
     name: str | None = None
 
 
 class StaffAddressResponse(StaffAddressInfo):
     id: int
-    staff_id: int
+    login_user_id: int
 
 
 class StaffResponse(BaseModel):
     id: int
+    login_user_id: int
     school_id: int
     staff_info: StaffInfo
     address: StaffAddressResponse
@@ -87,6 +93,7 @@ class StaffResponse(BaseModel):
     def from_staff(cls, value):
         if not isinstance(value, dict):
             return {"id": value.id, "school_id": value.school_id,
+                    "login_user_id": value.login_user_id,
                     "staff_info": StaffInfo.model_validate(value),
                     "address": value.address, "permissions": value.permissions}
         return value

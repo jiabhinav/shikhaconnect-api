@@ -68,7 +68,7 @@ class UserResponse(BaseModel):
     id: int
     first_name: str
     middle_name: Optional[str] = None
-    last_name: str
+    last_name: Optional[str] = None
     email: EmailStr
     mobile: str
     date_of_birth: Optional[str] = None
@@ -87,7 +87,7 @@ class UserResponse(BaseModel):
     state: Optional[str] = None
     pin_code: Optional[str] = None
     school_name: Optional[str] = None
-    role: UserRole
+    role: UserRole | str
     status: UserStatus
 
     class Config:
@@ -128,11 +128,21 @@ class LoginSchoolPermission(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class LoginStaffPermission(BaseModel):
+    id: int
+    login_user_id: int
+    staff_module_id: int
+    name: Optional[str] = None
+    is_enabled: bool
+
+    model_config = {"from_attributes": True}
+
+
 class LoginSchool(SchoolDetails, SchoolAddress):
     id: int
     school_logo: Optional[str] = None
     sessions: list[SessionResponse] = Field(default_factory=list)
-    permissions: list[LoginSchoolPermission] = Field(default_factory=list)
+    permissions: list[LoginSchoolPermission | LoginStaffPermission] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 

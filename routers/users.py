@@ -1,12 +1,14 @@
 from utils.passwords import hash_password
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 
 from dependencies.db import get_db_session
 from dependencies.auth import get_current_user
-from models.user import User, UserRole, UserStatus
-from schemas.user import UserCreate, UserRegisterResponse, UserStatusUpdate, UserUpdate
+from models.user import LoginUser, User, UserAddress, UserRole, UserStatus
+from schemas.user import UserCreate, UserRegisterResponse, UserResponse, UserStatusUpdate, UserUpdate
 
 router = APIRouter(
     prefix="/users",
@@ -40,6 +42,9 @@ def _set_user_status(user_id: int, new_status: UserStatus, db: Session, current_
     try:
         db.commit()
         db.refresh(user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Account data conflicts with an existing record")
     except Exception:
         db.rollback()
         raise
@@ -65,10 +70,12 @@ def update_user_status(
     return _set_user_status(user_id, new_status, db, current_user)
 
 
+
+
 @router.post("/", response_model=UserRegisterResponse, status_code=status.HTTP_200_OK)
 def create_user(user: UserCreate, db: Session = Depends(get_db_session)):
-    existing_email = db.query(User).filter(User.email == user.email).first()
-    existing_mobile = db.query(User).filter(User.mobile == user.mobile).first()
+    existing_email = db.query(LoginUser).filter(LoginUser.email == user.email).first()
+    existing_mobile = db.query(LoginUser).filter(LoginUser.mobile == user.mobile).first()
 
     if existing_email or existing_mobile:
         return JSONResponse(
@@ -80,12 +87,15 @@ def create_user(user: UserCreate, db: Session = Depends(get_db_session)):
         )
 
     new_user = User(
-        first_name=user.first_name,
-        middle_name=user.middle_name,
-        last_name=user.last_name,
-        email=user.email,
-        mobile=user.mobile,
-        password=hash_password(user.password or user.mobile),
+        login_user=LoginUser(
+            first_name=user.first_name,
+            middle_name=user.middle_name,
+            last_name=user.last_name,
+            email=user.email,
+            mobile=user.mobile,
+            password=hash_password(user.password or user.mobile),
+            role=user.role,
+        ),
         date_of_birth=user.date_of_birth,
         designation=user.designation,
         aadhaar_number=user.aadhaar_number,
@@ -95,20 +105,24 @@ def create_user(user: UserCreate, db: Session = Depends(get_db_session)):
         mother_name=user.mother_name,
         description=user.description,
         gender=user.gender,
-        line_1=user.line_1,
-        line_2=user.line_2,
-        city=user.city,
-        country=user.country,
-        state=user.state,
-        pin_code=user.pin_code,
+        address=UserAddress(
+            line_1=user.line_1,
+            line_2=user.line_2,
+            city=user.city,
+            country=user.country,
+            state=user.state,
+            pin_code=user.pin_code,
+        ),
         school_name=user.school_name,
-        role=user.role,
         status=user.status,
     )
     try:
         db.add(new_user)
         db.commit()
         db.refresh(new_user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Account data conflicts with an existing record")
     except Exception:
         db.rollback()
         raise
@@ -149,80 +163,35 @@ def create_user(user: UserCreate, db: Session = Depends(get_db_session)):
 
 @router.get("/{user_id}", status_code=status.HTTP_200_OK)
 def get_user(user_id: int, db: Session = Depends(get_db_session)):
-    user = db.query(User).filter(User.id == user_id).first()
+    user = (
+        db.query(User)
+        .options(joinedload(User.login_user).joinedload(LoginUser.address))
+        .filter(User.id == user_id)
+        .first()
+    )
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-    response_data = {
-        "id": user.id,
-        "first_name": user.first_name,
-        "middle_name": user.middle_name,
-        "last_name": user.last_name,
-        "email": str(user.email),
-        "mobile": user.mobile,
-        "date_of_birth": user.date_of_birth,
-        "designation": user.designation,
-        "aadhaar_number": user.aadhaar_number,
-        "nationality": user.nationality,
-        "spouse_name": user.spouse_name,
-        "father_name": user.father_name,
-        "mother_name": user.mother_name,
-        "description": user.description,
-        "gender": user.gender,
-        "line_1": user.line_1,
-        "line_2": user.line_2,
-        "city": user.city,
-        "country": user.country,
-        "state": user.state,
-        "pin_code": user.pin_code,
-        "school_name": user.school_name,
-        "role": user.role.value if hasattr(user.role, "value") else str(user.role),
-        "status": user.status.value if hasattr(user.status, "value") else str(user.status),
-    }
 
     return {
         "status": "success",
         "message": "User fetched successfully",
-        "data": response_data,
+        "data": UserResponse.model_validate(user).model_dump(mode="json"),
     }
 
 
 @router.get("/", status_code=status.HTTP_200_OK)
 def list_users(db: Session = Depends(get_db_session)):
-    users = db.query(User).all()
-    data = []
-    for user in users:
-        data.append(
-            {
-                "id": user.id,
-                "first_name": user.first_name,
-                "middle_name": user.middle_name,
-                "last_name": user.last_name,
-                "email": str(user.email),
-                "mobile": user.mobile,
-                "date_of_birth": user.date_of_birth,
-                "designation": user.designation,
-                "aadhaar_number": user.aadhaar_number,
-                "nationality": user.nationality,
-                "spouse_name": user.spouse_name,
-                "father_name": user.father_name,
-                "mother_name": user.mother_name,
-                "description": user.description,
-                "gender": user.gender,
-                "line_1": user.line_1,
-                "line_2": user.line_2,
-                "city": user.city,
-                "country": user.country,
-                "state": user.state,
-                "pin_code": user.pin_code,
-                "school_name": user.school_name,
-                "role": user.role.value if hasattr(user.role, "value") else str(user.role),
-                "status": user.status.value if hasattr(user.status, "value") else str(user.status),
-            }
-        )
-
-    return {"status": "success", "message": "Users fetched successfully", "data": data}
-
+    users = (
+        db.query(User)
+        .options(joinedload(User.login_user).joinedload(LoginUser.address))
+        .order_by(User.id)
+        .all()
+    )
+    return {
+        "status": "success",
+        "message": "Users fetched successfully",
+        "data": [UserResponse.model_validate(user).model_dump(mode="json") for user in users],
+    }
 
 
 @router.put("/{user_id}", response_model=UserRegisterResponse, status_code=status.HTTP_200_OK)
@@ -232,15 +201,15 @@ def update_user(
     db: Session = Depends(get_db_session),
     current_user: User = Depends(get_current_user),
 ):
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).options(joinedload(User.login_user).joinedload(LoginUser.address)).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     role_value = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
-    if role_value != UserRole.SUPER_ADMIN.value and current_user.id != user_id:
+    if role_value != UserRole.SUPER_ADMIN.value and (not isinstance(current_user, User) or current_user.id != user_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to update this user")
 
-    update_data = user_update.dict(exclude_unset=True)
+    update_data = user_update.model_dump(exclude_unset=True)
     if "password" in update_data:
         if update_data["password"] is None:
             update_data.pop("password")
@@ -255,70 +224,68 @@ def update_user(
 
     # Unique field checks
     if "email" in update_data:
-        existing = db.query(User).filter(User.email == update_data["email"], User.id != user_id).first()
+        existing = db.query(LoginUser).filter(LoginUser.email == update_data["email"], LoginUser.id != user.login_user_id).first()
         if existing:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already exists")
     if "mobile" in update_data:
-        existing = db.query(User).filter(User.mobile == update_data["mobile"], User.id != user_id).first()
+        existing = db.query(LoginUser).filter(LoginUser.mobile == update_data["mobile"], LoginUser.id != user.login_user_id).first()
         if existing:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Mobile already exists")
 
+    login_fields = {"first_name", "middle_name", "last_name", "email", "mobile", "password", "role"}
+    required_fields = login_fields - {"middle_name"}
+    if any(key in required_fields and value is None for key, value in update_data.items()):
+        raise HTTPException(status_code=400, detail="Required account fields cannot be null")
+
+    address_fields = {"line_1", "line_2", "city", "country", "state", "pin_code"}
+    if address_fields.intersection(update_data) and user.address is None:
+        user.address = UserAddress()
     for key, value in update_data.items():
-        setattr(user, key, value)
+        if key in login_fields:
+            target = user.login_user
+        elif key in address_fields:
+            target = user.address
+        else:
+            target = user
+        setattr(target, key, value)
 
     try:
         db.add(user)
         db.commit()
         db.refresh(user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Account data conflicts with an existing record")
     except Exception:
         db.rollback()
         raise
 
-    response_data = {
-        "id": user.id,
-        "first_name": user.first_name,
-        "middle_name": user.middle_name,
-        "last_name": user.last_name,
-        "email": str(user.email),
-        "mobile": user.mobile,
-        "date_of_birth": user.date_of_birth,
-        "designation": user.designation,
-        "aadhaar_number": user.aadhaar_number,
-        "nationality": user.nationality,
-        "spouse_name": user.spouse_name,
-        "father_name": user.father_name,
-        "mother_name": user.mother_name,
-        "description": user.description,
-        "gender": user.gender,
-        "line_1": user.line_1,
-        "line_2": user.line_2,
-        "city": user.city,
-        "country": user.country,
-        "state": user.state,
-        "pin_code": user.pin_code,
-        "school_name": user.school_name,
-        "role": user.role.value if hasattr(user.role, "value") else str(user.role),
-        "status": user.status.value if hasattr(user.status, "value") else str(user.status),
+    return {
+        "status": "success",
+        "message": "User updated successfully",
+        "data": UserResponse.model_validate(user).model_dump(mode="json"),
     }
-
-    return {"status": "success", "message": "User updated successfully", "data": response_data}
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_200_OK)
 def delete_user(
     user_id: int, db: Session = Depends(get_db_session), current_user: User = Depends(get_current_user)
 ):
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).options(joinedload(User.login_user).joinedload(LoginUser.address)).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     role_value = current_user.role.value if hasattr(current_user.role, "value") else str(current_user.role)
-    if role_value != UserRole.SUPER_ADMIN.value and current_user.id != user_id:
+    if role_value != UserRole.SUPER_ADMIN.value and (not isinstance(current_user, User) or current_user.id != user_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to delete this user")
 
     try:
+        # Relationship cascades delete the address and permissions in this transaction.
         db.delete(user)
         db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="User cannot be deleted while other records reference this account")
     except Exception:
         db.rollback()
         raise

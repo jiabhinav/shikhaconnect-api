@@ -588,5 +588,36 @@ Optional personal fields are `middle_name`, `last_name`, `spouse_name`, `religio
 `salary`, `blood_group`, and `feedback`. Address `line_2` is optional. Dates use
 `YYYY-MM-DD`; salary is a nonnegative decimal with at most two fractional digits.
 Responses contain `status`, `message`, and `data`, including staff/school IDs,
-`staff_info`, `address`, and `permissions`. This stores staff profiles and selected
-permissions; it does not create login accounts or change authorization rules.
+`staff_info`, `address`, and `permissions`.
+
+Staff creation writes all records in one transaction:
+
+- `login_user`: first_name, middle_name, last_name, email, mobile, hashed password, and role.
+- `staff`: school_id, login_user_id, status, and all remaining staff_info fields, including dates, designation, family details, qualification, salary, and feedback.
+- `staff_address`: address fields linked by login_user_id.
+- `staff_permission`: module permissions linked by login_user_id.
+
+The request field remains `mobile_number`; it maps to `login_user.mobile`.
+Optional `staff_info.password` defaults to the mobile number on creation and is
+always hashed. Omitting it during update preserves the current password.
+Email and mobile must be unique across login accounts. Staff login uses staff.school_id directly; staff creation does not insert into
+users or school_mapping. Passwords are excluded from responses.
+
+### Existing database migration
+
+Initialization upgrades PostgreSQL databases in one transaction. Account fields
+stored in users are moved to login_user without changing user IDs or password
+hashes. Existing login_user links and account values are preserved. Conflicting copies
+in users are retained in nullable legacy_account_* columns for review. Duplicate
+identities for unlinked accounts still abort the migration without discarding records.
+
+Staff-specific profile fields remain in staff; earlier profile copies in users
+are copied back when staff columns are missing. New staff API writes put those
+fields only in staff. Addresses and permissions remain in their respective tables,
+linked through login_user_id. Staff links directly to login_user. Legacy staff.user_id is removed after validating and migrating its account link.
+Existing users rows are retained; staff creation does not write to users.
+
+User address fields are stored in staff_address. Legacy address columns and
+staff_addrers rows are migrated automatically. General user API responses keep
+flat address fields; staff responses keep their three sections. Address and
+permission responses expose login_user_id as their owner.

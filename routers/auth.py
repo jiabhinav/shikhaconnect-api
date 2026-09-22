@@ -1,4 +1,3 @@
-import hashlib
 
 from utils.passwords import hash_password, needs_rehash, verify_password
 
@@ -7,14 +6,15 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, selectinload
 
 from dependencies.db import get_db_session
-from database.module_names import get_module_names
-from dependencies.auth import get_current_user
+from database.module_names import get_module_names, get_staff_module_names
+from dependencies.auth import get_current_user, account_token
 from models.school import School
 from models.school_assets import SchoolAssets
 from models.school_mapping import SchoolMapping, SchoolMappingStatus
 from models.session import Session as SchoolSession
-from models.user import User, UserRole, UserStatus
-from schemas.user import LoginSchool, UserCreate, UserLogin, UserLoginResponse, UserRegisterResponse
+from models.user import LoginUser, User, UserRole, UserStatus
+from models.staff import Staff
+from schemas.user import LoginStaffPermission, LoginSchool, UserCreate, UserLogin, UserLoginResponse, UserRegisterResponse
 from schemas.session import SessionResponse
 from schemas.user import PasswordResetRequest, PasswordResetResponse
 
@@ -37,7 +37,9 @@ def reset_password(
             detail="Only Super Admin can reset passwords",
         )
 
-    user = db.query(User).filter(User.mobile == payload.mobile).first()
+    user = db.query(Staff).filter(Staff.mobile == payload.mobile).first()
+    if user is None:
+        user = db.query(User).filter(User.mobile == payload.mobile).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
@@ -53,66 +55,78 @@ def reset_password(
     return PasswordResetResponse()
 
 
-def _build_user_payload(user: User):
-    return {
+def _build_user_payload(user, *, include_address=True):
+    payload = {
         "id": user.id,
         "first_name": user.first_name,
         "middle_name": user.middle_name,
         "last_name": user.last_name,
         "email": str(user.email),
         "mobile": user.mobile,
-        "date_of_birth": user.date_of_birth,
+        "date_of_birth": user.date_of_birth.isoformat() if hasattr(user.date_of_birth, "isoformat") else user.date_of_birth,
         "designation": user.designation,
         "aadhaar_number": user.aadhaar_number,
         "nationality": user.nationality,
         "spouse_name": user.spouse_name,
         "father_name": user.father_name,
         "mother_name": user.mother_name,
-        "description": user.description,
+        "description": getattr(user, "description", None),
         "gender": user.gender,
-        "line_1": user.line_1,
-        "line_2": user.line_2,
-        "city": user.city,
-        "country": user.country,
-        "state": user.state,
-        "pin_code": user.pin_code,
-        "school_name": user.school_name,
+        "school_name": getattr(user, "school_name", None),
         "role": user.role.value if hasattr(user.role, "value") else str(user.role),
         "status": user.status.value if hasattr(user.status, "value") else str(user.status),
     }
+    if include_address:
+        for field in ("line_1", "line_2", "city", "country", "state", "pin_code"):
+            payload[field] = getattr(user.address, field, None)
+    return payload
 
 
 @router.post("/login", response_model=UserLoginResponse, status_code=status.HTTP_200_OK)
 def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
-    user = db.query(User).filter(User.mobile == credentials.mobile).first()
-    if not user or not verify_password(credentials.password, user.password):
+    account = db.query(LoginUser).filter(LoginUser.mobile == credentials.mobile).first()
+    if account is None or not verify_password(credentials.password, account.password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid mobile number or password",
         )
 
-    if user.status != UserStatus.ACTIVE:
+    if account.role in (UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.SUB_ADMIN):
+        user = db.query(User).filter(User.login_user_id == account.id).first()
+    else:
+        # Staff profiles remain independent of the users table.
+        user = db.query(Staff).filter(Staff.login_user_id == account.id).first()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Login account has no linked profile")
+
+    if user.status not in (UserStatus.ACTIVE, "Active"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User not active yet, please contact the administrator",
         )
 
-    payload = _build_user_payload(user)
+    payload = _build_user_payload(user, include_address=account.role != UserRole.SUPER_ADMIN)
     if user.role != UserRole.SUPER_ADMIN:
-        assignments = db.query(SchoolMapping, School, SchoolAssets.school_logo).join(
-            School, School.id == SchoolMapping.school_id
-        ).outerjoin(
-            SchoolAssets, SchoolAssets.school_id == School.id
-        ).options(selectinload(School.permissions)).filter(
-            SchoolMapping.user_id == user.id
-        ).order_by(School.id).all()
-        schools = [(school, logo) for mapping, school, logo in assignments
-                   if mapping.status == SchoolMappingStatus.ACTIVE]
-        if not assignments:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Still no school assigned for this user",
-            )
+        if isinstance(user, Staff):
+            schools = db.query(School, SchoolAssets.school_logo).outerjoin(
+                SchoolAssets, SchoolAssets.school_id == School.id
+            ).filter(School.id == user.school_id).all()
+        else:
+            assignments = db.query(SchoolMapping, School, SchoolAssets.school_logo).join(
+                School, School.id == SchoolMapping.school_id
+            ).outerjoin(
+                SchoolAssets, SchoolAssets.school_id == School.id
+            ).options(selectinload(School.permissions)).filter(
+                SchoolMapping.user_id == user.id
+            ).order_by(School.id).all()
+            schools = [(school, logo) for mapping, school, logo in assignments
+                       if mapping.status == SchoolMappingStatus.ACTIVE]
+            if not assignments:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Still no school assigned for this user",
+                )
         if not schools:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -125,22 +139,38 @@ def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
         for session in sessions:
             sessions_by_school[session.school_id].append(SessionResponse.model_validate(session))
         payload["schools"] = []
-        module_names = get_module_names(db, list({
-            permission.module_id
-            for school, logo in schools
-            for permission in school.permissions
-        }))
+        staff_permissions = None
+        if account.role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
+            module_names = get_module_names(db, list({
+                permission.module_id
+                for school, logo in schools
+                for permission in school.permissions
+            }))
+        else:
+            module_names = get_staff_module_names(db, [p.staff_module_id for p in account.permissions])
+            staff_permissions = [LoginStaffPermission(
+                id=p.id, login_user_id=p.login_user_id, staff_module_id=p.staff_module_id,
+                name=module_names.get(p.staff_module_id), is_enabled=p.is_enabled,
+            ) for p in sorted(account.permissions, key=lambda permission: permission.id)]
         for school, logo in schools:
-            school_data = LoginSchool.model_validate(school)
+            if staff_permissions is not None:
+                # Do not read school-wide permissions for a staff account.
+                school_data = LoginSchool.model_validate({
+                    **{field: getattr(school, field) for field in LoginSchool.model_fields
+                       if field not in {"permissions", "sessions", "school_logo"}},
+                    "permissions": staff_permissions,
+                })
+            else:
+                school_data = LoginSchool.model_validate(school)
+                school_data.permissions.sort(key=lambda permission: permission.id)
+                for permission in school_data.permissions:
+                    permission.name = module_names.get(permission.module_id)
             school_data.school_logo = logo
             school_data.sessions = sessions_by_school[school.id]
-            school_data.permissions.sort(key=lambda permission: permission.id)
-            for permission in school_data.permissions:
-                permission.name = module_names.get(permission.module_id)
             payload["schools"].append(school_data.model_dump(mode="json"))
 
-    if needs_rehash(user.password):
-        user.password = hash_password(credentials.password)
+    if needs_rehash(account.password):
+        account.password = hash_password(credentials.password)
         try:
             db.commit()
             db.refresh(user)
@@ -148,9 +178,7 @@ def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
             db.rollback()
             raise
 
-    token = hashlib.sha256(
-        f"{user.id}:{user.mobile}:{user.email}:{user.password}".encode("utf-8")
-    ).hexdigest()
+    token = account_token(user)
 
     return JSONResponse(
         content={
@@ -166,82 +194,7 @@ def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
 
 @router.post("/register", response_model=UserRegisterResponse, status_code=status.HTTP_200_OK)
 def register_auth(user: UserCreate, db: Session = Depends(get_db_session)):
-    existing_email = db.query(User).filter(User.email == user.email).first()
-    existing_mobile = db.query(User).filter(User.mobile == user.mobile).first()
+    # Use the same transaction and shared identity checks as /users/.
+    from routers.users import create_user
 
-    if existing_email or existing_mobile:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={
-                "status": "failed",
-                "message": "Email or mobile already exists",
-            },
-        )
-
-    new_user = User(
-        first_name=user.first_name,
-        middle_name=user.middle_name,
-        last_name=user.last_name,
-        email=user.email,
-        mobile=user.mobile,
-        password=hash_password(user.password or user.mobile),
-        date_of_birth=user.date_of_birth,
-        designation=user.designation,
-        aadhaar_number=user.aadhaar_number,
-        nationality=user.nationality,
-        spouse_name=user.spouse_name,
-        father_name=user.father_name,
-        mother_name=user.mother_name,
-        description=user.description,
-        gender=user.gender,
-        line_1=user.line_1,
-        line_2=user.line_2,
-        city=user.city,
-        country=user.country,
-        state=user.state,
-        pin_code=user.pin_code,
-        school_name=user.school_name,
-        role=user.role,
-        status=user.status,
-    )
-
-    try:
-        db.add(new_user)
-        db.commit()
-        db.refresh(new_user)
-    except Exception:
-        db.rollback()
-        raise
-
-    response_data = {
-        "id": new_user.id,
-        "first_name": new_user.first_name,
-        "middle_name": new_user.middle_name,
-        "last_name": new_user.last_name,
-        "email": str(new_user.email),
-        "mobile": new_user.mobile,
-        "date_of_birth": new_user.date_of_birth,
-        "designation": new_user.designation,
-        "aadhaar_number": new_user.aadhaar_number,
-        "nationality": new_user.nationality,
-        "spouse_name": new_user.spouse_name,
-        "father_name": new_user.father_name,
-        "mother_name": new_user.mother_name,
-        "description": new_user.description,
-        "gender": new_user.gender,
-        "line_1": new_user.line_1,
-        "line_2": new_user.line_2,
-        "city": new_user.city,
-        "country": new_user.country,
-        "state": new_user.state,
-        "pin_code": new_user.pin_code,
-        "school_name": new_user.school_name,
-        "role": new_user.role.value if hasattr(new_user.role, "value") else str(new_user.role),
-        "status": new_user.status.value if hasattr(new_user.status, "value") else str(new_user.status),
-    }
-
-    return {
-        "status": "success",
-        "message": "User registered successfully",
-        "data": response_data,
-    }
+    return create_user(user, db)

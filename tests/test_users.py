@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from database.database import Base
+from database.table_init import register_models
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
 from models.school import School
@@ -20,6 +21,7 @@ class UserDeleteTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
         event.listen(self.engine, "connect", lambda conn, _: conn.execute("PRAGMA foreign_keys=ON"))
+        register_models()
         Base.metadata.create_all(self.engine)
         self.db = Session(self.engine)
 

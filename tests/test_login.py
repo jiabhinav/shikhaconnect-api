@@ -89,6 +89,11 @@ class LoginTests(unittest.TestCase):
         self.assign(2, SchoolMappingStatus.DEACTIVE)
         self.assertEqual([school["id"] for school in self.login().json()["data"]["schools"]], [1])
 
+    def test_sub_admin_permissions_match_each_assigned_school(self):
+        self.db.get(User, 2).role = UserRole.SUB_ADMIN
+        self.db.commit()
+        self.test_permissions_match_each_assigned_school()
+
     def test_permissions_match_each_assigned_school(self):
         self.second_school()
         self.assign(1)
@@ -258,3 +263,48 @@ class LoginTests(unittest.TestCase):
         self.assertEqual(self.client.post("/auth/reset-password", json=body,
                          headers={"Authorization": f"Bearer {user_token}"}).status_code, 401)
         self.assertEqual(self.login(password="2222222222").status_code, 200)
+
+    def test_admin_roles_use_user_profile_and_account_address(self):
+        from models.staff import Staff, StaffAddress
+        user = self.db.get(User, 2)
+        user.designation = 'User profile'
+        user.address = StaffAddress(city='Delhi', line_1='Account address')
+        # A legacy staff row sharing this account must not replace the user profile.
+        self.db.add(Staff(id=50, school_id=1, login_user=user.login_user,
+                          designation='Staff profile'))
+        self.assign()
+        for role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
+            user.role = role
+            self.db.commit()
+            response = self.login()
+            self.assertEqual(response.status_code, 200, response.text)
+            data = response.json()['data']
+            self.assertEqual(data['id'], user.id)
+            self.assertEqual(data['designation'], 'User profile')
+            self.assertEqual(data['email'], user.login_user.email)
+            self.assertEqual(data['city'], 'Delhi')
+            self.assertEqual([school['id'] for school in data['schools']], [1])
+            self.assertNotIn('password', data)
+
+    def test_super_admin_omits_address_even_when_present(self):
+        from models.staff import StaffAddress
+        user = self.db.get(User, 1)
+        user.address = StaffAddress(city='Private address')
+        self.db.commit()
+        response = self.login(mobile='1111111111')
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()['data']
+        for field in ('line_1', 'line_2', 'city', 'country', 'state', 'pin_code', 'schools', 'password'):
+            self.assertNotIn(field, data)
+        self.assertEqual(data['email'], user.login_user.email)
+
+    def test_account_credentials_checked_before_missing_profile(self):
+        from models.user import LoginUser
+        from utils.passwords import hash_password
+        self.db.add(LoginUser(first_name='Unlinked', email='unlinked@example.com',
+                              mobile='999', password=hash_password('secret'), role=UserRole.ADMIN))
+        self.db.commit()
+        self.assertEqual(self.login(mobile='999', password='wrong').status_code, 401)
+        response = self.login(mobile='999')
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()['detail'], 'Login account has no linked profile')

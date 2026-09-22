@@ -8,11 +8,35 @@ from dependencies.db import get_db_session
 from models.caste_category import CasteCategory
 from models.school import School
 from models.staff import Staff, StaffAddress, StaffPermission
-from models.user import User, UserRole
+from models.user import LoginUser, User, UserRole
+from utils.passwords import hash_password
 from schemas.staff import StaffCreate, StaffListResult, StaffResult
 from database.module_names import get_module_names
 
 router = APIRouter()
+
+
+def staff_constraint_error(exc):
+    """Expose constraint identifiers, never SQL parameters or account data."""
+    original = exc.orig
+    code = getattr(original, "pgcode", None)
+    diagnostic = getattr(original, "diag", None)
+    table = getattr(diagnostic, "table_name", None)
+    column = getattr(diagnostic, "column_name", None)
+    constraint = getattr(diagnostic, "constraint_name", None)
+    messages = {
+        "23505": "A record already exists for a unique field",
+        "23503": "A referenced record does not exist or is still in use",
+        "23502": "A required database column has no value; check the database migration",
+        "23514": "A value violates a database check constraint",
+    }
+    if code not in messages:
+        return HTTPException(409, "Staff references conflict with database constraints")
+    detail = {"message": messages[code], "code": code}
+    for key, value in (("table", table), ("column", column), ("constraint", constraint)):
+        if value:
+            detail[key] = value
+    return HTTPException(409, detail)
 
 
 def staff_school(school_id: int, db: Session = Depends(get_db_session),
@@ -52,23 +76,51 @@ def validate_references(db, school_id, payload):
         raise HTTPException(422, "Permissions must reference existing active staff modules")
 
 
+def apply_staff_profile(db, payload, item=None):
+    values = payload.staff_info.model_dump()
+    password = values.pop("password", None)
+    values["mobile"] = values.pop("mobile_number")
+    account = item.login_user if item is not None else None
+    for field in ("email", "mobile"):
+        query = db.query(LoginUser).filter(getattr(LoginUser, field) == values[field])
+        if account is not None:
+            query = query.filter(LoginUser.id != account.id)
+        if query.first():
+            raise HTTPException(409, f"{field.capitalize()} already exists")
+    account_values = {field: values.pop(field) for field in
+                      ("first_name", "middle_name", "last_name", "email", "mobile", "role")}
+    if item is None:
+        account = LoginUser(**account_values, password=hash_password(password or account_values["mobile"]))
+        item = Staff(login_user=account)
+    else:
+        for field, value in account_values.items():
+            setattr(account, field, value)
+        if password is not None:
+            account.password = hash_password(password)
+    for field, value in values.items():
+        setattr(item, field, value)
+    return item
+
+
 @router.post("/school/{school_id}/staff", response_model=StaffResult, status_code=201)
 def create_staff(school_id: int, payload: StaffCreate, db: Session = Depends(staff_school)):
     validate_references(db, school_id, payload)
-    item = Staff(school_id=school_id, **payload.staff_info.model_dump())
-    # Ignore any incoming address `id`/`staff_id` and let the relationship assign staff_id
+    item = apply_staff_profile(db, payload)
+    item.school_id = school_id
+    # Ignore any incoming address `id`/`staff_id` and let the relationship assign login_user_id
     addr_vals = payload.address.model_dump()
     addr_vals.pop("id", None)
-    addr_vals.pop("staff_id", None)
+    addr_vals.pop("login_user_id", None)
     item.address = StaffAddress(**addr_vals)
     item.permissions = [StaffPermission(**permission.model_dump()) for permission in payload.permissions]
     try:
         db.add(item)
+        db.flush()
         db.commit()
         db.refresh(item)
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(409, "Staff references conflict with database constraints") from exc
+        raise staff_constraint_error(exc) from exc
     except Exception:
         db.rollback()
         raise
@@ -83,7 +135,7 @@ def create_staff(school_id: int, payload: StaffCreate, db: Session = Depends(sta
 @router.get("/school/{school_id}/staff", response_model=StaffListResult)
 def list_staff(school_id: int, offset: int = Query(0, ge=0),
                limit: int = Query(50, ge=1, le=200), db: Session = Depends(staff_school)):
-    items = db.query(Staff).options(selectinload(Staff.address), selectinload(Staff.permissions)).filter_by(
+    items = db.query(Staff).options(selectinload(Staff.login_user).selectinload(LoginUser.address), selectinload(Staff.login_user).selectinload(LoginUser.permissions)).filter_by(
         school_id=school_id
     ).order_by(Staff.id).offset(offset).limit(limit).all()
     # Populate permission names
@@ -109,7 +161,7 @@ def get_staff(school_id: int, staff_id: int, db: Session = Depends(staff_school)
 
 @router.put("/school/{school_id}/staff/{staff_id}", response_model=StaffResult)
 def update_staff(school_id: int, staff_id: int, payload: StaffCreate, db: Session = Depends(staff_school)):
-    item = db.query(Staff).options(selectinload(Staff.address), selectinload(Staff.permissions)).filter_by(
+    item = db.query(Staff).options(selectinload(Staff.login_user).selectinload(LoginUser.address), selectinload(Staff.login_user).selectinload(LoginUser.permissions)).filter_by(
         id=staff_id, school_id=school_id
     ).first()
     if item is None:
@@ -117,39 +169,36 @@ def update_staff(school_id: int, staff_id: int, payload: StaffCreate, db: Sessio
 
     validate_references(db, school_id, payload)
 
-    # Update staff fields
-    for field, value in payload.staff_info.model_dump().items():
-        setattr(item, field, value)
+    apply_staff_profile(db, payload, item)
 
     # Update or create address. Ignore incoming `id`/`staff_id` to avoid PK inconsistencies.
     address_values = payload.address.model_dump()
     if item.address is None:
         av = address_values.copy()
         av.pop("id", None)
-        av.pop("staff_id", None)
+        av.pop("login_user_id", None)
         item.address = StaffAddress(**av)
         # ensure FK points to this staff
-        item.address.staff_id = item.id
+        item.address.login_user = item.login_user
     else:
         for k, v in address_values.items():
-            if k in ("id", "staff_id"):
+            if k in ("id", "login_user_id"):
                 continue
             setattr(item.address, k, v)
         # ensure FK remains correct
-        item.address.staff_id = item.id
+        item.address.login_user = item.login_user
 
     # Replace permissions atomically
-    item.permissions.clear()
-    db.flush()
-    item.permissions = [StaffPermission(**permission.model_dump()) for permission in payload.permissions]
-
     try:
+        item.permissions.clear()
+        db.flush()
+        item.permissions = [StaffPermission(**permission.model_dump()) for permission in payload.permissions]
         db.add(item)
         db.commit()
         db.refresh(item)
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(409, "Staff references conflict with database constraints") from exc
+        raise staff_constraint_error(exc) from exc
     except Exception:
         db.rollback()
         raise
@@ -170,7 +219,12 @@ def delete_staff(school_id: int, staff_id: int, db: Session = Depends(staff_scho
         raise HTTPException(404, "Staff not found")
 
     try:
+        account = item.login_user
         db.delete(item)
+        db.flush()
+        # Old migrations may have left a user profile sharing this account.
+        if not db.query(User.id).filter_by(login_user_id=account.id).first():
+            db.delete(account)
         db.commit()
     except IntegrityError as exc:
         db.rollback()

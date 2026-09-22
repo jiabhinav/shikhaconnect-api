@@ -9,6 +9,7 @@ import test_sessions
 from database.table_init import ensure_all_tables
 from models.caste_category import CasteCategory
 from models.staff import Staff, StaffAddress, StaffPermission
+from models.school_mapping import SchoolMapping
 from models.user import UserRole
 
 
@@ -46,9 +47,9 @@ class StaffTests(unittest.TestCase):
         self.assertEqual(item['school_id'], 1)
         self.assertEqual(item['staff_info']['salary'], '25000.50')
         self.assertIsNone(item['staff_info']['last_name'])
-        self.assertEqual(item['address']['staff_id'], item['id'])
+        self.assertEqual(item['address']['login_user_id'], self.db.get(Staff, item['id']).login_user_id)
         self.assertEqual([p['is_enabled'] for p in item['permissions']], [True, False])
-        self.assertTrue(all(p['staff_id'] == item['id'] for p in item['permissions']))
+        self.assertTrue(all(p['login_user_id'] == self.db.get(Staff, item['id']).login_user_id for p in item['permissions']))
         for model, count in ((Staff, 1), (StaffAddress, 1), (StaffPermission, 2)):
             self.assertEqual(self.db.query(model).count(), count)
         self.assertEqual(self.client.get(f"{self.url}/{item['id']}").json()['data'], item)
@@ -92,6 +93,9 @@ class StaffTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         for model in (Staff, StaffAddress, StaffPermission):
             self.assertEqual(self.db.query(model).count(), 0)
+        from models.user import User, LoginUser
+        self.assertIsNone(self.db.query(User).filter_by(email="staff@example.com").first())
+        self.assertIsNone(self.db.query(LoginUser).filter_by(email="staff@example.com").first())
 
     def test_missing_school_and_access(self):
         self.assertEqual(self.client.post('/schools/school/999/staff', json=self.payload).status_code, 404)
@@ -130,5 +134,141 @@ class StaffTests(unittest.TestCase):
             self.assertIn('staff_module_id', columns)
             self.assertNotIn('module_id', columns)
             constraints = inspect(connection).get_unique_constraints('staff_permission')
-            self.assertTrue(any(c['column_names'] == ['staff_id', 'staff_module_id'] for c in constraints))
+            self.assertTrue(any(c['column_names'] == ['login_user_id', 'staff_module_id'] for c in constraints))
         self.assertEqual(self.client.get(f"{self.url}/{expected['id']}").json()['data'], expected)
+
+    def test_shared_accounts_update_and_delete(self):
+        from models.user import LoginUser, User
+        from utils.passwords import verify_password
+        payload = deepcopy(self.payload)
+        payload["staff_info"]["password"] = "staff-secret"
+        payload["staff_info"]["middle_name"] = "Middle"
+        payload["staff_info"]["last_name"] = "Last"
+        response = self.client.post(self.url, json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        staff_id = response.json()["data"]["id"]
+        self.assertNotIn("password", response.json()["data"]["staff_info"])
+        staff = self.db.get(Staff, staff_id)
+        account_id = staff.login_user_id
+        account = self.db.get(LoginUser, account_id)
+        self.assertIs(staff.login_user, account)
+        self.assertEqual(staff.login_user.mobile, payload["staff_info"]["mobile_number"])
+        self.assertEqual(staff.login_user.email, payload["staff_info"]["email"])
+        self.assertEqual(account.role, "Teacher")
+        self.assertEqual(account.middle_name, "Middle")
+        self.assertEqual(account.last_name, "Last")
+        stored = self.db.execute(text(
+            "SELECT first_name, middle_name, last_name, email, mobile, password FROM login_user WHERE id=:id"
+        ), {"id": account_id}).one()
+        self.assertEqual(tuple(stored[:5]), ("Test", "Middle", "Last", "staff@example.com", "9876543210"))
+        self.assertNotEqual(stored.password, "staff-secret")
+        self.assertEqual(str(self.db.execute(text(
+            "SELECT salary FROM staff WHERE id=:id"
+        ), {"id": staff_id}).scalar()), "25000.5")
+        self.assertTrue(verify_password("staff-secret", account.password))
+        self.assertEqual(staff.designation, "Teacher")
+        self.assertNotIn("first_name", Staff.__table__.columns)
+        self.assertIn("designation", Staff.__table__.columns)
+        self.assertNotIn("user_id", Staff.__table__.columns)
+        self.assertIsNone(self.db.query(User).filter_by(login_user_id=account_id).first())
+        self.assertEqual(self.db.query(LoginUser).filter_by(id=account_id).count(), 1)
+        self.assertEqual(self.db.query(SchoolMapping).count(), 0)
+
+        payload["staff_info"].pop("password")
+        payload["staff_info"]["first_name"] = "Updated"
+        payload["staff_info"]["qualification"] = "B.Ed."
+        response = self.client.put(f"{self.url}/{staff_id}", json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.db.expire_all()
+        self.assertEqual(self.db.get(LoginUser, account_id).first_name, "Updated")
+        self.assertTrue(verify_password("staff-secret", self.db.get(LoginUser, account_id).password))
+        self.assertEqual(self.db.get(Staff, staff_id).qualification, "B.Ed.")
+        self.assertEqual(self.client.post(self.url, json=payload).status_code, 409)
+
+        response = self.client.delete(f"{self.url}/{staff_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.db.expire_all()
+        self.assertEqual(self.db.query(User).count(), 1)
+        self.assertIsNone(self.db.get(LoginUser, account_id))
+        self.assertIsNone(self.db.get(Staff, staff_id))
+
+    def test_staff_can_login_with_mobile_default_password(self):
+        from routers.auth import login
+        from models.school import School
+        from schemas.user import UserLogin
+        import json
+        response = self.client.post(self.url, json=self.payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        school = self.db.get(School, 1)
+        school.primary_email = "school@example.com"
+        school.primary_number = "1234567890"
+        from models.school import SchoolPermission
+        self.db.add(SchoolPermission(school_id=1, module_id=999, is_enabled=True))
+        self.db.commit()
+        mobile = self.payload["staff_info"]["mobile_number"]
+        result = login(UserLogin(mobile=mobile, password=mobile), self.db)
+        data = json.loads(result.body)
+        self.assertEqual(data["data"]["role"], "Teacher")
+        self.assertIsNone(data["data"]["last_name"])
+        self.assertEqual(data["data"]["schools"][0]["id"], 1)
+        from schemas.user import UserLoginResponse
+        UserLoginResponse.model_validate(data)
+        permissions = data["data"]["schools"][0]["permissions"]
+        self.assertEqual([p["staff_module_id"] for p in permissions], [1, 2])
+        self.assertEqual([p["name"] for p in permissions], ["Dashboard", "School"])
+        self.assertEqual([p["is_enabled"] for p in permissions], [True, False])
+        self.assertTrue(all("module_id" not in p for p in permissions))
+        self.assertTrue(all(p["login_user_id"] == response.json()["data"]["login_user_id"]
+                            for p in permissions))
+        from dependencies.auth import get_current_user
+        from fastapi.security import HTTPAuthorizationCredentials
+        principal = get_current_user(HTTPAuthorizationCredentials(scheme="Bearer", credentials=data["token"]), self.db)
+        self.assertIsInstance(principal, Staff)
+        self.assertEqual(principal.id, response.json()["data"]["id"])
+
+    def test_create_does_not_write_users_or_school_mapping(self):
+        from sqlalchemy import event
+        from models.user import User, LoginUser
+        user_count = self.db.query(User).count()
+        statements = []
+        def record(connection, cursor, statement, parameters, context, executemany):
+            if statement.lstrip().upper().startswith("INSERT"):
+                statements.append(statement.lower())
+        event.listen(self.engine, "before_cursor_execute", record)
+        try:
+            response = self.client.post(self.url, json=self.payload)
+        finally:
+            event.remove(self.engine, "before_cursor_execute", record)
+        self.assertEqual(response.status_code, 201, response.text)
+        inserted_tables = {sql.split()[2].strip('"') for sql in statements}
+        self.assertEqual(inserted_tables, {
+            "login_user", "staff", "staff_address", "staff_permission",
+        })
+        self.assertEqual(self.db.query(User).count(), user_count)
+        staff = self.db.get(Staff, response.json()["data"]["id"])
+        stored_id = self.db.execute(text(
+            "SELECT login_user_id FROM staff WHERE id=:id"
+        ), {"id": staff.id}).scalar_one()
+        self.assertIsNotNone(stored_id)
+        self.assertEqual(response.json()["data"]["login_user_id"], stored_id)
+        self.assertEqual(stored_id, staff.login_user.id)
+        self.assertEqual(staff.address.login_user_id, staff.login_user_id)
+        self.assertTrue(all(p.login_user_id == staff.login_user_id for p in staff.permissions))
+        self.assertIsNotNone(self.db.get(LoginUser, staff.login_user_id))
+
+    def test_staff_role_enum_accepts_dropdown_values_and_rejects_other_roles(self):
+        from models.staff import StaffRole
+        for index, role in enumerate(StaffRole):
+            payload = deepcopy(self.payload)
+            payload['staff_info'].update(role=role.value, email=f'role{index}@example.com',
+                                         mobile_number=f'98765432{index:02}')
+            response = self.client.post(self.url, json=payload)
+            self.assertEqual(response.status_code, 201, response.text)
+            self.assertEqual(response.json()['data']['staff_info']['role'], role.value)
+            account = self.db.get(Staff, response.json()['data']['id']).login_user
+            self.assertEqual(account.role, role.value)
+        staff_id = response.json()['data']['id']
+        for role in ('Select Roles', 'Admin', 'Sub Admin', 'Super Admin', 'Unknown', 'Principle'):
+            payload['staff_info']['role'] = role
+            self.assertEqual(self.client.post(self.url, json=payload).status_code, 422)
+            self.assertEqual(self.client.put(f'{self.url}/{staff_id}', json=payload).status_code, 422)
