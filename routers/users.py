@@ -1,4 +1,5 @@
 from utils.passwords import hash_password
+from utils.school_sessions import current_session_ids
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
@@ -161,9 +162,10 @@ def schools_by_user(db, user_ids):
     assignments = db.query(SchoolMapping.user_id, School, SchoolMapping.status).join(
         School, School.id == SchoolMapping.school_id
     ).filter(SchoolMapping.user_id.in_(user_ids)).order_by(School.id).all()
+    session_ids = current_session_ids(db, {school.id for _, school, _ in assignments})
     for user_id, school, mapping_status in assignments:
         result[user_id].append(UserAssignedSchool.model_validate(school).model_copy(
-            update={"mapping_status": mapping_status}
+            update={"mapping_status": mapping_status, "current_session_id": session_ids[school.id]}
         ).model_dump(mode="json"))
     return result
 

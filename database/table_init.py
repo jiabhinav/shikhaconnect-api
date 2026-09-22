@@ -13,6 +13,7 @@ from database.school_permissions_table import allow_legacy_service_name_null
 from database.session_table import remove_legacy_session_year_index
 from database.staff_permission_table import rename_staff_module_id
 from database.school_mapping_table import migrate_school_mapping_accounts
+from database.session_catalogs import migrate_session_catalogs
 
 
 def register_models():
@@ -81,6 +82,7 @@ def ensure_all_tables(connection):
         migrate_user_addresses(connection)
         migrate_account_status(connection)
         migrate_school_mapping_accounts(connection)
+        migrate_session_catalogs(connection)
         return
     if connection.dialect.name == "postgresql":
         # Recheck within create_all after serializing concurrent initialization.
@@ -90,3 +92,4 @@ def ensure_all_tables(connection):
     migrate_user_addresses(connection)
     migrate_account_status(connection)
     migrate_school_mapping_accounts(connection)
+    migrate_session_catalogs(connection)

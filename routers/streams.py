@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
+from dependencies.school_session import require_school_session
 from models.school import School
 from models.stream import Stream
 from models.user import User, UserRole
@@ -12,18 +13,19 @@ from schemas.stream import StreamWrite, StreamResult, StreamListResult
 router = APIRouter()
 
 
-def stream_school(school_id: int, db: Session = Depends(get_db_session),
+def stream_school(school_id: int, session_id: int, db: Session = Depends(get_db_session),
                   current_user: User = Depends(get_current_user)):
     query = db.query(School).filter(School.id == school_id)
     # if current_user.role != UserRole.SUPER_ADMIN:
     #     raise HTTPException(status_code=403, detail="Only Super Admin can access schools")
     if query.first() is None:
         raise HTTPException(404, "School not found")
+    require_school_session(db, school_id, session_id)
     return db
 
 
-def find_stream(db, school_id, stream_id):
-    item = db.query(Stream).filter_by(school_id=school_id, id=stream_id).first()
+def find_stream(db, school_id, session_id, stream_id):
+    item = db.query(Stream).filter_by(school_id=school_id, session_id=session_id, id=stream_id).first()
     if item is None:
         raise HTTPException(404, "Stream not found")
     return item
@@ -36,34 +38,34 @@ def save_stream(db, item, message):
         db.refresh(item)
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(409, "Stream name already exists for this school or conflicts with database constraints") from exc
+        raise HTTPException(409, "Stream name already exists for this school session or conflicts with database constraints") from exc
     except Exception:
         db.rollback()
         raise
     return {"message": message, "data": item}
 
 
-@router.post("/school/{school_id}/streams", response_model=StreamResult, status_code=201)
-def create_stream(school_id: int, payload: StreamWrite, db: Session = Depends(stream_school)):
-    return save_stream(db, Stream(school_id=school_id, name=payload.name), "Stream created successfully")
+@router.post("/school/{school_id}/sessions/{session_id}/streams", response_model=StreamResult, status_code=201)
+def create_stream(school_id: int, session_id: int, payload: StreamWrite, db: Session = Depends(stream_school)):
+    return save_stream(db, Stream(school_id=school_id, session_id=session_id, name=payload.name), "Stream created successfully")
 
 
-@router.get("/school/{school_id}/streams", response_model=StreamListResult)
-def list_streams(school_id: int, db: Session = Depends(stream_school)):
+@router.get("/school/{school_id}/sessions/{session_id}/streams", response_model=StreamListResult)
+def list_streams(school_id: int, session_id: int, db: Session = Depends(stream_school)):
     return {"message": "Streams fetched successfully", "data": db.query(Stream).filter_by(
-        school_id=school_id).order_by(Stream.id).all()}
+        school_id=school_id, session_id=session_id).order_by(Stream.id).all()}
 
 
-@router.put("/school/{school_id}/streams/{stream_id}", response_model=StreamResult)
-def update_stream(school_id: int, stream_id: int, payload: StreamWrite, db: Session = Depends(stream_school)):
-    item = find_stream(db, school_id, stream_id)
+@router.put("/school/{school_id}/sessions/{session_id}/streams/{stream_id}", response_model=StreamResult)
+def update_stream(school_id: int, session_id: int, stream_id: int, payload: StreamWrite, db: Session = Depends(stream_school)):
+    item = find_stream(db, school_id, session_id, stream_id)
     item.name = payload.name
     return save_stream(db, item, "Stream updated successfully")
 
 
-@router.delete("/school/{school_id}/streams/{stream_id}")
-def delete_stream(school_id: int, stream_id: int, db: Session = Depends(stream_school)):
-    item = find_stream(db, school_id, stream_id)
+@router.delete("/school/{school_id}/sessions/{session_id}/streams/{stream_id}")
+def delete_stream(school_id: int, session_id: int, stream_id: int, db: Session = Depends(stream_school)):
+    item = find_stream(db, school_id, session_id, stream_id)
     try:
         db.delete(item)
         db.commit()

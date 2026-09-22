@@ -8,11 +8,12 @@ class Subject(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id = Column(Integer, ForeignKey("sessions.id", ondelete="RESTRICT"), nullable=True, index=True)
     name = Column(String(100), nullable=False)
     code = Column(String(50), nullable=True)
     status = Column(String(8), nullable=False, default="Active", server_default="Active")
     __table_args__ = (
         CheckConstraint("status IN ('Active', 'Inactive')", name="ck_subject_status"),
-        Index("uq_subject_school_name", school_id, func.lower(func.trim(name)), unique=True),
-        Index("uq_subject_school_code", school_id, func.lower(func.trim(code)), unique=True),
+        Index("uq_subject_school_name", school_id, session_id, func.lower(func.trim(name)), unique=True),
+        Index("uq_subject_school_code", school_id, session_id, func.lower(func.trim(code)), unique=True),
     )

@@ -95,6 +95,7 @@ class UserResponse(BaseModel):
 
 class UserAssignedSchool(SchoolDetails, SchoolAddress):
     id: int
+    current_session_id: int | None = None
     mapping_status: SchoolMappingStatus = SchoolMappingStatus.ACTIVE
 
     model_config = {"from_attributes": True}
@@ -162,6 +163,7 @@ class LoginStaffPermission(BaseModel):
 
 class LoginSchool(SchoolDetails, SchoolAddress):
     id: int
+    current_session_id: int | None = None
     school_logo: Optional[str] = None
     sessions: list[SessionResponse] = Field(default_factory=list)
     permissions: list[LoginSchoolPermission | LoginStaffPermission] = Field(default_factory=list)

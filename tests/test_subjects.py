@@ -1,18 +1,19 @@
 import unittest
 import test_sessions
+import catalog_setup
 from models.subject import Subject
 from models.user import UserRole
 
 
 class SubjectTests(unittest.TestCase):
-    setUp = test_sessions.SessionTests.setUp
+    setUp = catalog_setup.setUp
     tearDown = test_sessions.SessionTests.tearDown
 
     def test_super_admin_crud_status(self):
         for role in (UserRole.SUPER_ADMIN,):
             self.user.role = role
             self.db.commit()
-            url = "/schools/school/1/subjects"
+            url = "/schools/school/1/sessions/1/subjects"
             response = self.client.post(url, json={"name": "English", "code": "ENG"})
             self.assertEqual(response.status_code, 201, response.text)
             data = response.json()["data"]
@@ -31,7 +32,7 @@ class SubjectTests(unittest.TestCase):
 
     def test_auto_creation_duplicates_and_validation(self):
         Subject.__table__.drop(self.engine)
-        url = "/schools/school/1/subjects"
+        url = "/schools/school/1/sessions/1/subjects"
         self.assertEqual(self.client.get(url).json()["data"], [])
         response = self.client.post(url, json={"name": " English ", "code": " ENG "})
         self.assertEqual(response.status_code, 201)
@@ -44,12 +45,12 @@ class SubjectTests(unittest.TestCase):
         for payload in ({"name": " "}, {"name": "Math", "status": "bad"}):
             self.assertEqual(self.client.post(url, json=payload).status_code, 422)
         self.assertEqual(self.client.get(url + "?status=bad").status_code, 422)
-        self.assertEqual(self.client.post("/schools/school/2/subjects", json={"name": "English", "code": "ENG"}).status_code, 201)
+        self.assertEqual(self.client.post("/schools/school/2/sessions/2/subjects", json={"name": "English", "code": "ENG"}).status_code, 201)
 
     def test_school_isolation(self):
-        url = "/schools/school/1/subjects"
+        url = "/schools/school/1/sessions/1/subjects"
         item_id = self.client.post(url, json={"name": "English"}).json()["data"]["id"]
-        other = f"/schools/school/2/subjects/{item_id}"
+        other = f"/schools/school/2/sessions/2/subjects/{item_id}"
         self.assertEqual(self.client.put(other, json={"name": "X"}).status_code, 404)
         self.assertEqual(self.client.patch(other + "/status", json={"status": "Inactive"}).status_code, 404)
         self.assertEqual(self.client.delete(other).status_code, 404)

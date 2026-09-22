@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
+from dependencies.school_session import require_school_session
 from models.school import School
 from models.caste_category import CasteCategory
 from models.user import User, UserRole
@@ -12,18 +13,19 @@ from schemas.caste_category import CasteCategoryWrite, CasteCategoryResult, Cast
 router = APIRouter()
 
 
-def caste_category_school(school_id: int, db: Session = Depends(get_db_session),
+def caste_category_school(school_id: int, session_id: int, db: Session = Depends(get_db_session),
                   current_user: User = Depends(get_current_user)):
     query = db.query(School).filter(School.id == school_id)
     # if current_user.role != UserRole.SUPER_ADMIN:
     #     raise HTTPException(status_code=403, detail="Only Super Admin can access schools")
     if query.first() is None:
         raise HTTPException(404, "School not found")
+    require_school_session(db, school_id, session_id)
     return db
 
 
-def find_caste_category(db, school_id, caste_category_id):
-    item = db.query(CasteCategory).filter_by(school_id=school_id, id=caste_category_id).first()
+def find_caste_category(db, school_id, session_id, caste_category_id):
+    item = db.query(CasteCategory).filter_by(school_id=school_id, session_id=session_id, id=caste_category_id).first()
     if item is None:
         raise HTTPException(404, "Caste category not found")
     return item
@@ -36,39 +38,39 @@ def save_caste_category(db, item, message):
         db.refresh(item)
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(409, "Caste category name already exists for this school or conflicts with database constraints") from exc
+        raise HTTPException(409, "Caste category name already exists for this school session or conflicts with database constraints") from exc
     except Exception:
         db.rollback()
         raise
     return {"message": message, "data": item}
 
 
-@router.post("/school/{school_id}/caste_categories", response_model=CasteCategoryResult, status_code=201)
-def create_caste_category(school_id: int, payload: CasteCategoryWrite, db: Session = Depends(caste_category_school)):
-    return save_caste_category(db, CasteCategory(school_id=school_id, name=payload.name), "Caste category created successfully")
+@router.post("/school/{school_id}/sessions/{session_id}/caste_categories", response_model=CasteCategoryResult, status_code=201)
+def create_caste_category(school_id: int, session_id: int, payload: CasteCategoryWrite, db: Session = Depends(caste_category_school)):
+    return save_caste_category(db, CasteCategory(school_id=school_id, session_id=session_id, name=payload.name), "Caste category created successfully")
 
 
-@router.get("/school/{school_id}/caste_categories", response_model=CasteCategoryListResult)
-def list_caste_categories(school_id: int, db: Session = Depends(caste_category_school)):
+@router.get("/school/{school_id}/sessions/{session_id}/caste_categories", response_model=CasteCategoryListResult)
+def list_caste_categories(school_id: int, session_id: int, db: Session = Depends(caste_category_school)):
     return {"message": "Caste categories fetched successfully", "data": db.query(CasteCategory).filter_by(
-        school_id=school_id).order_by(CasteCategory.id).all()}
+        school_id=school_id, session_id=session_id).order_by(CasteCategory.id).all()}
 
 
-@router.get("/school/{school_id}/caste_categories/{caste_category_id}", response_model=CasteCategoryResult)
-def get_caste_category(school_id: int, caste_category_id: int, db: Session = Depends(caste_category_school)):
-    return {"message": "Caste category fetched successfully", "data": find_caste_category(db, school_id, caste_category_id)}
+@router.get("/school/{school_id}/sessions/{session_id}/caste_categories/{caste_category_id}", response_model=CasteCategoryResult)
+def get_caste_category(school_id: int, session_id: int, caste_category_id: int, db: Session = Depends(caste_category_school)):
+    return {"message": "Caste category fetched successfully", "data": find_caste_category(db, school_id, session_id, caste_category_id)}
 
 
-@router.put("/school/{school_id}/caste_categories/{caste_category_id}", response_model=CasteCategoryResult)
-def update_caste_category(school_id: int, caste_category_id: int, payload: CasteCategoryWrite, db: Session = Depends(caste_category_school)):
-    item = find_caste_category(db, school_id, caste_category_id)
+@router.put("/school/{school_id}/sessions/{session_id}/caste_categories/{caste_category_id}", response_model=CasteCategoryResult)
+def update_caste_category(school_id: int, session_id: int, caste_category_id: int, payload: CasteCategoryWrite, db: Session = Depends(caste_category_school)):
+    item = find_caste_category(db, school_id, session_id, caste_category_id)
     item.name = payload.name
     return save_caste_category(db, item, "Caste category updated successfully")
 
 
-@router.delete("/school/{school_id}/caste_categories/{caste_category_id}")
-def delete_caste_category(school_id: int, caste_category_id: int, db: Session = Depends(caste_category_school)):
-    item = find_caste_category(db, school_id, caste_category_id)
+@router.delete("/school/{school_id}/sessions/{session_id}/caste_categories/{caste_category_id}")
+def delete_caste_category(school_id: int, session_id: int, caste_category_id: int, db: Session = Depends(caste_category_school)):
+    item = find_caste_category(db, school_id, session_id, caste_category_id)
     try:
         db.delete(item)
         db.commit()

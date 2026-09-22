@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from database.subject_table import ensure_subject_table
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
+from dependencies.school_session import require_school_session
 from models.school import School
 from models.subject import Subject
 from models.user import User, UserRole
@@ -15,7 +16,7 @@ from schemas.subject import SubjectWrite, SubjectStatusUpdate, SubjectStatus, Su
 router = APIRouter()
 
 
-def subject_storage(school_id: int, db: Session = Depends(get_db_session),
+def subject_storage(school_id: int, session_id: int, db: Session = Depends(get_db_session),
                     current_user: User = Depends(get_current_user)):
     query = db.query(School).filter(School.id == school_id)
     # if current_user.role != UserRole.SUPER_ADMIN:
@@ -29,11 +30,12 @@ def subject_storage(school_id: int, db: Session = Depends(get_db_session),
         db.rollback()
         logging.getLogger(__name__).exception("Subject table initialization failed")
         raise HTTPException(503, "Subject storage is unavailable") from exc
+    require_school_session(db, school_id, session_id)
     return db
 
 
-def find_subject(db, school_id, subject_id):
-    item = db.query(Subject).filter_by(school_id=school_id, id=subject_id).first()
+def find_subject(db, school_id, session_id, subject_id):
+    item = db.query(Subject).filter_by(school_id=school_id, session_id=session_id, id=subject_id).first()
     if item is None:
         raise HTTPException(404, "Subject not found")
     return item
@@ -46,29 +48,29 @@ def save_subject(db, item):
         db.refresh(item)
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(409, "Subject name or code already exists for this school, or conflicts with database constraints") from exc
+        raise HTTPException(409, "Subject name or code already exists for this school session, or conflicts with database constraints") from exc
     except Exception:
         db.rollback()
         raise
     return {"message": "Subject saved successfully", "data": item}
 
 
-@router.post("/school/{school_id}/subjects", response_model=SubjectResult, status_code=201)
-def create_subject(school_id: int, payload: SubjectWrite, db: Session = Depends(subject_storage)):
-    return save_subject(db, Subject(school_id=school_id, **payload.model_dump()))
+@router.post("/school/{school_id}/sessions/{session_id}/subjects", response_model=SubjectResult, status_code=201)
+def create_subject(school_id: int, session_id: int, payload: SubjectWrite, db: Session = Depends(subject_storage)):
+    return save_subject(db, Subject(school_id=school_id, session_id=session_id, **payload.model_dump()))
 
 
-@router.get("/school/{school_id}/subjects", response_model=SubjectListResult)
-def list_subjects(school_id: int, status: SubjectStatus | None = None, db: Session = Depends(subject_storage)):
-    query = db.query(Subject).filter_by(school_id=school_id)
+@router.get("/school/{school_id}/sessions/{session_id}/subjects", response_model=SubjectListResult)
+def list_subjects(school_id: int, session_id: int, status: SubjectStatus | None = None, db: Session = Depends(subject_storage)):
+    query = db.query(Subject).filter_by(school_id=school_id, session_id=session_id)
     if status is not None:
         query = query.filter(Subject.status == status)
     return {"message": "Subjects fetched successfully", "data": query.order_by(Subject.id).all()}
 
 
-@router.put("/school/{school_id}/subjects/{subject_id}", response_model=SubjectResult)
-def update_subject(school_id: int, subject_id: int, payload: SubjectWrite, db: Session = Depends(subject_storage)):
-    item = find_subject(db, school_id, subject_id)
+@router.put("/school/{school_id}/sessions/{session_id}/subjects/{subject_id}", response_model=SubjectResult)
+def update_subject(school_id: int, session_id: int, subject_id: int, payload: SubjectWrite, db: Session = Depends(subject_storage)):
+    item = find_subject(db, school_id, session_id, subject_id)
     item.name = payload.name
     item.code = payload.code
     # A name/code edit should not reactivate an inactive subject implicitly.
@@ -77,16 +79,16 @@ def update_subject(school_id: int, subject_id: int, payload: SubjectWrite, db: S
     return save_subject(db, item)
 
 
-@router.patch("/school/{school_id}/subjects/{subject_id}/status", response_model=SubjectResult)
-def update_subject_status(school_id: int, subject_id: int, payload: SubjectStatusUpdate, db: Session = Depends(subject_storage)):
-    item = find_subject(db, school_id, subject_id)
+@router.patch("/school/{school_id}/sessions/{session_id}/subjects/{subject_id}/status", response_model=SubjectResult)
+def update_subject_status(school_id: int, session_id: int, subject_id: int, payload: SubjectStatusUpdate, db: Session = Depends(subject_storage)):
+    item = find_subject(db, school_id, session_id, subject_id)
     item.status = payload.status
     return save_subject(db, item)
 
 
-@router.delete("/school/{school_id}/subjects/{subject_id}")
-def delete_subject(school_id: int, subject_id: int, db: Session = Depends(subject_storage)):
-    item = find_subject(db, school_id, subject_id)
+@router.delete("/school/{school_id}/sessions/{session_id}/subjects/{subject_id}")
+def delete_subject(school_id: int, session_id: int, subject_id: int, db: Session = Depends(subject_storage)):
+    item = find_subject(db, school_id, session_id, subject_id)
     try:
         db.delete(item)
         db.commit()

@@ -14,9 +14,9 @@ class StudentTests(unittest.TestCase):
         base='/schools/school/1'
         data={k:'Test' for k,v in {**StudentInfo.model_fields, **ParentInfo.model_fields, **StudentAddress.model_fields}.items() if v.is_required()}
         data.update(email='student@example.com',date_of_birth='2015-01-01',mobile_number='123456', father_contact_no='123456',father_aadhaar_no='123456789012',pin_code='123456')
-        for field, route in [('caste_category_id','caste_categories'),('fee_category_id','fee_categories'),('class_id','classes')]:
-            data[field]=self.client.post(f'{base}/{route}',json={'name':'Test'}).json()['data']['id']
         data['session_id']=self.client.post(base+'/sessions',json=self.payload).json()['data']['id']
+        for field, route in [('caste_category_id','caste_categories'),('fee_category_id','fee_categories'),('class_id','classes')]:
+            data[field]=self.client.post(f"{base}/sessions/{data['session_id']}/{route}",json={'name':'Test'}).json()['data']['id']
         return data
 
     def test_required_only_create_edit_update(self):
@@ -45,7 +45,8 @@ class StudentTests(unittest.TestCase):
                 self.assertEqual(self.client.post(url,json=nest(missing)).status_code,422,key)
         for field in ('class_id','session_id','fee_category_id','caste_category_id'):
             self.assertEqual(self.client.post(url,json=nest(dict(payload,**{field:99999}))).status_code,404)
-        foreign=self.client.post('/schools/school/2/classes',json={'name':'Other'}).json()['data']['id']
+        other_session=self.client.post('/schools/school/2/sessions',json=self.payload).json()['data']['id']
+        foreign=self.client.post(f'/schools/school/2/sessions/{other_session}/classes',json={'name':'Other'}).json()['data']['id']
         self.assertEqual(self.client.post(url,json=nest(dict(payload,class_id=foreign))).status_code,404)
         self.assertEqual(self.client.post(url,json=nest(dict(payload,email='bad'))).status_code,422)
 

@@ -79,5 +79,8 @@ def validate_student_references(db, school_id, payload):
 
     for field, model in (("session_id", SchoolSession), ("class_id", SchoolClass),
                          ("fee_category_id", FeeCategory), ("caste_category_id", CasteCategory)):
-        if db.query(model.id).filter(model.id == getattr(payload.student_info, field), model.school_id == school_id).first() is None:
-            raise HTTPException(404, f"{field} does not exist in this school")
+        query = db.query(model.id).filter(model.id == getattr(payload.student_info, field), model.school_id == school_id)
+        if model is not SchoolSession:
+            query = query.filter(model.session_id == payload.student_info.session_id)
+        if query.first() is None:
+            raise HTTPException(404, f"{field} does not exist in this school session")

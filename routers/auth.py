@@ -1,5 +1,6 @@
 
 from utils.passwords import hash_password, needs_rehash, verify_password
+from utils.school_sessions import current_session_ids
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -144,12 +145,13 @@ def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
                 id=p.id, login_user_id=p.login_user_id, staff_module_id=p.staff_module_id,
                 name=module_names.get(p.staff_module_id), is_enabled=p.is_enabled,
             ) for p in sorted(account.permissions, key=lambda permission: permission.id)]
+        session_ids = current_session_ids(db, [school.id for school, _ in schools])
         for school, logo in schools:
             if staff_permissions is not None:
                 # Do not read school-wide permissions for a staff account.
                 school_data = LoginSchool.model_validate({
                     **{field: getattr(school, field) for field in LoginSchool.model_fields
-                       if field not in {"permissions", "sessions", "school_logo"}},
+                       if field not in {"permissions", "sessions", "school_logo", "current_session_id"}},
                     "permissions": staff_permissions,
                 })
             else:
@@ -157,6 +159,7 @@ def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
                 school_data.permissions.sort(key=lambda permission: permission.id)
                 for permission in school_data.permissions:
                     permission.name = module_names.get(permission.module_id)
+            school_data.current_session_id = session_ids[school.id]
             school_data.school_logo = logo
             school_data.sessions = sessions_by_school[school.id]
             payload["schools"].append(school_data.model_dump(mode="json"))

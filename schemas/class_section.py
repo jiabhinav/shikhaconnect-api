@@ -15,6 +15,7 @@ class SectionResponse(SectionWrite):
     model_config = ConfigDict(from_attributes=True)
     id: int
     school_id: int
+    session_id: int | None
 
 
 class ClassResponse(SectionResponse):

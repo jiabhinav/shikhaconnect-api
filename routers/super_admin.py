@@ -1,5 +1,6 @@
 from datetime import date
 from utils.dates import today as get_today
+from utils.school_sessions import current_session_ids
 
 import logging
 import re
@@ -66,6 +67,7 @@ def _school_payload(school: School, db: Session) -> dict:
     for field in ("session_start_date", "session_end_date"):
         value = payload[field]
         payload[field] = value.isoformat() if value else None
+    payload["current_session_id"] = current_session_ids(db, [school.id], as_of=get_today())[school.id]
     # payload["services"] = [
     #     permission.module_id for permission in school.permissions if permission.is_enabled
     # ]
