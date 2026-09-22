@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from dependencies.db import get_db_session
 from database.module_names import get_module_names, get_staff_module_names
-from dependencies.auth import get_current_user, account_token
+from dependencies.auth import account_token
 from models.school import School
 from models.school_assets import SchoolAssets
 from models.school_mapping import SchoolMapping, SchoolMappingStatus
@@ -28,15 +28,8 @@ router = APIRouter(
 def reset_password(
     payload: PasswordResetRequest,
     db: Session = Depends(get_db_session),
-    current_user: User = Depends(get_current_user),
 ):
-    """Allow a super admin to reset an account's password by mobile number."""
-    if current_user.role != UserRole.SUPER_ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only Super Admin can reset passwords",
-        )
-
+    """Reset an account password by mobile number without an auth header."""
     user = db.query(Staff).filter(Staff.mobile == payload.mobile).first()
     if user is None:
         user = db.query(User).filter(User.mobile == payload.mobile).first()

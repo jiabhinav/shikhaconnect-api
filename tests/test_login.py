@@ -233,12 +233,17 @@ class LoginTests(unittest.TestCase):
             self.assertEqual(self.login(password=expected).status_code, 200)
             self.assertEqual(self.login(password="secret").status_code, 401)
 
-    def test_reset_requires_super_admin(self):
-        for role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
-            self.user.role = role
-            response = self.client.post("/auth/reset-password", json={"mobile": "2222222222"})
-            self.assertEqual(response.status_code, 403)
-            self.assertEqual(self.db.get(User, 2).password, "secret")
+    def test_reset_does_not_require_authorization_header(self):
+        from dependencies.auth import get_current_user
+        from utils.passwords import verify_password
+        self.client.app.dependency_overrides.pop(get_current_user, None)
+        for headers in ({}, {"Authorization": "Bearer invalid"}):
+            response = self.client.post('/auth/reset-password',
+                json={"mobile": "2222222222", "new_password": "new-secret"}, headers=headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertTrue(verify_password('new-secret', self.db.get(User, 2).password))
+        operation = self.client.app.openapi()['paths']['/auth/reset-password']['post']
+        self.assertNotIn('security', operation)
 
     def test_reset_validates_request_and_missing_account(self):
         for body in ({}, {"mobile": ""}, {"mobile": "2222222222", "new_password": ""}):
@@ -246,23 +251,19 @@ class LoginTests(unittest.TestCase):
         self.assertEqual(self.client.post("/auth/reset-password", json={"mobile": "unknown"}).status_code, 404)
         self.assertEqual(self.db.get(User, 2).password, "secret")
 
-    def test_reset_authentication_and_old_token_revocation(self):
+    def test_public_reset_revokes_old_token(self):
         from dependencies.auth import get_current_user
+        from fastapi import HTTPException
+        from fastapi.security import HTTPAuthorizationCredentials
         self.assign()
-        admin_token = self.login(mobile="1111111111").json()["token"]
-        user_token = self.login().json()["token"]
-        del self.client.app.dependency_overrides[get_current_user]
-        body = {"mobile": "2222222222"}
-        self.assertIn(self.client.post("/auth/reset-password", json=body).status_code, (401, 403))
-        self.assertEqual(self.client.post("/auth/reset-password", json=body,
-                         headers={"Authorization": "Bearer invalid"}).status_code, 401)
-        self.assertEqual(self.client.post("/auth/reset-password", json=body,
-                         headers={"Authorization": f"Bearer {user_token}"}).status_code, 403)
-        self.assertEqual(self.client.post("/auth/reset-password", json=body,
-                         headers={"Authorization": f"Bearer {admin_token}"}).status_code, 200)
-        self.assertEqual(self.client.post("/auth/reset-password", json=body,
-                         headers={"Authorization": f"Bearer {user_token}"}).status_code, 401)
-        self.assertEqual(self.login(password="2222222222").status_code, 200)
+        user_token = self.login().json()['token']
+        self.client.app.dependency_overrides.pop(get_current_user, None)
+        response = self.client.post('/auth/reset-password', json={"mobile": "2222222222"})
+        self.assertEqual(response.status_code, 200, response.text)
+        with self.assertRaises(HTTPException) as error:
+            get_current_user(HTTPAuthorizationCredentials(scheme='Bearer', credentials=user_token), self.db)
+        self.assertEqual(error.exception.status_code, 401)
+        self.assertEqual(self.login(password='2222222222').status_code, 200)
 
     def test_admin_roles_use_user_profile_and_account_address(self):
         from models.staff import Staff, StaffAddress
