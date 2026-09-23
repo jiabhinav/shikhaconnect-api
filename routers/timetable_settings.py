@@ -9,7 +9,7 @@ from models.user import User, UserRole
 from models.timetable_settings import TimetableSettings
 from schemas.timetable_settings import TimetableSettingsWrite, TimetableSettingsResult
 
-router = APIRouter(prefix="/school/{school_id}/sessions/{session_id}")
+router = APIRouter()
 
 def settings_session(school_id: int, session_id: int, db: Session = Depends(get_db_session),
                      current_user: User = Depends(get_current_user)):

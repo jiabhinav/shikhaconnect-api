@@ -55,12 +55,14 @@ def save_subject(db, item):
     return {"message": "Subject saved successfully", "data": item}
 
 
-@router.post("/school/{school_id}/sessions/{session_id}/subjects", response_model=SubjectResult, status_code=201)
+@router.post("/school/{school_id}/sessions/{session_id}/subjects", response_model=SubjectResult, status_code=201, include_in_schema=False)
+@router.post("/subjects", response_model=SubjectResult, status_code=201)
 def create_subject(school_id: int, session_id: int, payload: SubjectWrite, db: Session = Depends(subject_storage)):
     return save_subject(db, Subject(school_id=school_id, session_id=session_id, **payload.model_dump()))
 
 
-@router.get("/school/{school_id}/sessions/{session_id}/subjects", response_model=SubjectListResult)
+@router.get("/school/{school_id}/sessions/{session_id}/subjects", response_model=SubjectListResult, include_in_schema=False)
+@router.get("/subjects", response_model=SubjectListResult)
 def list_subjects(school_id: int, session_id: int, status: SubjectStatus | None = None, db: Session = Depends(subject_storage)):
     query = db.query(Subject).filter_by(school_id=school_id, session_id=session_id)
     if status is not None:
@@ -68,7 +70,8 @@ def list_subjects(school_id: int, session_id: int, status: SubjectStatus | None 
     return {"message": "Subjects fetched successfully", "data": query.order_by(Subject.id).all()}
 
 
-@router.put("/school/{school_id}/sessions/{session_id}/subjects/{subject_id}", response_model=SubjectResult)
+@router.put("/school/{school_id}/sessions/{session_id}/subjects/{subject_id}", response_model=SubjectResult, include_in_schema=False)
+@router.put("/subjects/{subject_id}", response_model=SubjectResult)
 def update_subject(school_id: int, session_id: int, subject_id: int, payload: SubjectWrite, db: Session = Depends(subject_storage)):
     item = find_subject(db, school_id, session_id, subject_id)
     item.name = payload.name
@@ -79,14 +82,16 @@ def update_subject(school_id: int, session_id: int, subject_id: int, payload: Su
     return save_subject(db, item)
 
 
-@router.patch("/school/{school_id}/sessions/{session_id}/subjects/{subject_id}/status", response_model=SubjectResult)
+@router.patch("/school/{school_id}/sessions/{session_id}/subjects/{subject_id}/status", response_model=SubjectResult, include_in_schema=False)
+@router.patch("/subjects/{subject_id}/status", response_model=SubjectResult)
 def update_subject_status(school_id: int, session_id: int, subject_id: int, payload: SubjectStatusUpdate, db: Session = Depends(subject_storage)):
     item = find_subject(db, school_id, session_id, subject_id)
     item.status = payload.status
     return save_subject(db, item)
 
 
-@router.delete("/school/{school_id}/sessions/{session_id}/subjects/{subject_id}")
+@router.delete("/school/{school_id}/sessions/{session_id}/subjects/{subject_id}", include_in_schema=False)
+@router.delete("/subjects/{subject_id}")
 def delete_subject(school_id: int, session_id: int, subject_id: int, db: Session = Depends(subject_storage)):
     item = find_subject(db, school_id, session_id, subject_id)
     try:

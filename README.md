@@ -208,8 +208,8 @@ checked again on requests. Each has an auto-incrementing `id` and a
 
 | Action | Classes | Sections |
 | --- | --- | --- |
-| Create (POST) / List (GET) | `/schools/school/{school_id}/sessions/{session_id}/classes` | `/schools/school/{school_id}/sessions/{session_id}/sections` |
-| Update (PUT) / Delete (DELETE) | `/schools/school/{school_id}/sessions/{session_id}/classes/{class_id}` | `/schools/school/{school_id}/sessions/{session_id}/sections/{section_id}` |
+| Create (POST) / List (GET) | `/schools/classes?school_id={school_id}&session_id={session_id}` | `/schools/sections?school_id={school_id}&session_id={session_id}` |
+| Update (PUT) / Delete (DELETE) | `/schools/classes/{class_id}?school_id={school_id}&session_id={session_id}` | `/schools/sections/{section_id}?school_id={school_id}&session_id={session_id}` |
 
 Class body: `{"name":"NURSERY","class_order":2}`. `class_order` is optional:
 create appends after the highest order; update keeps the existing order.
@@ -229,14 +229,14 @@ subject requests if missing, with an auto-increment ID and a foreign key to
 can manage their school's subjects; Super Admins can manage all schools.
 Inactive user accounts remain blocked by the existing authentication dependency.
 
-- `POST /schools/school/{school_id}/sessions/{session_id}/subjects`: create (201).
-- `GET /schools/school/{school_id}/sessions/{session_id}/subjects`: list all; optionally filter with
+- `POST /schools/subjects?school_id={school_id}&session_id={session_id}`: create (201).
+- `GET /schools/subjects?school_id={school_id}&session_id={session_id}`: list all; optionally filter with
   `?status=Active` or `?status=Inactive`.
-- `PUT /schools/school/{school_id}/sessions/{session_id}/subjects/{subject_id}`: update name/code
+- `PUT /schools/subjects/{subject_id}?school_id={school_id}&session_id={session_id}`: update name/code
   and optionally status. Omitted status keeps the current value; omitted code clears it.
-- `PATCH /schools/school/{school_id}/sessions/{session_id}/subjects/{subject_id}/status`: change status
+- `PATCH /schools/subjects/{subject_id}/status?school_id={school_id}&session_id={session_id}`: change status
   using `{"status":"Inactive"}` or `{"status":"Active"}`.
-- `DELETE /schools/school/{school_id}/sessions/{session_id}/subjects/{subject_id}`: permanently delete.
+- `DELETE /schools/subjects/{subject_id}?school_id={school_id}&session_id={session_id}`: permanently delete.
   Use the status endpoint to deactivate while keeping the record.
 
 Create/update body:
@@ -273,10 +273,10 @@ contains an auto-incrementing `id`, a `school_id` foreign key to `schools.id`
 initializer automatically creates it if missing at startup or before database
 requests. The screenshot's Sr.No is the frontend row number, not a stored column.
 
-- `POST /schools/school/{school_id}/sessions/{session_id}/streams`: create (201).
-- `GET /schools/school/{school_id}/sessions/{session_id}/streams`: list by ID (200).
-- `PUT /schools/school/{school_id}/sessions/{session_id}/streams/{stream_id}`: update name (200).
-- `DELETE /schools/school/{school_id}/sessions/{session_id}/streams/{stream_id}`: delete (200).
+- `POST /schools/streams?school_id={school_id}&session_id={session_id}`: create (201).
+- `GET /schools/streams?school_id={school_id}&session_id={session_id}`: list by ID (200).
+- `PUT /schools/streams/{stream_id}?school_id={school_id}&session_id={session_id}`: update name (200).
+- `DELETE /schools/streams/{stream_id}?school_id={school_id}&session_id={session_id}`: delete (200).
 
 Create/update body: `{"name":"COMMERCE"}`.
 Names are trimmed, required, limited to 100 characters, and unique per school
@@ -293,11 +293,11 @@ has an auto-incrementing `id`, `school_id` foreign key to `schools.id` (with
 cascading school deletion), and required `name`. Automatic initialization creates
 it if missing. Sr.No in the screenshot is a frontend row number.
 
-- `POST /schools/school/{school_id}/sessions/{session_id}/fee_categories`: create (201).
-- `GET /schools/school/{school_id}/sessions/{session_id}/fee_categories`: list by ID (200).
-- `GET /schools/school/{school_id}/sessions/{session_id}/fee_categories/{fee_category_id}`: get one (200).
-- `PUT /schools/school/{school_id}/sessions/{session_id}/fee_categories/{fee_category_id}`: update (200).
-- `DELETE /schools/school/{school_id}/sessions/{session_id}/fee_categories/{fee_category_id}`: delete (200).
+- `POST /schools/fee_categories?school_id={school_id}&session_id={session_id}`: create (201).
+- `GET /schools/fee_categories?school_id={school_id}&session_id={session_id}`: list by ID (200).
+- `GET /schools/fee_categories/{fee_category_id}?school_id={school_id}&session_id={session_id}`: get one (200).
+- `PUT /schools/fee_categories/{fee_category_id}?school_id={school_id}&session_id={session_id}`: update (200).
+- `DELETE /schools/fee_categories/{fee_category_id}?school_id={school_id}&session_id={session_id}`: delete (200).
 
 Create/update body: `{"name":"GENERAL"}`. Names are trimmed, required, limited
 to 100 characters, and unique per school ignoring case. Duplicates return 409,
@@ -313,11 +313,11 @@ table has an auto-incrementing `id`, a `school_id` foreign key to `schools.id`
 (with cascading school deletion), and required `name`. The centralized
 initializer creates it automatically if missing. Sr.No is a frontend row number.
 
-- `POST /schools/school/{school_id}/sessions/{session_id}/caste_categories`: create (201).
-- `GET /schools/school/{school_id}/sessions/{session_id}/caste_categories`: list by ID (200).
-- `GET /schools/school/{school_id}/sessions/{session_id}/caste_categories/{caste_category_id}`: get one (200).
-- `PUT /schools/school/{school_id}/sessions/{session_id}/caste_categories/{caste_category_id}`: update (200).
-- `DELETE /schools/school/{school_id}/sessions/{session_id}/caste_categories/{caste_category_id}`: delete (200).
+- `POST /schools/caste_categories?school_id={school_id}&session_id={session_id}`: create (201).
+- `GET /schools/caste_categories?school_id={school_id}&session_id={session_id}`: list by ID (200).
+- `GET /schools/caste_categories/{caste_category_id}?school_id={school_id}&session_id={session_id}`: get one (200).
+- `PUT /schools/caste_categories/{caste_category_id}?school_id={school_id}&session_id={session_id}`: update (200).
+- `DELETE /schools/caste_categories/{caste_category_id}?school_id={school_id}&session_id={session_id}`: delete (200).
 
 Create/update body: `{"name":"GENERAL"}`. Names are trimmed, required, limited
 to 100 characters, and unique per school ignoring case. Duplicates return 409,
@@ -333,11 +333,11 @@ an auto-incrementing `id`, `school_id` foreign key to `schools.id` (with cascadi
 school deletion), and required `name`. It is automatically created if missing
 by the centralized initializer. Sr.No is a frontend row number.
 
-- `POST /schools/school/{school_id}/sessions/{session_id}/houses`: create (201).
-- `GET /schools/school/{school_id}/sessions/{session_id}/houses`: list by ID (200).
-- `GET /schools/school/{school_id}/sessions/{session_id}/houses/{house_id}`: get one (200).
-- `PUT /schools/school/{school_id}/sessions/{session_id}/houses/{house_id}`: update (200).
-- `DELETE /schools/school/{school_id}/sessions/{session_id}/houses/{house_id}`: delete (200).
+- `POST /schools/houses?school_id={school_id}&session_id={session_id}`: create (201).
+- `GET /schools/houses?school_id={school_id}&session_id={session_id}`: list by ID (200).
+- `GET /schools/houses/{house_id}?school_id={school_id}&session_id={session_id}`: get one (200).
+- `PUT /schools/houses/{house_id}?school_id={school_id}&session_id={session_id}`: update (200).
+- `DELETE /schools/houses/{house_id}?school_id={school_id}&session_id={session_id}`: delete (200).
 
 Create/update body: `{"name":"Sapphire"}`. Names are trimmed, required, limited
 to 100 characters, and unique per school ignoring case. Duplicates return 409,
@@ -355,7 +355,8 @@ with cascading deletion. The school is derived from that session, avoiding
 inconsistent school/session pairs. Assigned Admins/Sub Admins and Super Admins
 can access settings under **Schools**.
 
-Base path: `/schools/school/{school_id}/sessions/{session_id}`.
+Base path: `/schools`. Pass required `school_id` and `session_id` query parameters
+on each request, for example `/schools/fee-generation-settings?school_id=18&session_id=2`.
 
 - `PUT /fee-generation-settings`: create or replace the fee panel (200).
 - `GET /fee-generation-settings`: retrieve the saved fee panel.
@@ -387,9 +388,9 @@ an auto-increment ID and unique `session_id` foreign key to `sessions.id`
 (cascading deletion). School ownership comes from the session. Assigned Admins
 and Sub Admins, plus Super Admins, can access these **Schools** endpoints:
 
-- `PUT /schools/school/{school_id}/sessions/{session_id}/timetable-settings`:
+- `PUT /schools/timetable-settings?school_id={school_id}&session_id={session_id}`:
   create or replace all settings (200).
-- `GET /schools/school/{school_id}/sessions/{session_id}/timetable-settings`:
+- `GET /schools/timetable-settings?school_id={school_id}&session_id={session_id}`:
   retrieve settings (200), or 404 if not saved or not accessible.
 
 ```json
@@ -411,7 +412,7 @@ saves update the same record. The response envelope contains `status`, `message`
 and `data`, including settings ID and session ID. This stores configuration;
 it does not generate class schedules or calculate attendance.
 
-`POST /schools/school/{school_id}/sessions/{session_id}/timetable-settings`
+`POST /schools/timetable-settings?school_id={school_id}&session_id={session_id}`
 creates timetable settings using the same six-field body as PUT and returns 201.
 If settings already exist for that session, POST returns 409 without changing
 any values; use PUT to update. The same school access and input validation apply.
@@ -646,13 +647,14 @@ from `users.id` to `users.login_user_id` and changes the foreign key to `login_u
 
 ### Session IDs for school catalogs and settings
 
-Pass `session_id` in the URL for all catalog operations:
-`/schools/school/{school_id}/sessions/{session_id}/{resource}`. Resources are
+Pass required integer `school_id` and `session_id` query parameters for all catalog operations:
+`/schools/{resource}?school_id=18&session_id=2`. Resources are
 `caste_categories`, `classes`, `sections`, `fee_categories`, `houses`, `streams`,
-and `subjects`. Existing item IDs remain the final URL segment for item operations.
+and `subjects`. Item operations use `/schools/{resource}/{item_id}?school_id=18&session_id=2`.
 The request body keeps the existing fields (for example `{"name": "General"}`);
-responses now include `session_id`. The old catalog URLs are replaced by these
-session URLs. A session from another school returns 404. Names (and subject codes)
+responses include `session_id`. The previous nested school/session URLs remain
+available as compatibility aliases, hidden from Swagger. Missing or non-integer
+query IDs return 422. A session from another school returns 404. Names (and subject codes)
 are unique within a school session, so they can be reused in another session.
 Class ordering starts independently in each session. Student class, fee category,
 and caste category references must belong to the student's selected session.

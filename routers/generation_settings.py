@@ -9,7 +9,7 @@ from models.user import User, UserRole
 from models.generation_settings import FeeGenerationSettings, TransportGenerationSettings
 from schemas.generation_settings import FeeSettingsWrite, TransportSettingsWrite, FeeSettingsResult, TransportSettingsResult
 
-router = APIRouter(prefix="/school/{school_id}/sessions/{session_id}")
+router = APIRouter()
 
 
 def settings_session(school_id: int, session_id: int, db: Session = Depends(get_db_session),

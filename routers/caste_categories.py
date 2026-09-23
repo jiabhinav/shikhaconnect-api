@@ -45,30 +45,35 @@ def save_caste_category(db, item, message):
     return {"message": message, "data": item}
 
 
-@router.post("/school/{school_id}/sessions/{session_id}/caste_categories", response_model=CasteCategoryResult, status_code=201)
+@router.post("/school/{school_id}/sessions/{session_id}/caste_categories", response_model=CasteCategoryResult, status_code=201, include_in_schema=False)
+@router.post("/caste_categories", response_model=CasteCategoryResult, status_code=201)
 def create_caste_category(school_id: int, session_id: int, payload: CasteCategoryWrite, db: Session = Depends(caste_category_school)):
     return save_caste_category(db, CasteCategory(school_id=school_id, session_id=session_id, name=payload.name), "Caste category created successfully")
 
 
-@router.get("/school/{school_id}/sessions/{session_id}/caste_categories", response_model=CasteCategoryListResult)
+@router.get("/school/{school_id}/sessions/{session_id}/caste_categories", response_model=CasteCategoryListResult, include_in_schema=False)
+@router.get("/caste_categories", response_model=CasteCategoryListResult)
 def list_caste_categories(school_id: int, session_id: int, db: Session = Depends(caste_category_school)):
     return {"message": "Caste categories fetched successfully", "data": db.query(CasteCategory).filter_by(
         school_id=school_id, session_id=session_id).order_by(CasteCategory.id).all()}
 
 
-@router.get("/school/{school_id}/sessions/{session_id}/caste_categories/{caste_category_id}", response_model=CasteCategoryResult)
+@router.get("/school/{school_id}/sessions/{session_id}/caste_categories/{caste_category_id}", response_model=CasteCategoryResult, include_in_schema=False)
+@router.get("/caste_categories/{caste_category_id}", response_model=CasteCategoryResult)
 def get_caste_category(school_id: int, session_id: int, caste_category_id: int, db: Session = Depends(caste_category_school)):
     return {"message": "Caste category fetched successfully", "data": find_caste_category(db, school_id, session_id, caste_category_id)}
 
 
-@router.put("/school/{school_id}/sessions/{session_id}/caste_categories/{caste_category_id}", response_model=CasteCategoryResult)
+@router.put("/school/{school_id}/sessions/{session_id}/caste_categories/{caste_category_id}", response_model=CasteCategoryResult, include_in_schema=False)
+@router.put("/caste_categories/{caste_category_id}", response_model=CasteCategoryResult)
 def update_caste_category(school_id: int, session_id: int, caste_category_id: int, payload: CasteCategoryWrite, db: Session = Depends(caste_category_school)):
     item = find_caste_category(db, school_id, session_id, caste_category_id)
     item.name = payload.name
     return save_caste_category(db, item, "Caste category updated successfully")
 
 
-@router.delete("/school/{school_id}/sessions/{session_id}/caste_categories/{caste_category_id}")
+@router.delete("/school/{school_id}/sessions/{session_id}/caste_categories/{caste_category_id}", include_in_schema=False)
+@router.delete("/caste_categories/{caste_category_id}")
 def delete_caste_category(school_id: int, session_id: int, caste_category_id: int, db: Session = Depends(caste_category_school)):
     item = find_caste_category(db, school_id, session_id, caste_category_id)
     try:

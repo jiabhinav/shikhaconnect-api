@@ -45,25 +45,29 @@ def save_stream(db, item, message):
     return {"message": message, "data": item}
 
 
-@router.post("/school/{school_id}/sessions/{session_id}/streams", response_model=StreamResult, status_code=201)
+@router.post("/school/{school_id}/sessions/{session_id}/streams", response_model=StreamResult, status_code=201, include_in_schema=False)
+@router.post("/streams", response_model=StreamResult, status_code=201)
 def create_stream(school_id: int, session_id: int, payload: StreamWrite, db: Session = Depends(stream_school)):
     return save_stream(db, Stream(school_id=school_id, session_id=session_id, name=payload.name), "Stream created successfully")
 
 
-@router.get("/school/{school_id}/sessions/{session_id}/streams", response_model=StreamListResult)
+@router.get("/school/{school_id}/sessions/{session_id}/streams", response_model=StreamListResult, include_in_schema=False)
+@router.get("/streams", response_model=StreamListResult)
 def list_streams(school_id: int, session_id: int, db: Session = Depends(stream_school)):
     return {"message": "Streams fetched successfully", "data": db.query(Stream).filter_by(
         school_id=school_id, session_id=session_id).order_by(Stream.id).all()}
 
 
-@router.put("/school/{school_id}/sessions/{session_id}/streams/{stream_id}", response_model=StreamResult)
+@router.put("/school/{school_id}/sessions/{session_id}/streams/{stream_id}", response_model=StreamResult, include_in_schema=False)
+@router.put("/streams/{stream_id}", response_model=StreamResult)
 def update_stream(school_id: int, session_id: int, stream_id: int, payload: StreamWrite, db: Session = Depends(stream_school)):
     item = find_stream(db, school_id, session_id, stream_id)
     item.name = payload.name
     return save_stream(db, item, "Stream updated successfully")
 
 
-@router.delete("/school/{school_id}/sessions/{session_id}/streams/{stream_id}")
+@router.delete("/school/{school_id}/sessions/{session_id}/streams/{stream_id}", include_in_schema=False)
+@router.delete("/streams/{stream_id}")
 def delete_stream(school_id: int, session_id: int, stream_id: int, db: Session = Depends(stream_school)):
     item = find_stream(db, school_id, session_id, stream_id)
     try:

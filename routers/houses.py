@@ -45,30 +45,35 @@ def save_house(db, item, message):
     return {"message": message, "data": item}
 
 
-@router.post("/school/{school_id}/sessions/{session_id}/houses", response_model=HouseResult, status_code=201)
+@router.post("/school/{school_id}/sessions/{session_id}/houses", response_model=HouseResult, status_code=201, include_in_schema=False)
+@router.post("/houses", response_model=HouseResult, status_code=201)
 def create_house(school_id: int, session_id: int, payload: HouseWrite, db: Session = Depends(house_school)):
     return save_house(db, House(school_id=school_id, session_id=session_id, name=payload.name), "House created successfully")
 
 
-@router.get("/school/{school_id}/sessions/{session_id}/houses", response_model=HouseListResult)
+@router.get("/school/{school_id}/sessions/{session_id}/houses", response_model=HouseListResult, include_in_schema=False)
+@router.get("/houses", response_model=HouseListResult)
 def list_houses(school_id: int, session_id: int, db: Session = Depends(house_school)):
     return {"message": "Houses fetched successfully", "data": db.query(House).filter_by(
         school_id=school_id, session_id=session_id).order_by(House.id).all()}
 
 
-@router.get("/school/{school_id}/sessions/{session_id}/houses/{house_id}", response_model=HouseResult)
+@router.get("/school/{school_id}/sessions/{session_id}/houses/{house_id}", response_model=HouseResult, include_in_schema=False)
+@router.get("/houses/{house_id}", response_model=HouseResult)
 def get_house(school_id: int, session_id: int, house_id: int, db: Session = Depends(house_school)):
     return {"message": "House fetched successfully", "data": find_house(db, school_id, session_id, house_id)}
 
 
-@router.put("/school/{school_id}/sessions/{session_id}/houses/{house_id}", response_model=HouseResult)
+@router.put("/school/{school_id}/sessions/{session_id}/houses/{house_id}", response_model=HouseResult, include_in_schema=False)
+@router.put("/houses/{house_id}", response_model=HouseResult)
 def update_house(school_id: int, session_id: int, house_id: int, payload: HouseWrite, db: Session = Depends(house_school)):
     item = find_house(db, school_id, session_id, house_id)
     item.name = payload.name
     return save_house(db, item, "House updated successfully")
 
 
-@router.delete("/school/{school_id}/sessions/{session_id}/houses/{house_id}")
+@router.delete("/school/{school_id}/sessions/{session_id}/houses/{house_id}", include_in_schema=False)
+@router.delete("/houses/{house_id}")
 def delete_house(school_id: int, session_id: int, house_id: int, db: Session = Depends(house_school)):
     item = find_house(db, school_id, session_id, house_id)
     try:
