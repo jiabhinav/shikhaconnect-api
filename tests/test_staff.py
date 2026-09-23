@@ -65,6 +65,63 @@ class StaffTests(unittest.TestCase):
         response = self.client.post('/schools/staff?school_id=999', json=self.payload)
         self.assertEqual(response.status_code, 404, response.text)
 
+    def test_update_with_school_query_parameter(self):
+        created = self.client.post('/schools/staff?school_id=1', json=self.payload)
+        self.assertEqual(created.status_code, 201, created.text)
+        staff_id = created.json()['data']['id']
+        url = f'/schools/staff/{staff_id}'
+        for query in ('', '?school_id=invalid'):
+            self.assertEqual(self.client.put(url + query, json=self.payload).status_code, 422)
+        for school_id in (2, 999):
+            self.assertEqual(self.client.put(url, params={'school_id': school_id},
+                                             json=self.payload).status_code, 404)
+        payload = deepcopy(self.payload)
+        payload['staff_info']['first_name'] = 'Updated'
+        response = self.client.put(url, params={'school_id': 1}, json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['staff_info']['first_name'], 'Updated')
+        self.assertEqual(response.json()['data']['id'], staff_id)
+
+    def test_delete_with_school_query_parameter(self):
+        created = self.client.post('/schools/staff?school_id=1', json=self.payload)
+        self.assertEqual(created.status_code, 201, created.text)
+        staff_id = created.json()['data']['id']
+        url = f'/schools/staff/{staff_id}'
+        for query in ('', '?school_id=invalid'):
+            self.assertEqual(self.client.delete(url + query).status_code, 422)
+        for school_id in (2, 999):
+            self.assertEqual(self.client.delete(url, params={'school_id': school_id}).status_code, 404)
+        self.assertIsNotNone(self.db.get(Staff, staff_id))
+        response = self.client.delete(url, params={'school_id': 1})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['id'], staff_id)
+        self.assertIsNone(self.db.get(Staff, staff_id))
+        self.assertEqual(self.client.delete(url, params={'school_id': 1}).status_code, 404)
+
+    def test_update_delete_by_login_user_query_id(self):
+        created = self.client.post('/schools/staff?school_id=1', json=self.payload)
+        self.assertEqual(created.status_code, 201, created.text)
+        item = created.json()['data']
+        self.assertNotEqual(item['id'], item['login_user_id'])
+        params = {'school_id': 1, 'user_id': item['login_user_id']}
+        for method in ('put', 'delete'):
+            request = getattr(self.client, method)
+            kwargs = {'json': self.payload} if method == 'put' else {}
+            for invalid in ({'school_id': 1}, {'user_id': item['login_user_id']},
+                            dict(params, user_id='invalid')):
+                self.assertEqual(request('/schools/staff', params=invalid, **kwargs).status_code, 422)
+            for missing in (dict(params, school_id=2), dict(params, user_id=item['id'])):
+                self.assertEqual(request('/schools/staff', params=missing, **kwargs).status_code, 404)
+        payload = deepcopy(self.payload)
+        payload['staff_info']['first_name'] = 'By account'
+        response = self.client.put('/schools/staff', params=params, json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['id'], item['id'])
+        self.assertEqual(response.json()['data']['staff_info']['first_name'], 'By account')
+        response = self.client.delete('/schools/staff', params=params)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIsNone(self.db.get(Staff, item['id']))
+
     def test_list_excludes_admin_accounts_before_pagination(self):
         roles = [role.value for role in UserRole] + list(UserRole.__members__) + [
             'SuperAdmin', 'SubAdmin', 'Teacher', 'Librarian',

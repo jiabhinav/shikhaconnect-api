@@ -174,7 +174,8 @@ def get_staff(school_id: int, staff_id: int, db: Session = Depends(staff_school)
     return {"message": "Staff fetched successfully", "data": item}
 
 
-@router.put("/school/{school_id}/staff/{staff_id}", response_model=StaffResult)
+@router.put("/school/{school_id}/staff/{staff_id}", response_model=StaffResult, include_in_schema=False)
+@router.put("/staff/{staff_id}", response_model=StaffResult, include_in_schema=False)
 def update_staff(school_id: int, staff_id: int, payload: StaffCreate, db: Session = Depends(staff_school)):
     item = db.query(Staff).options(selectinload(Staff.login_user).selectinload(LoginUser.address), selectinload(Staff.login_user).selectinload(LoginUser.permissions)).filter_by(
         id=staff_id, school_id=school_id
@@ -227,7 +228,8 @@ def update_staff(school_id: int, staff_id: int, payload: StaffCreate, db: Sessio
     return {"status": "success", "message": "Staff updated successfully", "data": item}
 
 
-@router.delete("/school/{school_id}/staff/{staff_id}")
+@router.delete("/school/{school_id}/staff/{staff_id}", include_in_schema=False)
+@router.delete("/staff/{staff_id}", include_in_schema=False)
 def delete_staff(school_id: int, staff_id: int, db: Session = Depends(staff_school)):
     item = db.query(Staff).filter_by(id=staff_id, school_id=school_id).first()
     if item is None:
@@ -249,3 +251,25 @@ def delete_staff(school_id: int, staff_id: int, db: Session = Depends(staff_scho
         raise
 
     return {"status": "success", "message": "Staff deleted successfully", "data": {"id": staff_id}}
+
+
+def staff_id_for_user(db: Session, school_id: int, user_id: int) -> int:
+    item = db.query(Staff.id).filter_by(school_id=school_id, login_user_id=user_id).first()
+    if item is None:
+        raise HTTPException(404, "Staff profile not found for this user in this school")
+    return item.id
+
+
+@router.put("/staff", response_model=StaffResult)
+def update_staff_by_user(school_id: int, user_id: int, payload: StaffCreate,
+                         db: Session = Depends(staff_school)):
+    """Update by login_user.id; school_id and user_id are query parameters."""
+    staff_id = staff_id_for_user(db, school_id, user_id)
+    return update_staff(school_id, staff_id, payload, db)
+
+
+@router.delete("/staff")
+def delete_staff_by_user(school_id: int, user_id: int, db: Session = Depends(staff_school)):
+    """Delete by login_user.id; school_id and user_id are query parameters."""
+    staff_id = staff_id_for_user(db, school_id, user_id)
+    return delete_staff(school_id, staff_id, db)
