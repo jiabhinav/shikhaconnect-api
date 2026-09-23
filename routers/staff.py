@@ -102,7 +102,8 @@ def apply_staff_profile(db, payload, item=None):
     return item
 
 
-@router.post("/school/{school_id}/staff", response_model=StaffResult, status_code=201)
+#@router.post("/school/{school_id}/staff", response_model=StaffResult, status_code=201, include_in_schema=False)
+@router.post("/staff", response_model=StaffResult, status_code=201)
 def create_staff(school_id: int, payload: StaffCreate, db: Session = Depends(staff_school)):
     validate_references(db, school_id, payload)
     item = apply_staff_profile(db, payload)

@@ -41,7 +41,7 @@ class StaffTests(unittest.TestCase):
     tearDown = test_sessions.SessionTests.tearDown
 
     def test_create_and_fetch_three_sections(self):
-        response = self.client.post(self.url, json=self.payload)
+        response = self.client.post('/schools/staff?school_id=1', json=self.payload)
         self.assertEqual(response.status_code, 201, response.text)
         item = response.json()['data']
         self.assertEqual(item['school_id'], 1)
@@ -57,6 +57,13 @@ class StaffTests(unittest.TestCase):
         self.assertEqual(self.client.get(self.url + '?offset=1').json()['data'], [])
         self.assertEqual(self.client.get('/schools/school/2/staff').json()['data'], [])
         self.assertEqual(self.client.get(f"/schools/school/2/staff/{item['id']}").status_code, 404)
+
+    def test_create_requires_school_query_parameter(self):
+        for url in ('/schools/staff', '/schools/staff?school_id=invalid'):
+            response = self.client.post(url, json=self.payload)
+            self.assertEqual(response.status_code, 422, response.text)
+        response = self.client.post('/schools/staff?school_id=999', json=self.payload)
+        self.assertEqual(response.status_code, 404, response.text)
 
     def test_list_excludes_admin_accounts_before_pagination(self):
         roles = [role.value for role in UserRole] + list(UserRole.__members__) + [
