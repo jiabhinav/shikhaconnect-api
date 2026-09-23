@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import MetaData, Table, select
 from sqlalchemy.exc import IntegrityError, NoSuchTableError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, contains_eager, selectinload
 
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
@@ -11,7 +11,7 @@ from models.staff import Staff, StaffAddress, StaffPermission
 from models.user import LoginUser, User, UserRole
 from utils.passwords import hash_password
 from schemas.staff import StaffCreate, StaffListResult, StaffResult
-from database.module_names import get_module_names
+from database.module_names import get_staff_module_names
 
 router = APIRouter()
 
@@ -126,7 +126,7 @@ def create_staff(school_id: int, payload: StaffCreate, db: Session = Depends(sta
         raise
     # Attach module names for permissions in response
     module_ids = [p.staff_module_id for p in item.permissions]
-    names = get_module_names(db, module_ids)
+    names = get_staff_module_names(db, module_ids)
     for p in item.permissions:
         setattr(p, "name", names.get(p.staff_module_id))
     return {"message": "Staff created successfully", "data": item}
@@ -135,12 +135,26 @@ def create_staff(school_id: int, payload: StaffCreate, db: Session = Depends(sta
 @router.get("/school/{school_id}/staff", response_model=StaffListResult)
 def list_staff(school_id: int, offset: int = Query(0, ge=0),
                limit: int = Query(50, ge=1, le=200), db: Session = Depends(staff_school)):
-    items = db.query(Staff).options(selectinload(Staff.login_user).selectinload(LoginUser.address), selectinload(Staff.login_user).selectinload(LoginUser.permissions)).filter_by(
-        school_id=school_id
-    ).order_by(Staff.id).offset(offset).limit(limit).all()
+    # Include legacy role spellings accepted by the account model as well.
+    admin_roles = [
+        "Super Admin", "Admin", "Sub Admin",
+        "SUPER_ADMIN", "ADMIN", "SUB_ADMIN",
+        "SuperAdmin", "SubAdmin",
+    ]
+    items = (
+        db.query(Staff)
+        .select_from(LoginUser)
+        .join(Staff, Staff.login_user_id == LoginUser.id)
+        .options(
+            contains_eager(Staff.login_user).joinedload(LoginUser.address),
+            contains_eager(Staff.login_user).selectinload(LoginUser.permissions),
+        )
+        .filter(Staff.school_id == school_id, LoginUser.role.notin_(admin_roles))
+        .order_by(Staff.id).offset(offset).limit(limit).all()
+    )
     # Populate permission names
     all_module_ids = [p.staff_module_id for item in items for p in item.permissions]
-    names = get_module_names(db, all_module_ids)
+    names = get_staff_module_names(db, all_module_ids)
     for item in items:
         for p in item.permissions:
             setattr(p, "name", names.get(p.staff_module_id))
@@ -153,7 +167,7 @@ def get_staff(school_id: int, staff_id: int, db: Session = Depends(staff_school)
     if item is None:
         raise HTTPException(404, "Staff not found")
     module_ids = [p.staff_module_id for p in item.permissions]
-    names = get_module_names(db, module_ids)
+    names = get_staff_module_names(db, module_ids)
     for p in item.permissions:
         setattr(p, "name", names.get(p.staff_module_id))
     return {"message": "Staff fetched successfully", "data": item}
@@ -205,7 +219,7 @@ def update_staff(school_id: int, staff_id: int, payload: StaffCreate, db: Sessio
 
     # attach module names
     module_ids = [p.staff_module_id for p in item.permissions]
-    names = get_module_names(db, module_ids)
+    names = get_staff_module_names(db, module_ids)
     for p in item.permissions:
         setattr(p, "name", names.get(p.staff_module_id))
 

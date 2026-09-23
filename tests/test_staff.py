@@ -58,6 +58,57 @@ class StaffTests(unittest.TestCase):
         self.assertEqual(self.client.get('/schools/school/2/staff').json()['data'], [])
         self.assertEqual(self.client.get(f"/schools/school/2/staff/{item['id']}").status_code, 404)
 
+    def test_list_excludes_admin_accounts_before_pagination(self):
+        roles = [role.value for role in UserRole] + list(UserRole.__members__) + [
+            'SuperAdmin', 'SubAdmin', 'Teacher', 'Librarian',
+        ]
+        expected = []
+        for index, role in enumerate(roles):
+            payload = deepcopy(self.payload)
+            payload['staff_info'].update(email=f'list{index}@example.com',
+                                         mobile_number=f'987650{index:04}')
+            if role == 'Librarian':
+                payload['permissions'] = []
+                payload['staff_info']['role'] = role
+            response = self.client.post(self.url, json=payload)
+            self.assertEqual(response.status_code, 201, response.text)
+            item = response.json()['data']
+            self.db.get(Staff, item['id']).login_user.role = role
+            self.db.commit()
+            if role in ('Teacher', 'Librarian'):
+                expected.append(item)
+
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data'], expected)
+        self.assertEqual(self.client.get(self.url + '?limit=1').json()['data'], expected[:1])
+        self.assertEqual(self.client.get(self.url + '?offset=1&limit=1').json()['data'], expected[1:])
+        self.assertEqual(self.client.get('/schools/school/2/staff').json()['data'], [])
+
+    def test_list_incomplete_stored_profile_and_address(self):
+        from models.user import LoginUser
+        account = LoginUser(first_name='Legacy', email='legacy@example.com',
+                            mobile='9876540000', role='Office Staff')
+        staff = Staff(school_id=1, login_user=account)
+        self.db.add(staff)
+        self.db.commit()
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200, response.text)
+        item = response.json()['data'][0]
+        self.assertEqual(item['staff_info']['role'], 'Office Staff')
+        self.assertIsNone(item['staff_info']['date_of_birth'])
+        self.assertIsNone(item['address'])
+        self.assertNotIn('password', item['staff_info'])
+        account.address = StaffAddress(city='Delhi')
+        account.permissions = [StaffPermission(staff_module_id=1)]
+        self.db.commit()
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200, response.text)
+        item = response.json()['data'][0]
+        self.assertEqual(item['address']['city'], 'Delhi')
+        self.assertIsNone(item['address']['line_1'])
+        self.assertEqual(item['permissions'][0]['name'], 'Dashboard')
+
     def test_invalid_references_and_duplicate_permissions_do_not_save(self):
         for permissions in ([{'staff_module_id': 999}], [{'staff_module_id': 3}],
                             [{'staff_module_id': 1}, {'staff_module_id': 1}]):
