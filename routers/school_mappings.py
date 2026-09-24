@@ -108,7 +108,7 @@ def delete_mapping(mapping_id: int, db: Session = Depends(mapping_db)):
     return {"status": "success", "message": "School mapping deleted successfully", "data": {"id": mapping_id}}
 
 
-@router.get("/school/{school_id}/users", response_model=SchoolUserListResult)
+@router.get("/school/users", response_model=SchoolUserListResult)
 def list_school_users(school_id: int, status: SchoolMappingStatus | None = None,
                       db: Session = Depends(mapping_db)):
     require_school(db, school_id)

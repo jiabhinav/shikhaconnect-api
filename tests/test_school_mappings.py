@@ -16,7 +16,7 @@ class SchoolMappingTests(unittest.TestCase):
         test_sessions.SessionTests.setUp(self)
         self.client.app.include_router(router)
         self.url = '/super-admin/school-mappings'
-        self.list_url = '/super-admin/school/1/users'
+        self.list_url = '/super-admin/school/users?school_id=1'
         self.payload = {'school_id': 1, 'user_id': 1, 'status': 'active'}
 
     tearDown = test_sessions.SessionTests.tearDown
@@ -25,6 +25,12 @@ class SchoolMappingTests(unittest.TestCase):
         response = self.client.post(self.url, json=dict(self.payload, **changes))
         self.assertEqual(response.status_code, 201, response.text)
         return response.json()['data']['id']
+
+    def test_school_users_requires_school_id_query_parameter(self):
+        for params in ({}, {'school_id': 'invalid'}):
+            response = self.client.get('/super-admin/school/users', params=params)
+            self.assertEqual(response.status_code, 422, response.text)
+            self.assertEqual(response.json()['detail'][0]['loc'], ['query', 'school_id'])
 
     def test_login_user_ids_are_resolved_for_all_mapping_responses(self):
         # Deliberately separate profile IDs from login IDs.
@@ -68,9 +74,9 @@ class SchoolMappingTests(unittest.TestCase):
             response = self.client.patch(f'{item_url}/status', json={'status': status})
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(response.json()['data']['status'], status)
-            self.assertEqual(len(self.client.get(self.list_url, params={'status': status}).json()['data']), 1)
+            self.assertEqual(len(self.client.get(self.list_url, params={'school_id': 1, 'status': status}).json()['data']), 1)
             self.assertEqual(self.db.get(User, 1).status, UserStatus.ACTIVE)
-        self.assertEqual(len(self.client.get(self.list_url, params={'status': 'deactive'}).json()['data']), 1)
+        self.assertEqual(len(self.client.get(self.list_url, params={'school_id': 1, 'status': 'deactive'}).json()['data']), 1)
         self.db.add(User(id=2, first_name='Other', last_name='User', email='other@example.com', mobile='23456'))
         self.db.commit()
         response = self.client.put(item_url, json={'school_id': 2, 'user_id': 2, 'status': 'deactive'})
@@ -89,7 +95,7 @@ class SchoolMappingTests(unittest.TestCase):
             payload = dict(self.payload, **changes)
             self.assertEqual(self.client.post(self.url, json=payload).status_code, 404)
             self.assertEqual(self.client.put(f'{self.url}/{mapping_id}', json=payload).status_code, 404)
-        self.assertEqual(self.client.get('/super-admin/school/999/users').status_code, 404)
+        self.assertEqual(self.client.get('/super-admin/school/users?school_id=999').status_code, 404)
         self.assertEqual(self.client.put(f'{self.url}/999', json=self.payload).status_code, 404)
         self.assertEqual(self.client.patch(f'{self.url}/999/status', json={'status': 'active'}).status_code, 404)
 
@@ -126,7 +132,7 @@ class SchoolMappingTests(unittest.TestCase):
         for changes in ({'status': 'pending'}, {'status': None}, {'school_id': 0}, {'user_id': -1}):
             self.assertEqual(self.client.post(self.url, json=dict(self.payload, **changes)).status_code, 422)
         self.assertEqual(self.client.post(self.url, json={'school_id': 1, 'user_id': 1}).status_code, 422)
-        self.assertEqual(self.client.get(self.list_url, params={'status': 'bad'}).status_code, 200)
+        self.assertEqual(self.client.get(self.list_url, params={'school_id': 1, 'status': 'bad'}).status_code, 200)
 
     def test_list_includes_active_and_inactive_users_and_assignments(self):
         self.create()
@@ -135,7 +141,7 @@ class SchoolMappingTests(unittest.TestCase):
         self.db.commit()
         self.create(user_id=2, status='deactive')
         for params in ({}, {'status': 'active'}, {'status': 'deactive'}):
-            response = self.client.get(self.list_url, params=params)
+            response = self.client.get(self.list_url, params={'school_id': 1, **params})
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual({item['user_id'] for item in response.json()['data']}, {1, 2})
 
@@ -194,7 +200,7 @@ class SchoolMappingTests(unittest.TestCase):
         second = self.create(user_id=90, school_id=2)
         self.assertNotEqual(first, second)
         for school_id in (1, 2):
-            response = self.client.get(f'/super-admin/school/{school_id}/users')
+            response = self.client.get(f'/super-admin/school/users?school_id={school_id}')
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual([u['user_id'] for u in response.json()['data']], [90])
         duplicate = self.client.post(self.url, json=dict(self.payload, user_id=90))
