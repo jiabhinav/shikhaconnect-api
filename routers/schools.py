@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
 from database.module_names import get_module_names
-from database.session_table import ensure_session_table, update_school_session, validate_session_years
+from database.session_table import ensure_session_table, update_school_session, validate_session_dates
 from models.school import School, SchoolPermission
 from models.school_assets import SchoolAssets
 from models.user import User, UserRole
@@ -20,6 +20,7 @@ from schemas.school_assets import SchoolAssetsResponse
 from schemas.session import SessionResponse
 from models.session import Session as SchoolSession
 from models.student import Student
+from models.class_section import SchoolClass
 from schemas.session import SessionCreate, SessionResult, SessionListResult
 from routers.class_sections import router as class_section_router
 from routers.subjects import router as subject_router
@@ -71,7 +72,7 @@ def _require_session_school(db: Session, school_id: int, user: User):
 
 def _save_session(db, session):
     try:
-        validate_session_years(db, session.school_id, session.start_date, session.end_date, session.id)
+        validate_session_dates(db, session.school_id, session.start_date, session.end_date, session.id)
         db.add(session)
         db.commit()
         db.refresh(session)
@@ -132,6 +133,12 @@ def delete_session(
     ).with_for_update().first()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if db.query(SchoolClass.id).filter_by(school_id=school_id, session_id=session_id).first() is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="This session is used by a class. Delete the classes using this session first, then you can delete the session.",
+        )
 
     assigned_message = "Session already assigned to a student. You cannot delete this session."
     if db.query(Student.id).filter(Student.session_id == session_id).first() is not None:
@@ -414,7 +421,7 @@ def create_school(
         ensure_session_table(db.connection())
         db.add(school)
         db.flush()
-        validate_session_years(db, school.id, school_info.session_start_date, school_info.session_end_date)
+        validate_session_dates(db, school.id, school_info.session_start_date, school_info.session_end_date)
         db.add(SchoolSession(
             school_id=school.id,
             name=school_info.session_name,

@@ -5,6 +5,7 @@ import test_sessions
 import test_students
 from models.session import Session as SchoolSession
 from models.student import Student
+from models.class_section import SchoolClass
 from sqlalchemy.exc import IntegrityError
 
 
@@ -24,6 +25,21 @@ class SessionDeleteTests(unittest.TestCase):
         self.assertEqual(response.json()["data"], {"id": session_id})
         self.assertIsNone(self.db.get(SchoolSession, session_id))
         self.assertEqual(self.client.delete(f"{self.url}/{session_id}").status_code, 404)
+
+    def test_class_must_be_deleted_before_session(self):
+        session_id = self.create_session()
+        school_class = SchoolClass(school_id=1, session_id=session_id, name="Class 1", class_order=1)
+        self.db.add(school_class)
+        self.db.commit()
+        url = f"/schools/sessions?school_id=1&session_id={session_id}"
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["detail"],
+                         "This session is used by a class. Delete the classes using this session first, then you can delete the session.")
+        self.assertIsNotNone(self.db.get(SchoolSession, session_id))
+        self.db.delete(school_class)
+        self.db.commit()
+        self.assertEqual(self.client.delete(url).status_code, 200)
 
     def test_assigned_session_cannot_be_deleted(self):
         payload = test_students.StudentTests.student_payload(self)

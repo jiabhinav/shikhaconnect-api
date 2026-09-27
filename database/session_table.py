@@ -1,5 +1,5 @@
 from fastapi import HTTPException
-from sqlalchemy import extract, text
+from sqlalchemy import text
 
 from models.session import Session as SchoolSession
 
@@ -31,22 +31,22 @@ def ensure_session_table(connection):
     remove_legacy_session_year_index(connection)
 
 
-def validate_session_years(db, school_id, start_date, end_date, exclude_id=None):
-    """Check the year pair while the session initialization lock is held."""
+def validate_session_dates(db, school_id, start_date, end_date, exclude_id=None):
+    """Reject overlapping inclusive date ranges within the same school."""
     with db.no_autoflush:
         query = db.query(SchoolSession.id).filter(
             SchoolSession.school_id == school_id,
-            extract("year", SchoolSession.start_date) == start_date.year,
-            extract("year", SchoolSession.end_date) == end_date.year,
+            SchoolSession.start_date <= end_date,
+            SchoolSession.end_date >= start_date,
         )
         if exclude_id is not None:
             query = query.filter(SchoolSession.id != exclude_id)
         if query.first() is not None:
             raise HTTPException(status_code=409, detail={
-                "message": "A session with these start and end years already exists for this school",
+                "message": "Your session dates overlap another session already available for this school",
                 "school_id": school_id,
-                "start_year": start_date.year,
-                "end_year": end_date.year,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
             })
 
 
@@ -56,7 +56,7 @@ def update_school_session(db, school, school_info, session_id):
     session = db.query(SchoolSession).filter_by(id=session_id, school_id=school.id).first()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found for this school")
-    validate_session_years(db, school.id, school_info.session_start_date,
+    validate_session_dates(db, school.id, school_info.session_start_date,
         school_info.session_end_date, session.id)
     session.name = school_info.session_name
     session.start_date = school_info.session_start_date

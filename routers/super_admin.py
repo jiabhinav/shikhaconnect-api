@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
 from database.module_names import get_module_names
-from database.session_table import ensure_session_table, update_school_session, validate_session_years
+from database.session_table import ensure_session_table, update_school_session, validate_session_dates
 from models.school import School, SchoolPermission
 from models.school_assets import SchoolAssets
 from models.session import Session as SchoolSession
@@ -297,7 +297,7 @@ def create_school(
         ensure_session_table(db.connection())
         db.add(school)
         db.flush()
-        validate_session_years(db, school.id, school_info.session_start_date, school_info.session_end_date)
+        validate_session_dates(db, school.id, school_info.session_start_date, school_info.session_end_date)
         db.add(SchoolSession(
             school_id=school.id,
             name=school_info.session_name,
