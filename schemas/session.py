@@ -23,7 +23,7 @@ class SessionResponse(SessionCreate):
 
     id: int
     school_id: int
-    status: Literal["Past", "Current", "Upcoming"]
+    status: Literal["Past", "Current", "Future"]
 
 class SessionResult(BaseModel):
     status: str = "success"

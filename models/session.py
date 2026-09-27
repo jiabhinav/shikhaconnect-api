@@ -3,6 +3,7 @@ from sqlalchemy.orm import relationship
 
 from database.database import Base
 from utils.dates import today as get_today
+from utils.session_status import SessionStatus
 
 
 class Session(Base):
@@ -22,9 +23,4 @@ class Session(Base):
 
     @property
     def status(self):
-        today = get_today()
-        if today < self.start_date:
-            return "Upcoming"
-        if self.start_date <= today <= self.end_date:
-            return "Current"
-        return "Past"
+        return SessionStatus.classify(self.start_date, self.end_date, as_of=get_today())

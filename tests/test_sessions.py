@@ -84,7 +84,7 @@ class SessionTests(unittest.TestCase):
 
     def test_status(self):
         cases = (
-            (date(2026, 4, 1), date(2027, 3, 31), date(2026, 3, 31), "Upcoming"),
+            (date(2026, 4, 1), date(2027, 3, 31), date(2026, 3, 31), "Future"),
             (date(2026, 4, 1), date(2027, 3, 31), date(2026, 4, 1), "Current"),
             (date(2026, 4, 1), date(2027, 3, 31), date(2026, 9, 14), "Current"),
             (date(2026, 4, 1), date(2027, 3, 31), date(2027, 3, 31), "Current"),
@@ -94,18 +94,18 @@ class SessionTests(unittest.TestCase):
         )
         for start, end, today, expected in cases:
             with self.subTest(start=start, end=end, today=today):
-                with patch("models.session.date") as clock:
-                    clock.today.return_value = today
+                with patch("models.session.get_today") as clock:
+                    clock.return_value = today
                     self.assertEqual(SchoolSession(start_date=start, end_date=end).status, expected)
 
     def test_api_status_changes_with_today(self):
-        for today, expected in ((date(2025, 3, 31), "Upcoming"),
+        for today, expected in ((date(2025, 3, 31), "Future"),
                                 (date(2025, 4, 1), "Current"),
                                 (date(2026, 3, 31), "Current"),
                                 (date(2026, 4, 1), "Past")):
             with self.subTest(today=today):
-                with patch("models.session.date") as clock:
-                    clock.today.return_value = today
+                with patch("models.session.get_today") as clock:
+                    clock.return_value = today
                     if self.db.query(SchoolSession).count() == 0:
                         response = self.client.post(self.url, json=self.payload)
                         self.assertEqual(response.status_code, 201, response.text)

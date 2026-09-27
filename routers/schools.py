@@ -1,4 +1,3 @@
-from datetime import date
 from utils.dates import today as get_today
 from utils.school_sessions import current_session_ids
 
@@ -224,20 +223,15 @@ def _school_payload(school: School, db: Session) -> dict:
 
 def _school_detail_payload(school: School, db: Session) -> dict:
     payload = _school_payload(school, db)
-    today = get_today()
-    year = today.year
-    session = db.query(SchoolSession).filter(
+    sessions = db.query(SchoolSession).filter(
         SchoolSession.school_id == school.id,
-        SchoolSession.start_date <= date(year, 12, 31),
-        SchoolSession.end_date >= date(year, 1, 1),
     ).order_by(
-        ((SchoolSession.start_date <= today) & (SchoolSession.end_date >= today)).desc(),
         SchoolSession.start_date.desc(), SchoolSession.id.desc(),
-    ).first()
-    payload["sessions"] = (
+    ).all()
+    payload["sessions"] = [
         SessionResponse.model_validate(session).model_dump(mode="json")
-        if session is not None else None
-    )
+        for session in sessions
+    ]
     return payload
 
 
