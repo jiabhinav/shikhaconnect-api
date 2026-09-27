@@ -97,7 +97,9 @@ def create_session(
     return {"message": "Session created successfully", "data": session}
 
 
-@router.put("/school/{school_id}/sessions/{session_id}", response_model=SessionResult)
+@router.put("/sessions", response_model=SessionResult)
+@router.put("/sessions/{session_id}", response_model=SessionResult, include_in_schema=False)
+@router.put("/school/{school_id}/sessions/{session_id}", response_model=SessionResult, include_in_schema=False)
 def update_session(
     school_id: int,
     session_id: int,
@@ -115,7 +117,9 @@ def update_session(
     return {"message": "Session updated successfully", "data": session}
 
 
-@router.delete("/school/{school_id}/sessions/{session_id}")
+@router.delete("/sessions")
+@router.delete("/sessions/{session_id}", include_in_schema=False)
+@router.delete("/school/{school_id}/sessions/{session_id}", include_in_schema=False)
 def delete_session(
     school_id: int,
     session_id: int,
@@ -145,7 +149,8 @@ def delete_session(
     return {"status": "success", "message": "Session deleted successfully", "data": {"id": session_id}}
 
 
-@router.get("/school/{school_id}/sessions", response_model=SessionListResult)
+@router.get("/sessions", response_model=SessionListResult)
+@router.get("/school/{school_id}/sessions", response_model=SessionListResult, include_in_schema=False)
 def list_sessions(
     school_id: int,
     db: Session = Depends(get_db_session),
