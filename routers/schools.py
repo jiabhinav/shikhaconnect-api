@@ -172,6 +172,39 @@ def _require_super_admin(user: User) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admin can manage schools")
 
 
+@router.get("/permissions")
+def get_school_permissions(
+    school_id: int,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    school = db.query(School).filter(School.id == school_id).first()
+    if school is None:
+        raise HTTPException(status_code=404, detail="School not found")
+    return {
+        "status": "success",
+        "message": "School permissions fetched successfully",
+        "data": [
+            permission for permission in _school_permissions_payload(school, db)
+            if permission["is_enabled"]
+        ],
+    }
+
+
+def _school_permissions_payload(school: School, db: Session) -> list[dict]:
+    module_names = get_module_names(db, [permission.module_id for permission in school.permissions])
+    return [
+        {
+            "id": permission.id,
+            "school_id": permission.school_id,
+            "module_id": permission.module_id,
+            "name": module_names.get(permission.module_id),
+            "is_enabled": permission.is_enabled,
+        }
+        for permission in sorted(school.permissions, key=lambda item: item.id)
+    ]
+
+
 def _school_payload(school: School, db: Session) -> dict:
     """Return all school columns, including null fields, and permissions."""
     payload = {
@@ -185,17 +218,7 @@ def _school_payload(school: School, db: Session) -> dict:
     payload["services"] = [
         permission.module_id for permission in school.permissions if permission.is_enabled
     ]
-    module_names = get_module_names(db, [permission.module_id for permission in school.permissions])
-    payload["permissions"] = [
-        {
-            "id": permission.id,
-            "school_id": permission.school_id,
-            "module_id": permission.module_id,
-            "name": module_names.get(permission.module_id),
-            "is_enabled": permission.is_enabled,
-        }
-        for permission in sorted(school.permissions, key=lambda item: item.id)
-    ]
+    payload["permissions"] = _school_permissions_payload(school, db)
     return payload
 
 
