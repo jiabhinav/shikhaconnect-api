@@ -84,7 +84,8 @@ def _save_session(db, session):
         raise
 
 
-@router.post("/school/{school_id}/sessions", response_model=SessionResult, status_code=201)
+@router.post("/sessions", response_model=SessionResult, status_code=201)
+@router.post("/school/{school_id}/sessions", response_model=SessionResult, status_code=201, include_in_schema=False)
 def create_session(
     school_id: int,
     payload: SessionCreate,
