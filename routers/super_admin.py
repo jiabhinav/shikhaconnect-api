@@ -6,7 +6,8 @@ import logging
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy import MetaData, Table, select
+from sqlalchemy.exc import IntegrityError, NoSuchTableError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from dependencies.auth import get_current_user
@@ -83,6 +84,25 @@ def _school_payload(school: School, db: Session) -> dict:
         for permission in sorted(school.permissions, key=lambda item: item.id)
     ]
     return payload
+
+
+def _all_school_permissions(school: School, db: Session) -> list[dict]:
+    try:
+        modules = Table("modules", MetaData(), autoload_with=db.connection())
+    except NoSuchTableError as exc:
+        raise HTTPException(status_code=503, detail="Modules table is unavailable") from exc
+    assigned = {permission.module_id: permission for permission in school.permissions}
+    permissions = []
+    for module in db.execute(select(modules.c.id, modules.c.name).order_by(modules.c.id)):
+        permission = assigned.get(module.id)
+        permissions.append({
+            "id": permission.id if permission is not None else None,
+            "school_id": school.id,
+            "module_id": module.id,
+            "name": module.name,
+            "is_enabled": bool(permission.is_enabled) if permission is not None else False,
+        })
+    return permissions
 
 
 def _school_detail_payload(school: School, db: Session) -> dict:
@@ -245,6 +265,7 @@ def get_school_by_id(
         )
 
     data = _school_detail_payload(school, db)
+    data["permissions"] = _all_school_permissions(school, db)
     assets = db.get(SchoolAssets, school_id)
     data["school_assets"] = (
         SchoolAssetsResponse.model_validate(assets)
