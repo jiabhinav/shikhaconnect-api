@@ -20,4 +20,4 @@ def get_module_names(db: Session, module_ids: list[int]) -> dict[int, str]:
 
 
 def get_staff_module_names(db: Session, module_ids: list[int]) -> dict[int, str]:
-    return _get_module_names(db, module_ids, "staff_modules")
+    return get_module_names(db, module_ids)

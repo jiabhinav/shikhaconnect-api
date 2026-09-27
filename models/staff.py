@@ -92,7 +92,7 @@ class StaffPermission(Base):
 
     id = Column(Integer, primary_key=True)
     login_user_id = Column(Integer, ForeignKey("login_user.id", ondelete="CASCADE"), nullable=False, index=True)
-    # staff_modules is an existing, reflected table; validate IDs in the API.
+    # Stores modules.id; the API validates enabled school_permissions.
     staff_module_id = Column(Integer, nullable=False)
     is_enabled = Column(Boolean, nullable=False, default=True)
 

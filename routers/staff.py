@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, contains_eager, selectinload
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
 from models.caste_category import CasteCategory
-from models.school import School
+from models.school import School, SchoolPermission
 from models.staff import Staff, StaffAddress, StaffPermission
 from models.user import LoginUser, User, UserRole
 from utils.passwords import hash_password
@@ -58,22 +58,25 @@ def validate_references(db, school_id, payload):
     if not staff_module_ids:
         return
     try:
-        modules = Table("staff_modules", MetaData(), autoload_with=db.connection())
+        modules = Table("modules", MetaData(), autoload_with=db.connection())
     except NoSuchTableError as exc:
-        raise HTTPException(503, "Staff modules table is unavailable") from exc
+        raise HTTPException(503, "Modules table is unavailable") from exc
     if "id" not in modules.c:
-        raise HTTPException(503, "Staff modules ID column is unavailable")
+        raise HTTPException(503, "Modules ID column is unavailable")
+    query = select(modules.c.id).join(
+        SchoolPermission, SchoolPermission.module_id == modules.c.id
+    ).where(
+        modules.c.id.in_(staff_module_ids),
+        SchoolPermission.school_id == school_id,
+        SchoolPermission.is_enabled.is_(True),
+    )
     if "status" in modules.c:
-        active = modules.c.status.is_(True)
+        query = query.where(modules.c.status.is_(True))
     elif "is_active" in modules.c:
-        active = modules.c.is_active.is_(True)
-    else:
-        raise HTTPException(503, "Staff modules active status column is unavailable")
-    available = set(db.execute(select(modules.c.id).where(
-        modules.c.id.in_(staff_module_ids), active
-    )).scalars())
+        query = query.where(modules.c.is_active.is_(True))
+    available = set(db.execute(query).scalars())
     if staff_module_ids - available:
-        raise HTTPException(422, "Permissions must reference existing active staff modules")
+        raise HTTPException(422, "Permissions must reference active modules enabled for this school")
 
 
 def apply_staff_profile(db, payload, item=None):
