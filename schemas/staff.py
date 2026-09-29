@@ -154,12 +154,12 @@ class StaffListResult(BaseModel):
 
 class StaffStatusUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    status: Literal["Active", "Deactive"]
+    status: Literal["Active", "Inactive"]
 
 
 class StaffStatusData(BaseModel):
     user_id: int
-    status: Literal["Active", "Deactive"]
+    status: Literal["Active", "Inactive"]
 
 
 class StaffStatusResult(BaseModel):
