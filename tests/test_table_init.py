@@ -6,6 +6,36 @@ from database.database import Base
 
 
 class TableInitializationTests(unittest.TestCase):
+    def test_staff_permission_table_and_missing_action_columns_are_created(self):
+        engine = create_engine("sqlite://")
+        try:
+            with engine.begin() as connection:
+                ensure_all_tables(connection)
+                Base.metadata.tables["staff_permission"].drop(connection)
+                ensure_all_tables(connection)
+                columns = {c["name"] for c in inspect(connection).get_columns("staff_permission")}
+                self.assertTrue({"read", "delete", "update", "create"}.issubset(columns))
+                connection.execute(text(
+                    "INSERT INTO login_user (id, first_name, email, mobile, password, role) "
+                    "VALUES (1, 'Test', 'test@example.com', '12345', '', 'Teacher')"
+                ))
+                connection.execute(text(
+                    'INSERT INTO staff_permission (login_user_id, staff_module_id, is_enabled, "read") '
+                    'VALUES (1, 1, true, false)'
+                ))
+                for name in ("delete", "update", "create"):
+                    connection.execute(text(f'ALTER TABLE staff_permission DROP COLUMN "{name}"'))
+                ensure_all_tables(connection)
+                ensure_all_tables(connection)
+                row = connection.execute(text('SELECT * FROM staff_permission')).mappings().one()
+                for name in ("read", "delete", "update", "create"):
+                    self.assertFalse(row[name])
+                connection.execute(text('ALTER TABLE staff_permission DROP COLUMN "read"'))
+                ensure_all_tables(connection)
+                self.assertTrue(connection.execute(text('SELECT "read" FROM staff_permission')).scalar_one())
+        finally:
+            engine.dispose()
+
     def test_empty_database_and_repeated_initialization(self):
         engine = create_engine("sqlite://")
         try:

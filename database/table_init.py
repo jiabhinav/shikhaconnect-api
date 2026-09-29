@@ -11,7 +11,7 @@ from database.user_address_table import migrate_user_addresses
 from database.staff_account_table import migrate_user_accounts, migrate_staff_profiles, migrate_account_status
 from database.school_permissions_table import allow_legacy_service_name_null
 from database.session_table import remove_legacy_session_year_index
-from database.staff_permission_table import rename_staff_module_id
+from database.staff_permission_table import rename_staff_module_id, add_staff_permission_actions
 from database.school_mapping_table import migrate_school_mapping_accounts
 from database.session_catalogs import migrate_session_catalogs
 
@@ -74,6 +74,7 @@ def ensure_all_tables(connection):
     migrate_user_accounts(connection)
     remove_user_school_name(connection)
     rename_staff_module_id(connection)
+    add_staff_permission_actions(connection)
     allow_legacy_service_name_null(connection)
     remove_legacy_session_year_index(connection)
     existing = set(inspect(connection).get_table_names())

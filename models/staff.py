@@ -95,5 +95,9 @@ class StaffPermission(Base):
     # Stores modules.id; the API validates enabled school_permissions.
     staff_module_id = Column(Integer, nullable=False)
     is_enabled = Column(Boolean, nullable=False, default=True)
+    read = Column(Boolean, nullable=False, default=True, server_default="true")
+    delete = Column(Boolean, nullable=False, default=False, server_default="false")
+    update = Column(Boolean, nullable=False, default=False, server_default="false")
+    create = Column(Boolean, nullable=False, default=False, server_default="false")
 
     login_user = relationship("LoginUser", back_populates="permissions")

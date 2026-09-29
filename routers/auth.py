@@ -144,6 +144,7 @@ def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
             staff_permissions = [LoginStaffPermission(
                 id=p.id, login_user_id=p.login_user_id, staff_module_id=p.staff_module_id,
                 name=module_names.get(p.staff_module_id), is_enabled=p.is_enabled,
+                read=p.read, delete=p.delete, update=p.update, create=p.create,
             ) for p in sorted(account.permissions, key=lambda permission: permission.id)]
         session_ids = current_session_ids(db, [school.id for school, _ in schools])
         for school, logo in schools:

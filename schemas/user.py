@@ -157,6 +157,10 @@ class LoginStaffPermission(BaseModel):
     staff_module_id: int
     name: Optional[str] = None
     is_enabled: bool
+    read: bool = True
+    delete: bool = False
+    update: bool = False
+    create: bool = False
 
     model_config = {"from_attributes": True}
 

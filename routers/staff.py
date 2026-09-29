@@ -12,6 +12,7 @@ from models.user import LoginUser, User, UserRole, UserStatus
 from utils.passwords import hash_password
 from schemas.staff import StaffCreate, StaffListResult, StaffResult, StaffStatusUpdate, StaffStatusResult
 from database.module_names import get_staff_module_names
+from schemas.staff import StaffPermissionUpdate, StaffPermissionResult
 
 router = APIRouter()
 
@@ -298,6 +299,32 @@ def update_staff_status(school_id: int, user_id: int, payload: StaffStatusUpdate
         raise
     return {"message": f"Staff {'enabled' if new_status == UserStatus.ACTIVE else 'disabled'} successfully",
             "data": {"user_id": user_id, "status": payload.status}}
+
+
+@router.patch("/staff/permissions", response_model=StaffPermissionResult)
+def update_staff_permission(school_id: int, user_id: int, staff_module_id: int,
+                            payload: StaffPermissionUpdate,
+                            db: Session = Depends(staff_school)):
+    """Update only supplied action flags for an existing staff module permission."""
+    staff_id_for_user(db, school_id, user_id)
+    permission = db.query(StaffPermission).filter_by(
+        login_user_id=user_id, staff_module_id=staff_module_id
+    ).first()
+    if permission is None:
+        raise HTTPException(404, "Staff module permission not found")
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(permission, field, value)
+    try:
+        db.commit()
+        db.refresh(permission)
+    except IntegrityError as exc:
+        db.rollback()
+        raise staff_constraint_error(exc) from exc
+    except Exception:
+        db.rollback()
+        raise
+    permission.name = get_staff_module_names(db, [staff_module_id]).get(staff_module_id)
+    return {"message": "Staff permission updated successfully", "data": permission}
 
 
 @router.put("/staff", response_model=StaffResult)

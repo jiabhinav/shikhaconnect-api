@@ -55,6 +55,10 @@ class StaffPermissionWrite(BaseModel):
     model_config = ConfigDict(extra="forbid", from_attributes=True)
     staff_module_id: int = Field(gt=0)
     is_enabled: bool = True
+    read: bool = True
+    delete: bool = False
+    update: bool = False
+    create: bool = False
 
 
 class StaffCreate(BaseModel):
@@ -75,6 +79,27 @@ class StaffPermissionResponse(StaffPermissionWrite):
     id: int
     login_user_id: int
     name: str | None = None
+
+
+class StaffPermissionUpdate(BaseModel):
+    """Send at least one flag. Omitted flags keep their saved values."""
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [{"read": True}]})
+    read: bool = Field(default=True, strict=True)
+    delete: bool = Field(default=False, strict=True)
+    update: bool = Field(default=False, strict=True)
+    create: bool = Field(default=False, strict=True)
+
+    @model_validator(mode="after")
+    def require_action(self):
+        if not self.model_fields_set:
+            raise ValueError("Provide at least one permission flag")
+        return self
+
+
+class StaffPermissionResult(BaseModel):
+    status: str = "success"
+    message: str
+    data: StaffPermissionResponse
 
 
 class StaffInfoResponse(BaseModel):
