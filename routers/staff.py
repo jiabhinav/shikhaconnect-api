@@ -281,7 +281,7 @@ def staff_id_for_user(db: Session, school_id: int, user_id: int) -> int:
 def update_staff_status(school_id: int, user_id: int, payload: StaffStatusUpdate,
                         db: Session = Depends(staff_school),
                         current_user: User = Depends(get_current_user)):
-    """Set staff status by login_user.id; DeActive disables the login account."""
+    """Set staff status by login_user.id; Deactive disables the login account."""
     staff_id_for_user(db, school_id, user_id)
     new_status = UserStatus.ACTIVE if payload.status == "Active" else UserStatus.INACTIVE
     if user_id == current_user.login_user_id and new_status == UserStatus.INACTIVE:

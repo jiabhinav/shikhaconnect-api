@@ -58,7 +58,7 @@ class StaffStatusTests(unittest.TestCase):
     def test_deactive_list_tracks_status_changes(self):
         url = '/schools/staff/deactive?school_id=1'
         self.assertEqual(self.client.get(url).json()['data'], [])
-        for status, expected in [('DeActive', [self.staff.id]), ('Active', [])]:
+        for status, expected in [('Deactive', [self.staff.id]), ('Active', [])]:
             response = self.client.patch(self.url, params=self.params, json={'status': status})
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual([item['id'] for item in self.client.get(url).json()['data']], expected)
@@ -66,7 +66,7 @@ class StaffStatusTests(unittest.TestCase):
     def test_status_changes_persist_and_control_authentication(self):
         credentials = HTTPAuthorizationCredentials(
             scheme='Bearer', credentials=account_token(self.staff))
-        for requested, stored in [('DeActive', UserStatus.INACTIVE),
+        for requested, stored in [('Deactive', UserStatus.INACTIVE),
                                   ('Active', UserStatus.ACTIVE)]:
             response = self.client.patch(self.url, params=self.params,
                                          json={'status': requested})
@@ -90,7 +90,7 @@ class StaffStatusTests(unittest.TestCase):
             response = self.client.patch(self.url, params=self.params, json=payload)
             self.assertEqual(response.status_code, 422, response.text)
         for params in (dict(self.params, school_id=2), dict(self.params, user_id=999)):
-            response = self.client.patch(self.url, params=params, json={'status': 'DeActive'})
+            response = self.client.patch(self.url, params=params, json={'status': 'Deactive'})
             self.assertEqual(response.status_code, 404, response.text)
         self.db.expire_all()
         self.assertEqual(self.staff.status, UserStatus.ACTIVE)
@@ -98,21 +98,21 @@ class StaffStatusTests(unittest.TestCase):
     def test_authenticated_roles_can_update_and_no_self_deactivation(self):
         for role in (UserRole.ADMIN, UserRole.SUB_ADMIN, 'Teacher'):
             self.user.role = role
-            response = self.client.patch(self.url, params=self.params, json={'status': 'DeActive'})
+            response = self.client.patch(self.url, params=self.params, json={'status': 'Deactive'})
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(self.staff.status, UserStatus.INACTIVE)
         response = self.client.patch(self.url, params=self.params, json={'status': 'Active'})
         self.assertEqual(response.status_code, 200, response.text)
         self.user.role = UserRole.SUPER_ADMIN
         self.user.login_user_id = self.staff.login_user_id
-        response = self.client.patch(self.url, params=self.params, json={'status': 'DeActive'})
+        response = self.client.patch(self.url, params=self.params, json={'status': 'Deactive'})
         self.assertEqual(response.status_code, 400, response.text)
         self.db.expire_all()
         self.assertEqual(self.staff.status, UserStatus.ACTIVE)
 
     def test_status_update_requires_authentication(self):
         del self.client.app.dependency_overrides[get_current_user]
-        response = self.client.patch(self.url, params=self.params, json={'status': 'DeActive'})
+        response = self.client.patch(self.url, params=self.params, json={'status': 'Deactive'})
         self.assertIn(response.status_code, (401, 403))
         self.db.expire_all()
         self.assertEqual(self.staff.status, UserStatus.ACTIVE)
