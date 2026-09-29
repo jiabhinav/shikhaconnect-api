@@ -50,11 +50,12 @@ def staff_school(school_id: int, db: Session = Depends(get_db_session),
 
 
 def validate_references(db, school_id, payload):
-    category = db.query(CasteCategory.id).filter_by(
-        id=payload.staff_info.caste_category_id, school_id=school_id
-    ).first()
-    if category is None:
-        raise HTTPException(404, "caste_category_id does not exist in this school")
+    if payload.staff_info.caste_category_id is not None:
+        category = db.query(CasteCategory.id).filter_by(
+            id=payload.staff_info.caste_category_id, school_id=school_id
+        ).first()
+        if category is None:
+            raise HTTPException(404, "caste_category_id does not exist in this school")
     staff_module_ids = {permission.staff_module_id for permission in payload.permissions}
     if not staff_module_ids:
         return

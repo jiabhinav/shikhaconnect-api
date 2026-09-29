@@ -23,7 +23,7 @@ class StaffInfo(FormSection):
     nationality: str = Field(min_length=1, max_length=100)
     aadhaar_number: str | None = Field(default=None, max_length=20)
     religion: str | None = Field(default=None, max_length=100)
-    caste_category_id: int = Field(gt=0)
+    caste_category_id: int | None = Field(default=None, gt=0)
     qualification: str | None = Field(default=None, max_length=255)
     joining_date: date | None = None
     biometric_code: str | None = Field(default=None, max_length=100)
