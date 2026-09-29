@@ -1,10 +1,12 @@
 from datetime import date
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 from schemas.student import FormSection
 from models.staff import StaffRole
+from models.user import UserStatus
 
 
 class StaffInfo(FormSection):
@@ -101,6 +103,7 @@ class StaffInfoResponse(BaseModel):
     salary: Decimal | None = None
     blood_group: str | None = None
     role: str
+    status: UserStatus
     gender: str | None = None
     feedback: str | None = None
 
@@ -147,3 +150,19 @@ class StaffListResult(BaseModel):
     status: str = "success"
     message: str
     data: list[StaffResponse]
+
+
+class StaffStatusUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["Active", "DeActive"]
+
+
+class StaffStatusData(BaseModel):
+    user_id: int
+    status: Literal["Active", "DeActive"]
+
+
+class StaffStatusResult(BaseModel):
+    status: str = "success"
+    message: str
+    data: StaffStatusData

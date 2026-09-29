@@ -8,9 +8,10 @@ from dependencies.db import get_db_session
 from models.caste_category import CasteCategory
 from models.school import School, SchoolPermission
 from models.staff import Staff, StaffAddress, StaffPermission
-from models.user import LoginUser, User, UserRole
+from models.user import LoginUser, User, UserRole, UserStatus
 from utils.passwords import hash_password
-from schemas.staff import StaffCreate, StaffListResult, StaffResult
+from schemas.staff import StaffCreate, StaffListResult, StaffResult, StaffStatusUpdate, StaffStatusResult
+from routers.users import _require_super_admin, _set_login_user_status
 from database.module_names import get_staff_module_names
 
 router = APIRouter()
@@ -139,13 +140,24 @@ def create_staff(school_id: int, payload: StaffCreate, db: Session = Depends(sta
 @router.get("/school/{school_id}/staff", response_model=StaffListResult)
 def list_staff(school_id: int, offset: int = Query(0, ge=0),
                limit: int = Query(50, ge=1, le=200), db: Session = Depends(staff_school)):
+    return staff_list_result(db, school_id, offset, limit)
+
+
+@router.get("/staff/deactive", response_model=StaffListResult)
+def list_deactive_staff(school_id: int, offset: int = Query(0, ge=0),
+                        limit: int = Query(50, ge=1, le=200), db: Session = Depends(staff_school)):
+    return staff_list_result(db, school_id, offset, limit, UserStatus.INACTIVE)
+
+
+def staff_list_result(db: Session, school_id: int, offset: int, limit: int,
+                      account_status: UserStatus | None = None):
     # Include legacy role spellings accepted by the account model as well.
     admin_roles = [
         "Super Admin", "Admin", "Sub Admin",
         "SUPER_ADMIN", "ADMIN", "SUB_ADMIN",
         "SuperAdmin", "SubAdmin",
     ]
-    items = (
+    query = (
         db.query(Staff)
         .select_from(LoginUser)
         .join(Staff, Staff.login_user_id == LoginUser.id)
@@ -154,8 +166,10 @@ def list_staff(school_id: int, offset: int = Query(0, ge=0),
             contains_eager(Staff.login_user).selectinload(LoginUser.permissions),
         )
         .filter(Staff.school_id == school_id, LoginUser.role.notin_(admin_roles))
-        .order_by(Staff.id).offset(offset).limit(limit).all()
     )
+    if account_status is not None:
+        query = query.filter(LoginUser.status == account_status)
+    items = query.order_by(Staff.id).offset(offset).limit(limit).all()
     # Populate permission names
     all_module_ids = [p.staff_module_id for item in items for p in item.permissions]
     names = get_staff_module_names(db, all_module_ids)
@@ -232,6 +246,7 @@ def update_staff(school_id: int, staff_id: int, payload: StaffCreate, db: Sessio
 
 
 @router.delete("/school/{school_id}/staff/{staff_id}", include_in_schema=False)
+
 @router.delete("/staff/{staff_id}", include_in_schema=False)
 def delete_staff(school_id: int, staff_id: int, db: Session = Depends(staff_school)):
     item = db.query(Staff).filter_by(id=staff_id, school_id=school_id).first()
@@ -261,6 +276,19 @@ def staff_id_for_user(db: Session, school_id: int, user_id: int) -> int:
     if item is None:
         raise HTTPException(404, "Staff profile not found for this user in this school")
     return item.id
+
+
+@router.patch("/staff/status", response_model=StaffStatusResult)
+def update_staff_status(school_id: int, user_id: int, payload: StaffStatusUpdate,
+                        db: Session = Depends(staff_school),
+                        current_user: User = Depends(get_current_user)):
+    """Set staff status by login_user.id; DeActive disables the login account."""
+    _require_super_admin(current_user)
+    staff_id_for_user(db, school_id, user_id)
+    new_status = UserStatus.ACTIVE if payload.status == "Active" else UserStatus.INACTIVE
+    result = _set_login_user_status(user_id, new_status, db, current_user)
+    return {"message": result["message"],
+            "data": {"user_id": user_id, "status": payload.status}}
 
 
 @router.put("/staff", response_model=StaffResult)
