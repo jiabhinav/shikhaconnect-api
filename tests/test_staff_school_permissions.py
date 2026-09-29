@@ -25,6 +25,32 @@ class StaffSchoolPermissionTests(unittest.TestCase):
 
     tearDown = test_staff.StaffTests.tearDown
 
+    def test_optional_category_create_and_update(self):
+        for index, value in enumerate(('omitted', None, '')):
+            payload = deepcopy(self.payload)
+            payload['staff_info'].update(email=f'optional{index}@example.com',
+                                         mobile_number=f'900000000{index}')
+            if value == 'omitted':
+                payload['staff_info'].pop('caste_category_id')
+            else:
+                payload['staff_info']['caste_category_id'] = value
+            response = self.client.post(self.create_url, json=payload)
+            self.assertEqual(response.status_code, 201, response.text)
+            item = response.json()['data']
+            self.assertIsNone(item['staff_info']['caste_category_id'])
+            response = self.client.put('/schools/staff',
+                                       params={'school_id': 1, 'user_id': item['login_user_id']},
+                                       json=payload)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertIsNone(response.json()['data']['staff_info']['caste_category_id'])
+
+    def test_supplied_category_must_belong_to_school(self):
+        for category_id in (2, 999):
+            payload = deepcopy(self.payload)
+            payload['staff_info']['caste_category_id'] = category_id
+            response = self.client.post(self.create_url, json=payload)
+            self.assertEqual(response.status_code, 404, response.text)
+
     def test_create_read_update_without_staff_modules_table(self):
         response = self.client.post(self.create_url, json=self.payload)
         self.assertEqual(response.status_code, 201, response.text)
