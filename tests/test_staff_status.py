@@ -95,14 +95,24 @@ class StaffStatusTests(unittest.TestCase):
         self.db.expire_all()
         self.assertEqual(self.staff.status, UserStatus.ACTIVE)
 
-    def test_only_super_admin_and_no_self_deactivation(self):
+    def test_authenticated_roles_can_update_and_no_self_deactivation(self):
         for role in (UserRole.ADMIN, UserRole.SUB_ADMIN, 'Teacher'):
             self.user.role = role
             response = self.client.patch(self.url, params=self.params, json={'status': 'DeActive'})
-            self.assertEqual(response.status_code, 403, response.text)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(self.staff.status, UserStatus.INACTIVE)
+        response = self.client.patch(self.url, params=self.params, json={'status': 'Active'})
+        self.assertEqual(response.status_code, 200, response.text)
         self.user.role = UserRole.SUPER_ADMIN
         self.user.login_user_id = self.staff.login_user_id
         response = self.client.patch(self.url, params=self.params, json={'status': 'DeActive'})
         self.assertEqual(response.status_code, 400, response.text)
+        self.db.expire_all()
+        self.assertEqual(self.staff.status, UserStatus.ACTIVE)
+
+    def test_status_update_requires_authentication(self):
+        del self.client.app.dependency_overrides[get_current_user]
+        response = self.client.patch(self.url, params=self.params, json={'status': 'DeActive'})
+        self.assertIn(response.status_code, (401, 403))
         self.db.expire_all()
         self.assertEqual(self.staff.status, UserStatus.ACTIVE)

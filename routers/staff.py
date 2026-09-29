@@ -11,7 +11,6 @@ from models.staff import Staff, StaffAddress, StaffPermission
 from models.user import LoginUser, User, UserRole, UserStatus
 from utils.passwords import hash_password
 from schemas.staff import StaffCreate, StaffListResult, StaffResult, StaffStatusUpdate, StaffStatusResult
-from routers.users import _require_super_admin, _set_login_user_status
 from database.module_names import get_staff_module_names
 
 router = APIRouter()
@@ -283,11 +282,21 @@ def update_staff_status(school_id: int, user_id: int, payload: StaffStatusUpdate
                         db: Session = Depends(staff_school),
                         current_user: User = Depends(get_current_user)):
     """Set staff status by login_user.id; DeActive disables the login account."""
-    _require_super_admin(current_user)
     staff_id_for_user(db, school_id, user_id)
     new_status = UserStatus.ACTIVE if payload.status == "Active" else UserStatus.INACTIVE
-    result = _set_login_user_status(user_id, new_status, db, current_user)
-    return {"message": result["message"],
+    if user_id == current_user.login_user_id and new_status == UserStatus.INACTIVE:
+        raise HTTPException(400, "You cannot disable your own account")
+    account = db.get(LoginUser, user_id)
+    account.status = new_status
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise staff_constraint_error(exc) from exc
+    except Exception:
+        db.rollback()
+        raise
+    return {"message": f"Staff {'enabled' if new_status == UserStatus.ACTIVE else 'disabled'} successfully",
             "data": {"user_id": user_id, "status": payload.status}}
 
 
