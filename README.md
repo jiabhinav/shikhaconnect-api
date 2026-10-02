@@ -425,11 +425,11 @@ category, and caste category. References must belong to the URL's school.
 Referenced records cannot be deleted while used by students (RESTRICT).
 Assigned Admins/Sub Admins and Super Admins can use these Schools endpoints:
 
-- `POST /schools/school/{school_id}/students`: create (201).
-- `GET /schools/school/{school_id}/students`: list, with `offset=0&limit=50`
+- `POST /schools/{school_id}/students`: create (201).
+- `GET /schools/{school_id}/students`: list, with `offset=0&limit=50`
   (maximum limit 200).
-- `GET /schools/school/{school_id}/students/{student_id}`: load all fields for editing.
-- `PUT /schools/school/{school_id}/students/{student_id}`: replace the complete form.
+- `GET /schools/{school_id}/students/{student_id}`: load all fields for editing.
+- `PUT /schools/{school_id}/students/{student_id}`: replace the complete form.
 
 Send a JSON object with three required sections: `student_info`, `parent_info`, and `address`. Only the screenshot's starred
 fields are required. Minimum example (replace reference IDs with your school's):
@@ -675,3 +675,124 @@ School responses (including login schools and users' assigned schools) expose
 `current_session_id`. Pass that value as `{session_id}` in the catalog/settings
 URLs. It is `null` when no session covers today's date. Overlapping current
 sessions use the latest start date, then the highest session ID.
+
+
+### Student login and addresses
+
+Student POST/PUT requests accept `student_info`, `parent_info`,
+`present_address`, and `permanent_address`:
+
+```json
+{
+  "present_address": {
+    "line_1": "House 12", "line_2": null, "city": "Delhi",
+    "district": "New Delhi", "state": "Delhi", "country": "India",
+    "pin_code": "110001"
+  },
+  "permanent_address": {
+    "line_1": "House 34", "line_2": null, "city": "Delhi",
+    "district": "New Delhi", "state": "Delhi", "country": "India",
+    "pin_code": "110002"
+  }
+}
+```
+
+Include the existing required `student_info` and `parent_info` sections alongside
+these fields. Both addresses are required. Requests and responses expose only
+`present_address` and `permanent_address`; the old `address` field is no longer accepted.
+Address types are assigned automatically from the field names.
+
+New students receive a `student_login` record and two `student_addresses` rows
+in the same transaction. Admission numbers use the school's prefix + increasing
+integer + suffix, starting at `start_admission_no`. Numbers are unique per school
+and remain unchanged on student edits. PostgreSQL school row locks serialize
+concurrent allocations. Startup table initialization creates the new tables.
+Existing students acquire login/address records when updated; reads fall back to
+their legacy address until then.
+
+Login mobile follows `student_info.mobile_number`. The mobile number is also the
+password, stored as a hash and never returned. Changing the mobile number updates
+the password to match. Requests do not accept `login`, `password`, or student
+`status`. The backend sets new students to `active`; normal updates preserve
+existing status. Status is included in responses under `student_info`.
+This adds account storage; it does not add a student authentication endpoint.
+
+Student create/update requests require `student_info.section_id` (positive integer)
+and `student_info.apar_id` (nonblank string, up to 100 characters). Section must
+belong to the selected school and session. APAR ID is saved in `students`.
+First name, mobile number, date of birth, gender, nationality, caste category,
+fee category, and class remain required. Existing records may return null for
+section/APAR ID until updated; startup adds the section column automatically.
+
+In `parent_info`, `father_contact_no` and `father_aadhaar_no` are optional;
+omitted, null, or blank values are saved as null. `mother_name` remains required
+and must be nonblank. Startup relaxes the existing PostgreSQL column constraints.
+
+`pin_code` is optional in both student addresses. Omitted, null, or blank values
+are saved as null. Startup updates the existing PostgreSQL PIN-code constraints.
+
+Only Super Admin can change an existing admission number using
+`PATCH /schools/{school_id}/students/{student_id}/admission-number`
+with `{"admission_number": "ADM-123-S"}`. School-side roles receive HTTP 403.
+Duplicate numbers within a school receive HTTP 409. Regular student updates
+preserve admission numbers; creation continues to generate them automatically,
+skipping numbers reserved by manual edits.
+
+`student_info.roll_number` is optional (string, up to 50 characters).
+Omitted, null, and blank values are stored as null. Leading zeros are preserved.
+Startup adds the nullable `students.roll_number` column to existing databases.
+
+Admission storage: `students` owns `admission_number`, `admission_sequence`, and
+`status`. These values are returned under `student_info`. `students.login_id`
+references `student_login.id`; `student_login` contains `id`, `school_id`,
+`mobile` and `password`, with no `student_id` column. APAR ID belongs to `students`. Startup migrates
+existing PostgreSQL values and links before removing the old columns. Older
+students without logins retain null admission fields until updated.
+
+Students with the same mobile number in the same school share one `student_login`
+record. Each child retains separate admission details, APAR ID, and addresses.
+Changing a child's mobile links that child to the matching login or creates one;
+it does not change siblings' credentials. Deleting a student preserves the shared
+login. Startup consolidates existing duplicate school/mobile logins, preserves
+per-child APAR IDs, and retains the oldest login and its password hash.
+
+
+### Student edit form and dropdowns
+
+- Load a student: `GET /schools/{school_id}/students/{student_id}`.
+- Update a student: `PUT /schools/{school_id}/students/{student_id}` with the complete
+  `student_info`, `parent_info`, `present_address`, and `permanent_address` sections.
+  Omit response-only admission fields, status, and login from the request.
+- Load dropdowns: `GET /schools/{school_id}/students/dropdowns` returns all school
+  `caste_categories`, `fee_categories`, `classes`, and `sections` in `data`.
+  Each option includes `id`, `name`, and `session_id`; classes also include `class_order`.
+  Add `?session_id=123` to limit all lists to the selected session. Use this filter
+  when editing a student so the options match their `student_info.session_id`.
+  A school with no options returns empty lists. Foreign or missing sessions return 404.
+
+
+### Student mutation URLs (query parameters)
+
+- Create: `POST /schools/students?school_id=21`
+- Update complete form: `PUT /schools/students?school_id=21&student_id=32`
+- Delete: `DELETE /schools/students?school_id=21&student_id=32` (204 on success).
+- Edit admission number (Super Admin):
+  `PATCH /schools/students/admission-number?school_id=21&student_id=32`.
+
+Use `school_id` (not `schoool_id`). Create assigns the student ID automatically.
+Delete removes the student and their addresses, preserving shared parent logins.
+Previous POST/PUT/PATCH paths remain available for compatibility but are hidden
+from Swagger. Student GET and dropdown URLs remain as documented above.
+
+
+### Active student list and activation
+
+`GET /schools/students?school_id=21` returns only active students. Optional
+`offset` and `limit` apply after the active filter. The previous list URL remains
+available for compatibility and also returns active students only.
+
+`PATCH /schools/students/status?school_id=21&student_id=32` accepts
+`{"status":"inactive"}` to disable a student or `{"status":"active"}` to enable
+them. This changes only the selected student, preserving shared parent logins
+and sibling status. Disabled students remain available through the detail API
+and can be reactivated. Create and ordinary update payloads still exclude status.

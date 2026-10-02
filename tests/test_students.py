@@ -15,17 +15,20 @@ class StudentTests(unittest.TestCase):
         data={k:'Test' for k,v in {**StudentInfo.model_fields, **ParentInfo.model_fields, **StudentAddress.model_fields}.items() if v.is_required()}
         data.update(email='student@example.com',date_of_birth='2015-01-01',mobile_number='123456', father_contact_no='123456',father_aadhaar_no='123456789012',pin_code='123456')
         data['session_id']=self.client.post(base+'/sessions',json=self.payload).json()['data']['id']
-        for field, route in [('caste_category_id','caste_categories'),('fee_category_id','fee_categories'),('class_id','classes')]:
+        for field, route in [('caste_category_id','caste_categories'),('fee_category_id','fee_categories'),('class_id','classes'),('section_id','sections')]:
             data[field]=self.client.post(f"{base}/sessions/{data['session_id']}/{route}",json={'name':'Test'}).json()['data']['id']
         return data
 
     def test_required_only_create_edit_update(self):
         payload=self.student_payload()
-        url='/schools/school/1/students'
+        url='/schools/1/students'
         response=self.client.post(url,json=nest(payload))
         self.assertEqual(response.status_code,201,response.text)
         item=response.json()['data']
         self.assertIsNone(item['parent_info']['guardian_email'])
+        self.assertNotIn('address', item)
+        self.assertNotIn('address_type', item['present_address'])
+        self.assertNotIn('address_type', item['permanent_address'])
         item_url=f"{url}/{item['id']}"
         self.assertEqual(self.client.get(item_url).json()['data'],item)
         response=self.client.put(item_url,json=nest(dict(payload,first_name='Edited',guardian_email='',mother_contact_no='')))
@@ -37,25 +40,329 @@ class StudentTests(unittest.TestCase):
 
     def test_required_and_reference_validation(self):
         payload=self.student_payload()
-        url='/schools/school/1/students'
+        url='/schools/1/students'
         for key,field in {**StudentInfo.model_fields, **ParentInfo.model_fields, **StudentAddress.model_fields}.items():
             if field.is_required():
                 missing=dict(payload)
                 del missing[key]
                 self.assertEqual(self.client.post(url,json=nest(missing)).status_code,422,key)
-        for field in ('class_id','session_id','fee_category_id','caste_category_id'):
+        for field in ('class_id','section_id','session_id','fee_category_id','caste_category_id'):
             self.assertEqual(self.client.post(url,json=nest(dict(payload,**{field:99999}))).status_code,404)
         other_session=self.client.post('/schools/school/2/sessions',json=self.payload).json()['data']['id']
         foreign=self.client.post(f'/schools/school/2/sessions/{other_session}/classes',json={'name':'Other'}).json()['data']['id']
         self.assertEqual(self.client.post(url,json=nest(dict(payload,class_id=foreign))).status_code,404)
         self.assertEqual(self.client.post(url,json=nest(dict(payload,email='bad'))).status_code,422)
 
+    def test_login_sequence_and_two_addresses(self):
+        from models.school import School
+        from models.student import StudentLogin, StudentAddressRecord
+        from utils.passwords import verify_password
+        school = self.db.get(School, 1)
+        school.admission_prefix = "ADM-"
+        school.admission_suffix = "-S"
+        school.start_admission_no = 100
+        self.db.commit()
+        payload = nest(self.student_payload())
+        address = payload["present_address"]
+        payload.update(present_address=dict(address, district="Present district"),
+                       permanent_address=dict(address, city="Permanent city"))
+        url = '/schools/1/students'
+        first = self.client.post(url, json=payload)
+        self.assertEqual(first.status_code, 201, first.text)
+        data = first.json()['data']
+        self.assertEqual(data['student_info']['admission_number'], 'ADM-100-S')
+        self.assertNotIn('password', data['login'])
+        self.assertEqual(data['student_info']['section_id'], payload['student_info']['section_id'])
+        self.assertEqual(data['student_info']['apar_id'], payload['student_info']['apar_id'])
+        self.assertEqual(data['present_address']['district'], 'Present district')
+        self.assertEqual(data['permanent_address']['city'], 'Permanent city')
+        account = self.db.get(Student, data['id']).login
+        self.assertTrue(verify_password(payload['student_info']['mobile_number'], account.password))
+        self.assertEqual(self.db.query(StudentAddressRecord).count(), 2)
+        second = self.client.post(url, json=payload)
+        self.assertEqual(second.json()['data']['student_info']['admission_number'], 'ADM-101-S')
+        payload['student_info']['mobile_number'] = '9999999999'
+        edited = self.client.put(f"{url}/{data['id']}", json=payload)
+        self.assertEqual(edited.status_code, 200, edited.text)
+        self.assertEqual(edited.json()['data']['student_info']['admission_number'], 'ADM-100-S')
+        self.assertEqual(edited.json()['data']['login']['mobile'], '9999999999')
+        self.assertEqual(self.db.query(StudentAddressRecord).count(), 4)
+        self.assertTrue(verify_password(payload['student_info']['mobile_number'], self.db.get(Student, data['id']).login.password))
+        del payload['permanent_address']
+        self.assertEqual(self.client.post(url, json=payload).status_code, 422)
+
+    def test_failed_save_rolls_back_login_and_addresses(self):
+        from unittest.mock import patch
+        from sqlalchemy.exc import IntegrityError
+        from models.student import StudentLogin, StudentAddressRecord
+        payload = nest(self.student_payload())
+        with patch.object(self.db, 'commit', side_effect=IntegrityError('insert', {}, Exception('failure'))):
+            response = self.client.post('/schools/1/students', json=payload)
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.db.query(Student).count(), 0)
+        self.assertEqual(self.db.query(StudentLogin).count(), 0)
+        self.assertEqual(self.db.query(StudentAddressRecord).count(), 0)
+        response = self.client.post('/schools/1/students', json=payload)
+        self.assertEqual(response.json()['data']['student_info']['admission_number'], '1')
+
+    def test_section_scope_and_required_apar(self):
+        payload = nest(self.student_payload())
+        url = '/schools/1/students'
+        for value in ('', '   ', None):
+            invalid = {**payload, 'student_info': {**payload['student_info'], 'apar_id': value}}
+            self.assertEqual(self.client.post(url, json=invalid).status_code, 422)
+        other_session = self.client.post('/schools/school/2/sessions', json=self.payload).json()['data']['id']
+        section = self.client.post(f'/schools/school/2/sessions/{other_session}/sections', json={'name': 'Other'}).json()['data']['id']
+        payload['student_info']['section_id'] = section
+        self.assertEqual(self.client.post(url, json=payload).status_code, 404)
+
+    def test_section_migration_is_repeatable(self):
+        from sqlalchemy import create_engine, inspect, text
+        from database.student_table import migrate_student_section
+        engine = create_engine('sqlite://')
+        try:
+            with engine.begin() as connection:
+                connection.execute(text('CREATE TABLE sections (id INTEGER PRIMARY KEY)'))
+                connection.execute(text('CREATE TABLE students (id INTEGER PRIMARY KEY)'))
+                connection.execute(text('INSERT INTO students (id) VALUES (1)'))
+                migrate_student_section(connection)
+                migrate_student_section(connection)
+                self.assertIn('section_id', {c['name'] for c in inspect(connection).get_columns('students')})
+                self.assertEqual(connection.execute(text('SELECT id, section_id FROM students')).all(), [(1, None)])
+        finally:
+            engine.dispose()
+
+    def test_optional_father_fields_and_required_mother_name(self):
+        payload = nest(self.student_payload())
+        url = '/schools/1/students'
+        for field in ('father_contact_no', 'father_aadhaar_no'):
+            payload['parent_info'].pop(field)
+        response = self.client.post(url, json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        item = response.json()['data']
+        for field in ('father_contact_no', 'father_aadhaar_no'):
+            self.assertIsNone(item['parent_info'][field])
+        for value in (None, '', '   '):
+            payload['parent_info'].update(father_contact_no=value, father_aadhaar_no=value)
+            response = self.client.put(f"{url}/{item['id']}", json=payload)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertIsNone(response.json()['data']['parent_info']['father_contact_no'])
+            self.assertIsNone(response.json()['data']['parent_info']['father_aadhaar_no'])
+        for value in (None, '', '   '):
+            payload['parent_info']['mother_name'] = value
+            self.assertEqual(self.client.post(url, json=payload).status_code, 422)
+        del payload['parent_info']['mother_name']
+        self.assertEqual(self.client.post(url, json=payload).status_code, 422)
+
+    def test_optional_address_pin_codes(self):
+        payload = nest(self.student_payload())
+        url = '/schools/1/students'
+        for kind in ('present_address', 'permanent_address'):
+            payload[kind].pop('pin_code')
+        response = self.client.post(url, json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        item = response.json()['data']
+        for kind in ('present_address', 'permanent_address'):
+            self.assertIsNone(item[kind]['pin_code'])
+        for value in (None, '', '   ', '001234'):
+            for kind in ('present_address', 'permanent_address'):
+                payload[kind]['pin_code'] = value
+            response = self.client.put(f"{url}/{item['id']}", json=payload)
+            self.assertEqual(response.status_code, 200, response.text)
+            for kind in ('present_address', 'permanent_address'):
+                self.assertEqual(response.json()['data'][kind]['pin_code'], '001234' if value == '001234' else None)
+
+    def test_admission_edit_requires_super_admin(self):
+        payload = nest(self.student_payload())
+        url = '/schools/1/students'
+        item = self.client.post(url, json=payload).json()['data']
+        edit_url = f"{url}/{item['id']}/admission-number"
+        for role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
+            self.user.role = role
+            self.assertEqual(self.client.patch(edit_url, json={'admission_number': '2'}).status_code, 403)
+        self.user.role = UserRole.SUPER_ADMIN
+        self.assertEqual(self.client.get(f"{url}/{item['id']}").json()['data']['student_info']['admission_number'], '1')
+        edited = self.client.patch(edit_url, json={'admission_number': '2'})
+        self.assertEqual(edited.status_code, 200, edited.text)
+        self.assertEqual(edited.json()['data']['student_info']['admission_number'], '2')
+        next_item = self.client.post(url, json=payload).json()['data']
+        self.assertEqual(next_item['student_info']['admission_number'], '3')
+        self.assertEqual(self.client.patch(edit_url, json={'admission_number': '3'}).status_code, 409)
+        self.assertEqual(self.client.patch(edit_url, json={'admission_number': '   '}).status_code, 422)
+        normal_update = self.client.put(f"{url}/{item['id']}", json=payload)
+        self.assertEqual(normal_update.json()['data']['student_info']['admission_number'], '2')
+
+    def test_optional_roll_number(self):
+        payload = nest(self.student_payload())
+        url = '/schools/1/students'
+        response = self.client.post(url, json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        item = response.json()['data']
+        self.assertIsNone(item['student_info']['roll_number'])
+        for value in ('001A', None, '', '   '):
+            payload['student_info']['roll_number'] = value
+            response = self.client.put(f"{url}/{item['id']}", json=payload)
+            self.assertEqual(response.status_code, 200, response.text)
+            expected = '001A' if value == '001A' else None
+            self.assertEqual(response.json()['data']['student_info']['roll_number'], expected)
+            self.assertEqual(self.client.get(f"{url}/{item['id']}").json()['data']['student_info']['roll_number'], expected)
+
+    def test_roll_number_migration_is_repeatable(self):
+        from sqlalchemy import create_engine, text
+        from database.student_table import migrate_student_roll_number
+        engine = create_engine('sqlite://')
+        try:
+            with engine.begin() as connection:
+                connection.execute(text('CREATE TABLE students (id INTEGER PRIMARY KEY)'))
+                connection.execute(text('INSERT INTO students (id) VALUES (1)'))
+                migrate_student_roll_number(connection)
+                migrate_student_roll_number(connection)
+                self.assertEqual(connection.execute(text('SELECT id, roll_number FROM students')).all(), [(1, None)])
+        finally:
+            engine.dispose()
+
+    def test_student_owns_admission_and_status(self):
+        from models.student import StudentLogin
+        payload = nest(self.student_payload())
+        response = self.client.post('/schools/1/students', json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        data = response.json()['data']
+        student = self.db.get(Student, data['id'])
+        self.assertEqual(student.status, 'active')
+        self.assertEqual(student.admission_sequence, 1)
+        self.assertEqual(student.login_id, student.login.id)
+        self.assertEqual(data['student_info']['status'], 'active')
+        self.assertEqual(data['student_info']['admission_sequence'], 1)
+        for field in ('student_id', 'admission_number', 'admission_sequence', 'status'):
+            self.assertNotIn(field, StudentLogin.__table__.columns)
+            self.assertNotIn(field, data['login'])
+        self.db.delete(student)
+        self.db.commit()
+        self.assertEqual(self.db.query(StudentLogin).count(), 1)
+
+    def test_password_and_status_are_backend_managed(self):
+        from schemas.student import StudentWrite
+        payload = nest(self.student_payload())
+        schema = StudentWrite.model_json_schema()
+        self.assertNotIn('login', schema['properties'])
+        self.assertNotIn('status', schema['$defs']['StudentInfo']['properties'])
+        url = '/schools/1/students'
+        self.assertEqual(self.client.post(url, json={**payload, 'login': {'password': 'custom-password'}}).status_code, 422)
+        payload['student_info']['status'] = 'inactive'
+        self.assertEqual(self.client.post(url, json=payload).status_code, 422)
+        del payload['student_info']['status']
+        response = self.client.post(url, json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        student = self.db.get(Student, response.json()['data']['id'])
+        student.status = 'inactive'
+        self.db.commit()
+        password_hash = student.login.password
+        response = self.client.put(f"{url}/{student.id}", json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['student_info']['status'], 'inactive')
+        self.assertEqual(student.login.password, password_hash)
+
+    def test_siblings_share_login_and_keep_separate_apar(self):
+        from models.student import StudentLogin
+        payload = nest(self.student_payload())
+        url = '/schools/1/students'
+        first = self.client.post(url, json=payload).json()['data']
+        payload['student_info']['apar_id'] = 'SECOND-CHILD'
+        response = self.client.post(url, json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        second = response.json()['data']
+        self.assertEqual(first['login']['id'], second['login']['id'])
+        self.assertEqual(self.db.query(StudentLogin).count(), 1)
+        self.assertNotEqual(first['student_info']['admission_number'], second['student_info']['admission_number'])
+        self.assertEqual(self.client.get(f"{url}/{first['id']}").json()['data']['student_info']['apar_id'], first['student_info']['apar_id'])
+        payload['student_info']['mobile_number'] = '8888888888'
+        response = self.client.put(f"{url}/{second['id']}", json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotEqual(first['login']['id'], response.json()['data']['login']['id'])
+        self.assertEqual(self.client.get(f"{url}/{first['id']}").json()['data']['login']['mobile'], first['login']['mobile'])
+
+    def test_dropdown_school_and_session_filters(self):
+        payload = self.student_payload()
+        from models.class_section import Section
+        self.db.add(Section(school_id=2, session_id=None, name='Other school'))
+        self.db.add(Section(school_id=1, session_id=None, name='Legacy section'))
+        self.db.commit()
+        url = '/schools/1/students/dropdowns'
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()['data']
+        for key in ('caste_categories', 'fee_categories', 'classes', 'sections'):
+            self.assertTrue(data[key])
+        self.assertEqual({row['name'] for row in data['sections']}, {'Test', 'Legacy section'})
+        response = self.client.get(url, params={'session_id': payload['session_id']})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['sections'], [
+            {'id': payload['section_id'], 'name': 'Test', 'session_id': payload['session_id']}])
+        self.assertEqual(self.client.get(url, params={'session_id': 99999}).status_code, 404)
+        self.assertEqual(self.client.get(url, params={'session_id': 0}).status_code, 422)
+        self.assertEqual(self.client.get('/schools/99999/students/dropdowns').status_code, 404)
+        other = self.client.post('/schools/school/2/sessions', json=self.payload).json()['data']['id']
+        self.assertEqual(self.client.get(url, params={'session_id': other}).status_code, 404)
+
+    def test_query_parameter_mutations(self):
+        from models.student import StudentLogin, StudentAddressRecord
+        payload = nest(self.student_payload())
+        url = '/schools/students'
+        self.assertEqual(self.client.post(url, json=payload).status_code, 422)
+        response = self.client.post(url, params={'school_id': 1}, json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        student_id = response.json()['data']['id']
+        params = {'school_id': 1, 'student_id': student_id}
+        payload['student_info']['first_name'] = 'Updated'
+        response = self.client.put(url, params=params, json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['student_info']['first_name'], 'Updated')
+        response = self.client.patch(url + '/admission-number', params=params, json={'admission_number': 'MANUAL-10'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['student_info']['admission_number'], 'MANUAL-10')
+        sibling = self.client.post(url, params={'school_id': 1}, json=payload).json()['data']
+        self.assertEqual(self.client.delete(url, params={'school_id': 2, 'student_id': student_id}).status_code, 404)
+        self.assertEqual(self.client.delete(url, params={'school_id': 1}).status_code, 422)
+        self.assertEqual(self.client.delete(url, params=params).status_code, 204)
+        self.assertIsNone(self.db.get(Student, student_id))
+        self.assertEqual(self.db.query(StudentAddressRecord).filter_by(student_id=student_id).count(), 0)
+        self.assertIsNotNone(self.db.get(Student, sibling['id']).login)
+        self.assertEqual(self.db.query(StudentLogin).count(), 1)
+        self.assertEqual(self.client.delete(url, params=params).status_code, 404)
+        paths = self.client.app.openapi()['paths']
+        for path, method in ((url, 'post'), (url, 'put'), (url, 'delete'), (url + '/admission-number', 'patch')):
+            parameters = paths[path][method]['parameters']
+            self.assertTrue(all(p['in'] == 'query' for p in parameters))
+
+    def test_active_list_and_student_status(self):
+        payload = nest(self.student_payload())
+        url = '/schools/students'
+        first = self.client.post(url, params={'school_id': 1}, json=payload).json()['data']
+        second = self.client.post(url, params={'school_id': 1}, json=payload).json()['data']
+        params = {'school_id': 1, 'student_id': first['id']}
+        response = self.client.patch(url + '/status', params=params, json={'status': 'inactive'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['student_info']['status'], 'inactive')
+        active = self.client.get(url, params={'school_id': 1, 'limit': 1}).json()['data']
+        self.assertEqual([row['id'] for row in active], [second['id']])
+        self.assertEqual(self.client.get(url, params={'school_id': 1, 'offset': 1}).json()['data'], [])
+        self.assertEqual(self.db.get(Student, second['id']).status, 'active')
+        self.assertEqual(self.db.get(Student, first['id']).login_id, self.db.get(Student, second['id']).login_id)
+        response = self.client.patch(url + '/status', params=params, json={'status': 'active'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(self.client.get(url, params={'school_id': 1}).json()['data']), 2)
+        for status in ('disabled', '', None):
+            self.assertEqual(self.client.patch(url + '/status', params=params, json={'status': status}).status_code, 422)
+        self.assertEqual(self.client.patch(url + '/status', params={**params, 'school_id': 2}, json={'status': 'inactive'}).status_code, 404)
+        self.assertEqual(self.client.patch(url + '/status', params={'school_id': 1}, json={'status': 'inactive'}).status_code, 422)
+        self.assertEqual(self.client.get(url).status_code, 422)
+
     def test_access_and_auto_creation(self):
         payload=self.student_payload()
         Student.__table__.drop(self.engine)
         with self.engine.begin() as c:
             ensure_all_tables(c)
-        url='/schools/school/1/students'
+        url='/schools/1/students'
         for role in (UserRole.ADMIN,UserRole.SUB_ADMIN):
             self.user.role=role
             self.assertEqual(self.client.post(url,json=nest(payload)).status_code,403)
@@ -63,4 +370,4 @@ class StudentTests(unittest.TestCase):
 
 def nest(payload):
     return {name: {key: value for key, value in payload.items() if key in schema.model_fields}
-            for name, schema in (("student_info", StudentInfo), ("parent_info", ParentInfo), ("address", StudentAddress))}
+            for name, schema in (("student_info", StudentInfo), ("parent_info", ParentInfo), ("present_address", StudentAddress), ("permanent_address", StudentAddress))}

@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
@@ -19,6 +20,9 @@ class StudentInfo(FormSection):
     fee_category_id: int = Field(gt=0)
     session_id: int = Field(gt=0)
     class_id: int = Field(gt=0)
+    section_id: int = Field(gt=0)
+    roll_number: str | None = Field(default=None, max_length=50)
+    apar_id: str = Field(min_length=1, max_length=100)
     first_name: str = Field(min_length=1, max_length=255)
     last_name: str = Field(min_length=1, max_length=255)
     mobile_number: str = Field(min_length=1, max_length=20)
@@ -34,8 +38,8 @@ class StudentInfo(FormSection):
 
 class ParentInfo(FormSection):
     father_name: str = Field(min_length=1, max_length=255)
-    father_contact_no: str = Field(min_length=1, max_length=20)
-    father_aadhaar_no: str = Field(min_length=1, max_length=20)
+    father_contact_no: str | None = Field(default=None, max_length=20)
+    father_aadhaar_no: str | None = Field(default=None, max_length=20)
     mother_name: str = Field(min_length=1, max_length=255)
     father_secondary_number: str | None = Field(default=None, max_length=20)
     father_qualification: str | None = Field(default=None, max_length=255)
@@ -56,38 +60,72 @@ class ParentInfo(FormSection):
 
 
 class StudentAddress(FormSection):
+    district: str | None = Field(default=None, max_length=255)
     line_1: str = Field(min_length=1, max_length=500)
     city: str = Field(min_length=1, max_length=255)
     country: str = Field(min_length=1, max_length=100)
     state: str = Field(min_length=1, max_length=255)
-    pin_code: str = Field(min_length=1, max_length=20)
+    pin_code: str | None = Field(default=None, max_length=20)
     line_2: str | None = Field(default=None, max_length=500)
-    address_type: str | None = Field(default=None, max_length=100)
+
+
+class StudentStatusUpdate(FormSection):
+    status: Literal["active", "inactive"]
+
+
+class StudentAdmissionUpdate(FormSection):
+    admission_number: str = Field(min_length=1, max_length=150)
+
+
+class StudentLoginResponse(FormSection):
+    id: int
+    mobile: str
+    school_id: int
 
 
 class StudentWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
     student_info: StudentInfo
     parent_info: ParentInfo
-    address: StudentAddress
+    present_address: StudentAddress
+    permanent_address: StudentAddress
 
     def student_values(self):
-        return {key: value for section in (self.student_info, self.parent_info, self.address)
-                for key, value in section.model_dump().items()}
+        address = self.present_address
+        return {**self.student_info.model_dump(), **self.parent_info.model_dump(),
+                **address.model_dump(exclude={"district"})}
 
 
-class StudentResponse(StudentWrite):
+class StudentInfoResponse(StudentInfo):
+    status: Literal["active", "inactive"]
+    admission_number: str | None = None
+    admission_sequence: int | None = None
+    # Older records may not have these details until they are updated.
+    section_id: int | None = None
+    apar_id: str | None = None
+
+
+class StudentResponse(BaseModel):
     id: int
     school_id: int
+    student_info: StudentInfoResponse
+    parent_info: ParentInfo
+    present_address: StudentAddress
+    permanent_address: StudentAddress
+    login: StudentLoginResponse | None
 
     @model_validator(mode="before")
     @classmethod
     def from_student(cls, value):
         if not isinstance(value, dict):
+            addresses = {a.address_type: StudentAddress.model_validate(a) for a in value.addresses}
+            legacy = StudentAddress.model_validate(value)
             return {"id": value.id, "school_id": value.school_id,
-                    "student_info": StudentInfo.model_validate(value),
+                    "student_info": StudentInfoResponse.model_validate(value),
                     "parent_info": ParentInfo.model_validate(value),
-                    "address": StudentAddress.model_validate(value)}
+                    "present_address": addresses.get("present", legacy),
+                    "permanent_address": addresses.get("permanent", legacy),
+                    "login": value.login}
         return value
 
 
@@ -101,3 +139,29 @@ class StudentListResult(BaseModel):
     status: str = "success"
     message: str
     data: list[StudentResponse]
+
+
+class StudentDropdownOption(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    session_id: int | None
+
+
+class StudentClassOption(StudentDropdownOption):
+    class_order: int
+
+
+class StudentDropdownData(BaseModel):
+    school_id: int
+    session_id: int | None
+    caste_categories: list[StudentDropdownOption]
+    fee_categories: list[StudentDropdownOption]
+    classes: list[StudentClassOption]
+    sections: list[StudentDropdownOption]
+
+
+class StudentDropdownResult(BaseModel):
+    status: str = "success"
+    message: str
+    data: StudentDropdownData
