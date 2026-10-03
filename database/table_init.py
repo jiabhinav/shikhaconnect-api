@@ -10,6 +10,7 @@ from database.database import Base
 from database.user_address_table import migrate_user_addresses
 from database.staff_account_table import migrate_user_accounts, migrate_staff_profiles, migrate_account_status
 from database.school_permissions_table import allow_legacy_service_name_null
+from database.school_status_table import ensure_school_status
 from database.session_table import remove_legacy_session_year_index
 from database.staff_permission_table import rename_staff_module_id, add_staff_permission_actions
 from database.school_mapping_table import migrate_school_mapping_accounts
@@ -72,6 +73,7 @@ def remove_user_school_name(connection):
 
 def ensure_all_tables(connection):
     register_models()
+    ensure_school_status(connection)
     migrate_user_accounts(connection)
     remove_user_school_name(connection)
     rename_staff_module_id(connection)

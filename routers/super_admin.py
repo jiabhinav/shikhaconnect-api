@@ -17,7 +17,7 @@ from models.school import School, SchoolPermission
 from models.school_assets import SchoolAssets
 from models.session import Session as SchoolSession
 from models.user import User, UserRole
-from schemas.school import SchoolCreate, SchoolUpdate
+from schemas.school import SchoolCreate, SchoolUpdate, SchoolStatusUpdate
 from schemas.school_assets import SchoolAssetsResponse
 from schemas.session import SessionResponse
 from routers.modules import router as module_router
@@ -227,12 +227,15 @@ def _integrity_error_detail(exc: IntegrityError, school_info) -> dict:
 
 @router.get("/school", status_code=status.HTTP_200_OK)
 def get_schools(
+    status: bool | None = None,
     db: Session = Depends(get_db_session),
     current_user: User = Depends(get_current_user),
 ):
     query = db.query(School)
     if _role_value(current_user) != UserRole.SUPER_ADMIN.value:
         raise HTTPException(status_code=403, detail="Only Super Admin can access schools")
+    if status is not None:
+        query = query.filter(School.status == status)
     schools = query.all()
     return {
         "status": "success",
@@ -372,6 +375,31 @@ def update_school(
         "status": "success",
         "message": "School updated successfully",
         "data": _school_payload(school, db),
+    }
+
+
+@router.patch("/school/status", status_code=status.HTTP_200_OK)
+def update_school_status(
+    school_id: int,
+    payload: SchoolStatusUpdate,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    _require_super_admin(current_user)
+    school = db.get(School, school_id)
+    if school is None:
+        raise HTTPException(status_code=404, detail="School not found")
+    try:
+        school.status = payload.status
+        db.commit()
+        db.refresh(school)
+    except Exception:
+        db.rollback()
+        raise
+    return {
+        "status": "success",
+        "message": "School activated successfully" if school.status else "School deactivated successfully",
+        "data": {"id": school.id, "status": school.status},
     }
 
 

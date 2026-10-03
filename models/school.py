@@ -8,6 +8,7 @@ class School(Base):
     __tablename__ = "schools"
 
     id = Column(Integer, primary_key=True, index=True)
+    status = Column(Boolean, nullable=False, default=True, server_default="true")
     school_name = Column(String(255), nullable=False)
     branch_name = Column(String(255), nullable=False)
     school_code = Column(String(100), unique=True, nullable=True, index=True)
