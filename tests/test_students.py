@@ -63,6 +63,7 @@ class StudentTests(unittest.TestCase):
         school.start_admission_no = 100
         self.db.commit()
         payload = nest(self.student_payload())
+        payload['student_info']['apar_id'] = 'APAR-1'
         address = payload["present_address"]
         payload.update(present_address=dict(address, district="Present district"),
                        permanent_address=dict(address, city="Permanent city"))
@@ -105,16 +106,55 @@ class StudentTests(unittest.TestCase):
         response = self.client.post('/schools/1/students', json=payload)
         self.assertEqual(response.json()['data']['student_info']['admission_number'], '1')
 
-    def test_section_scope_and_required_apar(self):
+    def test_section_scope(self):
         payload = nest(self.student_payload())
         url = '/schools/1/students'
-        for value in ('', '   ', None):
-            invalid = {**payload, 'student_info': {**payload['student_info'], 'apar_id': value}}
-            self.assertEqual(self.client.post(url, json=invalid).status_code, 422)
         other_session = self.client.post('/schools/school/2/sessions', json=self.payload).json()['data']['id']
         section = self.client.post(f'/schools/school/2/sessions/{other_session}/sections', json={'name': 'Other'}).json()['data']['id']
         payload['student_info']['section_id'] = section
         self.assertEqual(self.client.post(url, json=payload).status_code, 404)
+
+    def test_optional_last_name_and_apar_id(self):
+        payload = nest(self.student_payload())
+        url = '/schools/1/students'
+        for fields in ({}, {'last_name': None, 'apar_id': None},
+                       {'last_name': '', 'apar_id': '   '}):
+            info = {k: v for k, v in payload['student_info'].items()
+                    if k not in ('last_name', 'apar_id')} | fields
+            response = self.client.post(url, json=payload | {'student_info': info})
+            self.assertEqual(response.status_code, 201, response.text)
+            student_id = response.json()['data']['id']
+            for field in ('last_name', 'apar_id'):
+                self.assertIsNone(response.json()['data']['student_info'][field])
+                self.assertIsNone(getattr(self.db.get(Student, student_id), field))
+            fetched = self.client.get(f'{url}/{student_id}')
+            self.assertEqual(fetched.status_code, 200, fetched.text)
+
+    def test_optional_emails(self):
+        payload = nest(self.student_payload())
+        url = '/schools/1/students'
+        for fields in ({}, {'email': None, 'guardian_email': None},
+                       {'email': '', 'guardian_email': '   '}):
+            info = {k: v for k, v in payload['student_info'].items() if k != 'email'}
+            parent = {k: v for k, v in payload['parent_info'].items() if k != 'guardian_email'}
+            if 'email' in fields:
+                info['email'] = fields['email']
+                parent['guardian_email'] = fields['guardian_email']
+            body = payload | {'student_info': info, 'parent_info': parent}
+            response = self.client.post(url, json=body)
+            self.assertEqual(response.status_code, 201, response.text)
+            student_id = response.json()['data']['id']
+            self.assertIsNone(response.json()['data']['student_info']['email'])
+            self.assertIsNone(response.json()['data']['parent_info']['guardian_email'])
+            self.assertIsNone(self.db.get(Student, student_id).email)
+            fetched = self.client.get(f'{url}/{student_id}')
+            self.assertEqual(fetched.status_code, 200, fetched.text)
+            updated = self.client.put(f'{url}/{student_id}', json=body)
+            self.assertEqual(updated.status_code, 200, updated.text)
+            self.assertIsNone(updated.json()['data']['student_info']['email'])
+        for section, field in (('student_info', 'email'), ('parent_info', 'guardian_email')):
+            invalid = payload | {section: payload[section] | {field: 'invalid-email'}}
+            self.assertEqual(self.client.post(url, json=invalid).status_code, 422)
 
     def test_section_migration_is_repeatable(self):
         from sqlalchemy import create_engine, inspect, text

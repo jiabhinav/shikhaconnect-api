@@ -30,6 +30,9 @@ class SessionTests(unittest.TestCase):
                       for c in School.__table__.columns if not c.nullable and c.name != "id"}
             self.db.add(School(id=school_id, **values))
         self.db.add(User(id=1, first_name="Test", last_name="Admin", email="test@example.com", mobile="12345"))
+        for school in self.db.new:
+            if isinstance(school, School):
+                school.status = True
         self.db.commit()
         self.user = SimpleNamespace(id=1, role=UserRole.SUPER_ADMIN)
         app = FastAPI()

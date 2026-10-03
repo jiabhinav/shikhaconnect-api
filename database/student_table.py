@@ -2,6 +2,23 @@
 from sqlalchemy import inspect, text
 
 
+def migrate_optional_student_identity_fields(connection):
+    """Allow absent last names, APAR IDs, and emails on existing student tables."""
+    if not inspect(connection).has_table("students"):
+        return
+    columns = {column["name"]: column for column in inspect(connection).get_columns("students")}
+    fields = [field for field in ("last_name", "apar_id", "email", "guardian_email")
+              if field in columns and not columns[field]["nullable"]]
+    if not fields:
+        return
+    if connection.dialect.name != "postgresql":
+        from sqlalchemy.exc import SQLAlchemyError
+        raise SQLAlchemyError("Existing student identity-field migration requires PostgreSQL")
+    connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    for field in fields:
+        connection.execute(text(f"ALTER TABLE students ALTER COLUMN {field} DROP NOT NULL"))
+
+
 def migrate_student_section(connection):
     if not inspect(connection).has_table("students"):
         return
