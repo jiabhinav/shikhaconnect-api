@@ -15,7 +15,7 @@ from models.school_mapping import SchoolMapping, SchoolMappingStatus
 from models.session import Session as SchoolSession
 from models.user import LoginUser, User, UserRole, UserStatus
 from models.staff import Staff
-from schemas.user import LoginStaffPermission, LoginSchool, UserCreate, UserLogin, UserLoginResponse, UserRegisterResponse
+from schemas.user import LoginSchoolPermission, LoginStaffPermission, LoginSchool, UserCreate, UserLogin, UserLoginResponse, UserRegisterResponse
 from schemas.session import SessionResponse
 from schemas.user import PasswordResetRequest, PasswordResetResponse
 
@@ -156,10 +156,17 @@ def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
                     "permissions": staff_permissions,
                 })
             else:
-                school_data = LoginSchool.model_validate(school)
-                school_data.permissions.sort(key=lambda permission: permission.id)
-                for permission in school_data.permissions:
-                    permission.name = module_names.get(permission.module_id)
+                # School permissions grant all actions when the module is enabled.
+                school_data = LoginSchool.model_validate({
+                    **{field: getattr(school, field) for field in LoginSchool.model_fields
+                       if field not in {"permissions", "sessions", "school_logo", "current_session_id"}},
+                    "permissions": [LoginSchoolPermission(
+                        id=p.id, school_id=p.school_id, module_id=p.module_id,
+                        name=module_names.get(p.module_id), is_enabled=p.is_enabled,
+                        read=p.is_enabled, delete=p.is_enabled,
+                        update=p.is_enabled, create=p.is_enabled,
+                    ) for p in sorted(school.permissions, key=lambda permission: permission.id)],
+                })
             school_data.current_session_id = session_ids[school.id]
             school_data.school_logo = logo
             school_data.sessions = sessions_by_school[school.id]

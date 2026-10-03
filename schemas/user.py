@@ -147,6 +147,10 @@ class LoginSchoolPermission(BaseModel):
     module_id: int
     name: Optional[str] = None
     is_enabled: bool
+    read: bool
+    delete: bool
+    update: bool
+    create: bool
 
     model_config = {"from_attributes": True}
 

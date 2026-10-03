@@ -111,13 +111,16 @@ class LoginTests(unittest.TestCase):
         schools = response.json()["data"]["schools"]
         self.assertEqual(len(schools), 1)
         self.assertEqual(schools[0]["permissions"], [
-            {"id": 1, "school_id": 1, "module_id": 10, "name": "Students", "is_enabled": True},
-            {"id": 2, "school_id": 1, "module_id": 20, "name": None, "is_enabled": False},
+            {"id": 1, "school_id": 1, "module_id": 10, "name": "Students", "is_enabled": True,
+             "read": True, "delete": True, "update": True, "create": True},
+            {"id": 2, "school_id": 1, "module_id": 20, "name": None, "is_enabled": False,
+             "read": False, "delete": False, "update": False, "create": False},
         ])
         self.assign(2)
         schools = self.login().json()["data"]["schools"]
         self.assertEqual(schools[1]["permissions"], [
-            {"id": 3, "school_id": 2, "module_id": 10, "name": "Students", "is_enabled": True},
+            {"id": 3, "school_id": 2, "module_id": 10, "name": "Students", "is_enabled": True,
+             "read": True, "delete": True, "update": True, "create": True},
         ])
 
     def test_sessions_come_from_sessions_table_and_match_school(self):
