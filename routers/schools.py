@@ -1,5 +1,6 @@
 from utils.dates import today as get_today
 from utils.school_sessions import current_session_ids
+from utils.school_deletion import delete_school_data
 
 import logging
 import re
@@ -512,7 +513,7 @@ def delete_school(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="School not found")
 
     try:
-        db.delete(school)
+        delete_school_data(db, school)
         db.commit()
     except Exception:
         db.rollback()
