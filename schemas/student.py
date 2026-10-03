@@ -1,6 +1,6 @@
 from datetime import date
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StrictBool, field_validator, model_validator
 
 
 class FormSection(BaseModel):
@@ -70,7 +70,7 @@ class StudentAddress(FormSection):
 
 
 class StudentStatusUpdate(FormSection):
-    status: Literal["active", "inactive"]
+    status: StrictBool
 
 
 class StudentAdmissionUpdate(FormSection):

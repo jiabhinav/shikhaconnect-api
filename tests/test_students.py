@@ -300,6 +300,21 @@ class StudentTests(unittest.TestCase):
         response = self.client.put(f"{url}/{student.id}", json=payload)
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()['data']['student_info']['status'], 'inactive')
+        session_id = payload['student_info']['session_id']
+        filtered = {'school_id': 1, 'session_id': session_id, 'status': False}
+        inactive = self.client.get(url, params=filtered)
+        self.assertEqual(inactive.status_code, 200, inactive.text)
+        self.assertEqual([row['id'] for row in inactive.json()['data']], [first['id']])
+        other_session = self.client.post('/schools/school/1/sessions', json={
+            'name': 'Other', 'start_date': '2030-04-01', 'end_date': '2031-03-31'}).json()['data']['id']
+        self.assertEqual(self.client.get(url, params=filtered | {'session_id': other_session}).json()['data'], [])
+        self.assertEqual(self.client.patch(url + '/status', params=params | {'session_id': other_session},
+                                          json={'status': True}).status_code, 404)
+        self.assertEqual(self.client.get(url, params=filtered | {'session_id': 99999}).status_code, 404)
+        self.assertEqual(self.client.get(url, params=filtered | {'session_id': 0}).status_code, 422)
+        self.assertEqual(self.client.get(url, params=filtered | {'status': 'invalid'}).status_code, 422)
+        self.assertEqual(self.client.patch(url + '/status', params={'school_id': 1, 'student_id': first['id']},
+                                          json={'status': False}).status_code, 422)
         self.assertEqual(student.login.password, password_hash)
 
     def test_siblings_share_login_and_keep_separate_apar(self):
@@ -379,8 +394,8 @@ class StudentTests(unittest.TestCase):
         url = '/schools/students'
         first = self.client.post(url, params={'school_id': 1}, json=payload).json()['data']
         second = self.client.post(url, params={'school_id': 1}, json=payload).json()['data']
-        params = {'school_id': 1, 'student_id': first['id']}
-        response = self.client.patch(url + '/status', params=params, json={'status': 'inactive'})
+        params = {'school_id': 1, 'student_id': first['id'], 'session_id': payload['student_info']['session_id']}
+        response = self.client.patch(url + '/status', params=params, json={'status': False})
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()['data']['student_info']['status'], 'inactive')
         active = self.client.get(url, params={'school_id': 1, 'limit': 1}).json()['data']
@@ -388,13 +403,13 @@ class StudentTests(unittest.TestCase):
         self.assertEqual(self.client.get(url, params={'school_id': 1, 'offset': 1}).json()['data'], [])
         self.assertEqual(self.db.get(Student, second['id']).status, 'active')
         self.assertEqual(self.db.get(Student, first['id']).login_id, self.db.get(Student, second['id']).login_id)
-        response = self.client.patch(url + '/status', params=params, json={'status': 'active'})
+        response = self.client.patch(url + '/status', params=params, json={'status': True})
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(len(self.client.get(url, params={'school_id': 1}).json()['data']), 2)
-        for status in ('disabled', '', None):
+        for status in ('active', 'inactive', 'false', '', None, 0):
             self.assertEqual(self.client.patch(url + '/status', params=params, json={'status': status}).status_code, 422)
-        self.assertEqual(self.client.patch(url + '/status', params={**params, 'school_id': 2}, json={'status': 'inactive'}).status_code, 404)
-        self.assertEqual(self.client.patch(url + '/status', params={'school_id': 1}, json={'status': 'inactive'}).status_code, 422)
+        self.assertEqual(self.client.patch(url + '/status', params={**params, 'school_id': 2}, json={'status': False}).status_code, 404)
+        self.assertEqual(self.client.patch(url + '/status', params={'school_id': 1}, json={'status': False}).status_code, 422)
         self.assertEqual(self.client.get(url).status_code, 422)
 
     def test_access_and_auto_creation(self):

@@ -60,9 +60,16 @@ def create_student(school_id: int, payload: StudentWrite, db: Session = Depends(
 
 @router.get("/{school_id}/students", response_model=StudentListResult, include_in_schema=False)
 @router.get("/students", response_model=StudentListResult)
-def list_students(school_id: int, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200), db: Session = Depends(student_school)):
-    return {"message": "Students fetched successfully", "data": db.query(Student).filter_by(
-        school_id=school_id, status="active").order_by(Student.id).offset(offset).limit(limit).all()}
+def list_students(school_id: int, session_id: int | None = Query(None, gt=0),
+                  status: bool = True, offset: int = Query(0, ge=0),
+                  limit: int = Query(50, ge=1, le=200), db: Session = Depends(student_school)):
+    from dependencies.school_session import require_school_session
+    query = db.query(Student).filter_by(school_id=school_id, status="active" if status else "inactive")
+    if session_id is not None:
+        require_school_session(db, school_id, session_id)
+        query = query.filter(Student.session_id == session_id)
+    return {"message": "Students fetched successfully",
+            "data": query.order_by(Student.id).offset(offset).limit(limit).all()}
 
 
 @router.get("/{school_id}/students/dropdowns", response_model=StudentDropdownResult)
@@ -133,10 +140,15 @@ def update_admission_number(school_id: int, student_id: int, payload: StudentAdm
 
 @router.patch("/students/status", response_model=StudentResult)
 def update_student_status(school_id: int, student_id: int, payload: StudentStatusUpdate,
+                          session_id: int = Query(..., gt=0),
                           db: Session = Depends(student_school)):
     item = find_student(db, school_id, student_id)
-    item.status = payload.status
-    action = "activated" if payload.status == "active" else "deactivated"
+    from dependencies.school_session import require_school_session
+    require_school_session(db, school_id, session_id)
+    if item.session_id != session_id:
+        raise HTTPException(404, "Student not found in this session")
+    item.status = "active" if payload.status else "inactive"
+    action = "activated" if payload.status else "deactivated"
     return save_student(db, item, f"Student {action} successfully")
 
 
