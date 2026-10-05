@@ -720,7 +720,7 @@ This adds account storage; it does not add a student authentication endpoint.
 Student create/update requests require `student_info.section_id` (positive integer)
 and `student_info.apar_id` (nonblank string, up to 100 characters). Section must
 belong to the selected school and session. APAR ID is saved in `students`.
-First name, mobile number, date of birth, gender, nationality, caste category,
+First name, mobile number, gender, nationality, caste category,
 fee category, and class remain required. Existing records may return null for
 section/APAR ID until updated; startup adds the section column automatically.
 
@@ -809,3 +809,12 @@ It is stored in `previous_schools`, with foreign keys `student_id` and current
 `school_id` assigned by the backend. Responses also return its ID and foreign
 keys. PUT replaces this section; omit it or send null to clear it.
 Startup creates the new table and adds nullable form columns to existing tables.
+
+Student `parent_info` accepts optional `father_date_of_birth` and `mother_date_of_birth` in
+`YYYY-MM-DD` format. Omitted, null, or blank values are stored as null.
+The shorter input names `father_dob` and `mother_dob` remain supported; responses
+use `father_date_of_birth` and `mother_date_of_birth`.
+
+Student `student_info.date_of_birth` is optional: omit it or send null/blank
+to leave it unset. Provided dates must use `YYYY-MM-DD`. Startup removes the
+existing PostgreSQL NOT NULL constraint on this column.

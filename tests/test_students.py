@@ -54,8 +54,63 @@ class StudentTests(unittest.TestCase):
             connection.execute(text('CREATE TABLE student_addresses (id INTEGER PRIMARY KEY)'))
             migrate_student_form_fields(connection)
             migrate_student_form_fields(connection)
-            self.assertEqual(connection.execute(text('SELECT id, weight_kg, house_id FROM students')).all(), [(1, None, None)])
+            self.assertEqual(connection.execute(text('SELECT id, weight_kg, house_id, father_dob, mother_dob FROM students')).all(), [(1, None, None, None, None)])
         engine.dispose()
+
+    def test_optional_student_dob(self):
+        payload = nest(self.student_payload())
+        url = '/schools/1/students'
+        del payload['student_info']['date_of_birth']
+        response = self.client.post(url, json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        student_id = response.json()['data']['id']
+        self.assertIsNone(response.json()['data']['student_info']['date_of_birth'])
+        for value in (None, '', '   ', '2015-08-31'):
+            payload['student_info']['date_of_birth'] = value
+            response = self.client.put(f'{url}/{student_id}', json=payload)
+            self.assertEqual(response.status_code, 200, response.text)
+            expected = value if value == '2015-08-31' else None
+            self.assertEqual(response.json()['data']['student_info']['date_of_birth'], expected)
+            fetched = self.client.get(f'{url}/{student_id}').json()['data']
+            self.assertEqual(fetched['student_info']['date_of_birth'], expected)
+        payload['student_info']['date_of_birth'] = 'invalid-date'
+        self.assertEqual(self.client.put(f'{url}/{student_id}', json=payload).status_code, 422)
+
+    def test_parent_full_dob_field_names(self):
+        from schemas.student import StudentWrite
+        payload = nest(self.student_payload())
+        payload['parent_info'].update(father_date_of_birth='', mother_date_of_birth='')
+        parsed = StudentWrite.model_validate(payload)
+        self.assertIsNone(parsed.parent_info.father_dob)
+        self.assertIsNone(parsed.parent_info.mother_dob)
+        payload['parent_info'].update(father_date_of_birth='1985-03-15', mother_date_of_birth='1988-07-20')
+        response = self.client.post('/schools/1/students', json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        data = response.json()['data']
+        self.assertEqual(data['parent_info']['father_date_of_birth'], '1985-03-15')
+        self.assertEqual(data['parent_info']['mother_date_of_birth'], '1988-07-20')
+        student = self.db.get(Student, data['id'])
+        self.assertEqual(student.father_dob.isoformat(), '1985-03-15')
+        self.assertEqual(student.mother_dob.isoformat(), '1988-07-20')
+
+    def test_parent_dates_of_birth(self):
+        payload = nest(self.student_payload())
+        payload['parent_info'].update(father_dob='1985-03-15', mother_dob='1988-07-20')
+        url = '/schools/1/students'
+        response = self.client.post(url, json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        data = response.json()['data']
+        student_id = data['id']
+        self.assertEqual(data['parent_info']['father_date_of_birth'], '1985-03-15')
+        self.assertEqual(data['parent_info']['mother_date_of_birth'], '1988-07-20')
+        self.assertEqual(self.client.get(f'{url}/{student_id}').json()['data']['parent_info'], data['parent_info'])
+        payload['parent_info'].update(father_dob='1986-03-15', mother_dob='')
+        response = self.client.put(f'{url}/{student_id}', json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['parent_info']['father_date_of_birth'], '1986-03-15')
+        self.assertIsNone(response.json()['data']['parent_info']['mother_date_of_birth'])
+        payload['parent_info']['father_dob'] = 'invalid-date'
+        self.assertEqual(self.client.put(f'{url}/{student_id}', json=payload).status_code, 422)
 
     def test_required_only_create_edit_update(self):
         payload=self.student_payload()

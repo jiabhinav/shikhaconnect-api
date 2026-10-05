@@ -3,11 +3,11 @@ from sqlalchemy import inspect, text
 
 
 def migrate_optional_student_identity_fields(connection):
-    """Allow absent last names, APAR IDs, and emails on existing student tables."""
+    """Allow absent optional identity details on existing student tables."""
     if not inspect(connection).has_table("students"):
         return
     columns = {column["name"]: column for column in inspect(connection).get_columns("students")}
-    fields = [field for field in ("last_name", "apar_id", "email", "guardian_email")
+    fields = [field for field in ("last_name", "apar_id", "email", "guardian_email", "date_of_birth")
               if field in columns and not columns[field]["nullable"]]
     if not fields:
         return
@@ -177,7 +177,7 @@ def migrate_student_form_fields(connection):
     """Add optional form columns while preserving existing records."""
     if connection.dialect.name == "postgresql":
         connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
-    additions = {"students": {'house_id': 'INTEGER REFERENCES houses(id) ON DELETE RESTRICT', 'student_type': 'VARCHAR(100)', 'admission_type': 'VARCHAR(100)', 'first_admission_class': 'VARCHAR(255)', 'abha_number': 'VARCHAR(100)', 'mode_of_transport': 'VARCHAR(100)', 'weight_kg': 'FLOAT', 'height_cm': 'FLOAT'}, "student_addresses": {"landline_number": "VARCHAR(20)"}}
+    additions = {"students": {'house_id': 'INTEGER REFERENCES houses(id) ON DELETE RESTRICT', 'student_type': 'VARCHAR(100)', 'admission_type': 'VARCHAR(100)', 'first_admission_class': 'VARCHAR(255)', 'abha_number': 'VARCHAR(100)', 'mode_of_transport': 'VARCHAR(100)', 'weight_kg': 'FLOAT', 'height_cm': 'FLOAT', 'father_dob': 'DATE', 'mother_dob': 'DATE'}, "student_addresses": {"landline_number": "VARCHAR(20)"}}
     for table, fields in additions.items():
         if not inspect(connection).has_table(table):
             continue

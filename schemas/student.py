@@ -1,6 +1,6 @@
 from datetime import date
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, StrictBool, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, StrictBool, field_validator, model_validator
 
 
 class FormSection(BaseModel):
@@ -15,7 +15,7 @@ class FormSection(BaseModel):
 
 
 class StudentInfo(FormSection):
-    date_of_birth: date
+    date_of_birth: date | None = None
     caste_category_id: int = Field(gt=0)
     fee_category_id: int = Field(gt=0)
     session_id: int = Field(gt=0)
@@ -45,6 +45,8 @@ class StudentInfo(FormSection):
 
 
 class ParentInfo(FormSection):
+    father_dob: date | None = Field(default=None, validation_alias=AliasChoices("father_date_of_birth", "father_dob"), serialization_alias="father_date_of_birth")
+    mother_dob: date | None = Field(default=None, validation_alias=AliasChoices("mother_date_of_birth", "mother_dob"), serialization_alias="mother_date_of_birth")
     father_name: str = Field(min_length=1, max_length=255)
     father_contact_no: str | None = Field(default=None, max_length=20)
     father_aadhaar_no: str | None = Field(default=None, max_length=20)
