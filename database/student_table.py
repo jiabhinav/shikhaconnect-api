@@ -171,3 +171,17 @@ def migrate_shared_student_logins(connection):
     """))
     if not any(c["column_names"] == ["school_id", "mobile"] for c in inspect(connection).get_unique_constraints("student_login")):
         connection.execute(text("ALTER TABLE student_login ADD CONSTRAINT uq_student_login_school_mobile UNIQUE (school_id, mobile)"))
+
+
+def migrate_student_form_fields(connection):
+    """Add optional form columns while preserving existing records."""
+    if connection.dialect.name == "postgresql":
+        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    additions = {"students": {'house_id': 'INTEGER REFERENCES houses(id) ON DELETE RESTRICT', 'student_type': 'VARCHAR(100)', 'admission_type': 'VARCHAR(100)', 'first_admission_class': 'VARCHAR(255)', 'abha_number': 'VARCHAR(100)', 'mode_of_transport': 'VARCHAR(100)', 'weight_kg': 'FLOAT', 'height_cm': 'FLOAT'}, "student_addresses": {"landline_number": "VARCHAR(20)"}}
+    for table, fields in additions.items():
+        if not inspect(connection).has_table(table):
+            continue
+        columns = {c["name"] for c in inspect(connection).get_columns(table)}
+        for name, definition in fields.items():
+            if name not in columns:
+                connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}"))

@@ -33,6 +33,14 @@ class StudentInfo(FormSection):
     blood_group: str | None = Field(default=None, max_length=10)
     religion: str | None = Field(default=None, max_length=100)
     aadhaar_number: str | None = Field(default=None, max_length=20)
+    house_id: int | None = Field(default=None, gt=0)
+    student_type: str | None = Field(default=None, max_length=100)
+    admission_type: str | None = Field(default=None, max_length=100)
+    first_admission_class: str | None = Field(default=None, max_length=255)
+    abha_number: str | None = Field(default=None, max_length=100)
+    mode_of_transport: str | None = Field(default=None, max_length=100)
+    weight_kg: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    height_cm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     permanent_education_no: str | None = Field(default=None, max_length=100)
 
 
@@ -59,7 +67,21 @@ class ParentInfo(FormSection):
     guardian_address: str | None = Field(default=None, max_length=1000)
 
 
+class PreviousSchoolInfo(FormSection):
+    school_name: str | None = Field(default=None, max_length=255)
+    address: str | None = Field(default=None, max_length=1000)
+    class_name: str | None = Field(default=None, max_length=255)
+    session: str | None = Field(default=None, max_length=100)
+
+
+class PreviousSchoolResponse(PreviousSchoolInfo):
+    id: int
+    student_id: int
+    school_id: int
+
+
 class StudentAddress(FormSection):
+    landline_number: str | None = Field(default=None, max_length=20)
     district: str | None = Field(default=None, max_length=255)
     line_1: str = Field(min_length=1, max_length=500)
     city: str = Field(min_length=1, max_length=255)
@@ -90,10 +112,12 @@ class StudentWrite(BaseModel):
     present_address: StudentAddress
     permanent_address: StudentAddress
 
+    previous_school: PreviousSchoolInfo | None = None
+
     def student_values(self):
         address = self.present_address
         return {**self.student_info.model_dump(), **self.parent_info.model_dump(),
-                **address.model_dump(exclude={"district"})}
+                **address.model_dump(exclude={"district", "landline_number"})}
 
 
 class StudentInfoResponse(StudentInfo):
@@ -112,6 +136,7 @@ class StudentResponse(BaseModel):
     parent_info: ParentInfo
     present_address: StudentAddress
     permanent_address: StudentAddress
+    previous_school: PreviousSchoolResponse | None = None
     login: StudentLoginResponse | None
 
     @model_validator(mode="before")
@@ -125,7 +150,7 @@ class StudentResponse(BaseModel):
                     "parent_info": ParentInfo.model_validate(value),
                     "present_address": addresses.get("present", legacy),
                     "permanent_address": addresses.get("permanent", legacy),
-                    "login": value.login}
+                    "login": value.login, "previous_school": value.previous_school}
         return value
 
 
@@ -159,6 +184,7 @@ class StudentDropdownData(BaseModel):
     fee_categories: list[StudentDropdownOption]
     classes: list[StudentClassOption]
     sections: list[StudentDropdownOption]
+    houses: list[StudentDropdownOption]
 
 
 class StudentDropdownResult(BaseModel):

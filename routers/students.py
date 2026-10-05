@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
 from models.school import School
-from models.student import Student, StudentLogin, StudentAddressRecord
+from models.student import Student, StudentLogin, StudentAddressRecord, PreviousSchool
 from models.user import User, UserRole
 from schemas.student import StudentWrite, StudentResult, StudentListResult, StudentAdmissionUpdate, StudentDropdownResult, StudentStatusUpdate
 
@@ -78,13 +78,14 @@ def student_dropdowns(school_id: int, session_id: int | None = Query(None, gt=0)
     from dependencies.school_session import require_school_session
     from models.caste_category import CasteCategory
     from models.fee_category import FeeCategory
+    from models.house import House
     from models.class_section import SchoolClass, Section
 
     if session_id is not None:
         require_school_session(db, school_id, session_id)
     data = {"school_id": school_id, "session_id": session_id}
     for key, model in (("caste_categories", CasteCategory), ("fee_categories", FeeCategory),
-                       ("classes", SchoolClass), ("sections", Section)):
+                       ("classes", SchoolClass), ("sections", Section), ("houses", House)):
         query = db.query(model).filter(model.school_id == school_id)
         if session_id is not None:
             query = query.filter(model.session_id == session_id)
@@ -180,6 +181,12 @@ def validate_student_references(db, school_id, payload):
         if query.first() is None:
             raise HTTPException(404, f"{field} does not exist in this school session")
 
+    if payload.student_info.house_id is not None:
+        from models.house import House
+        if db.query(House.id).filter_by(id=payload.student_info.house_id, school_id=school_id,
+                                       session_id=payload.student_info.session_id).first() is None:
+            raise HTTPException(404, "house_id does not exist in this school session")
+
 
 def update_student_details(db, school_id, item, payload):
     if item.admission_sequence is None:
@@ -216,3 +223,11 @@ def update_student_details(db, school_id, item, payload):
             item.addresses.append(record)
         for key, value in address.model_dump().items():
             setattr(record, key, value)
+
+    if payload.previous_school is None or not any(payload.previous_school.model_dump().values()):
+        item.previous_school = None
+    else:
+        if item.previous_school is None:
+            item.previous_school = PreviousSchool(school_id=school_id)
+        for key, value in payload.previous_school.model_dump().items():
+            setattr(item.previous_school, key, value)

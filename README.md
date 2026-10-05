@@ -796,3 +796,16 @@ available for compatibility and also returns active students only.
 them. This changes only the selected student, preserving shared parent logins
 and sibling status. Disabled students remain available through the detail API
 and can be reactivated. Create and ordinary update payloads still exclude status.
+
+
+Student forms also accept optional `house_id`, `student_type`, `admission_type`,
+`first_admission_class`, `abha_number`, `mode_of_transport`, `weight_kg`, and
+`height_cm` inside `student_info`. House IDs must belong to the current school
+and session. Both address sections accept `landline_number`.
+
+The optional top-level `previous_school` object accepts `school_name`, `address`,
+`class_name`, and `session` (text describing the previous school's session).
+It is stored in `previous_schools`, with foreign keys `student_id` and current
+`school_id` assigned by the backend. Responses also return its ID and foreign
+keys. PUT replaces this section; omit it or send null to clear it.
+Startup creates the new table and adds nullable form columns to existing tables.

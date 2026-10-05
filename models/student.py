@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Date, ForeignKey, Integer, String, UniqueConstraint, CheckConstraint
+from sqlalchemy import Column, Date, ForeignKey, Integer, Float, String, UniqueConstraint, CheckConstraint
 from database.database import Base
 from sqlalchemy.orm import relationship
 
@@ -63,6 +63,15 @@ class Student(Base):
     address_type = Column(String(100), nullable=True)
 
     apar_id = Column(String(100), nullable=True)
+    house_id = Column(Integer, ForeignKey("houses.id", ondelete="RESTRICT"), nullable=True)
+    student_type = Column(String(100), nullable=True)
+    admission_type = Column(String(100), nullable=True)
+    first_admission_class = Column(String(255), nullable=True)
+    abha_number = Column(String(100), nullable=True)
+    mode_of_transport = Column(String(100), nullable=True)
+    weight_kg = Column(Float, nullable=True)
+    height_cm = Column(Float, nullable=True)
+    previous_school = relationship("PreviousSchool", uselist=False, cascade="all, delete-orphan")
     login = relationship("StudentLogin", uselist=False)
     addresses = relationship("StudentAddressRecord", cascade="all, delete-orphan")
 
@@ -88,7 +97,19 @@ class StudentAddressRecord(Base):
     line_1 = Column(String(500), nullable=False)
     line_2 = Column(String(500), nullable=True)
     city = Column(String(255), nullable=False)
+    landline_number = Column(String(20), nullable=True)
     district = Column(String(255), nullable=True)
     state = Column(String(255), nullable=False)
     country = Column(String(100), nullable=False)
     pin_code = Column(String(20), nullable=True)
+
+
+class PreviousSchool(Base):
+    __tablename__ = "previous_schools"
+    id = Column(Integer, primary_key=True)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False, unique=True)
+    school_id = Column(Integer, ForeignKey("schools.id", ondelete="RESTRICT"), nullable=False, index=True)
+    school_name = Column(String(255), nullable=True)
+    address = Column(String(1000), nullable=True)
+    class_name = Column(String(255), nullable=True)
+    session = Column(String(100), nullable=True)

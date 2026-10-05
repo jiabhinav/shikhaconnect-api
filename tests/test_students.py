@@ -19,6 +19,44 @@ class StudentTests(unittest.TestCase):
             data[field]=self.client.post(f"{base}/sessions/{data['session_id']}/{route}",json={'name':'Test'}).json()['data']['id']
         return data
 
+    def test_previous_school_and_extra_form_fields(self):
+        from models.student import PreviousSchool
+        payload = nest(self.student_payload())
+        payload['student_info'].update(student_type='Day scholar', admission_type='New',
+            first_admission_class='Nursery', abha_number='123', mode_of_transport='Bus',
+            weight_kg=25.5, height_cm=120)
+        payload['present_address']['landline_number'] = '0123456789'
+        payload['previous_school'] = {'school_name': 'Old School', 'address': 'Old address',
+                                     'class_name': 'Nursery', 'session': '2025-2026'}
+        url = '/schools/1/students'
+        response = self.client.post(url, json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        data = response.json()['data']
+        self.assertEqual(data['previous_school']['student_id'], data['id'])
+        self.assertEqual(data['previous_school']['school_id'], 1)
+        self.assertEqual(data['student_info']['weight_kg'], 25.5)
+        self.assertEqual(data['present_address']['landline_number'], '0123456789')
+        payload['previous_school']['school_name'] = 'Updated School'
+        response = self.client.put(f"{url}/{data['id']}", json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['previous_school']['school_name'], 'Updated School')
+        self.assertEqual(self.db.query(PreviousSchool).count(), 1)
+        self.assertEqual(self.client.delete('/schools/students', params={'school_id': 1, 'student_id': data['id']}).status_code, 204)
+        self.assertEqual(self.db.query(PreviousSchool).count(), 0)
+
+    def test_form_field_migration_preserves_rows(self):
+        from sqlalchemy import create_engine, text
+        from database.student_table import migrate_student_form_fields
+        engine = create_engine('sqlite://')
+        with engine.begin() as connection:
+            connection.execute(text('CREATE TABLE students (id INTEGER PRIMARY KEY)'))
+            connection.execute(text('INSERT INTO students VALUES (1)'))
+            connection.execute(text('CREATE TABLE student_addresses (id INTEGER PRIMARY KEY)'))
+            migrate_student_form_fields(connection)
+            migrate_student_form_fields(connection)
+            self.assertEqual(connection.execute(text('SELECT id, weight_kg, house_id FROM students')).all(), [(1, None, None)])
+        engine.dispose()
+
     def test_required_only_create_edit_update(self):
         payload=self.student_payload()
         url='/schools/1/students'
@@ -339,6 +377,12 @@ class StudentTests(unittest.TestCase):
     def test_dropdown_school_and_session_filters(self):
         payload = self.student_payload()
         from models.class_section import Section
+        from models.house import House
+        self.db.add_all([
+            House(school_id=1, session_id=payload['session_id'], name='Blue'),
+            House(school_id=1, session_id=None, name='Legacy house'),
+            House(school_id=2, session_id=None, name='Other house'),
+        ])
         self.db.add(Section(school_id=2, session_id=None, name='Other school'))
         self.db.add(Section(school_id=1, session_id=None, name='Legacy section'))
         self.db.commit()
@@ -349,8 +393,11 @@ class StudentTests(unittest.TestCase):
         for key in ('caste_categories', 'fee_categories', 'classes', 'sections'):
             self.assertTrue(data[key])
         self.assertEqual({row['name'] for row in data['sections']}, {'Test', 'Legacy section'})
+        self.assertEqual({row['name'] for row in data['houses']}, {'Blue', 'Legacy house'})
         response = self.client.get(url, params={'session_id': payload['session_id']})
         self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([row['name'] for row in response.json()['data']['houses']], ['Blue'])
+        self.assertEqual(response.json()['data']['houses'][0]['session_id'], payload['session_id'])
         self.assertEqual(response.json()['data']['sections'], [
             {'id': payload['section_id'], 'name': 'Test', 'session_id': payload['session_id']}])
         self.assertEqual(self.client.get(url, params={'session_id': 99999}).status_code, 404)
