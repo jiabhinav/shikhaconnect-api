@@ -19,6 +19,34 @@ class StudentTests(unittest.TestCase):
             data[field]=self.client.post(f"{base}/sessions/{data['session_id']}/{route}",json={'name':'Test'}).json()['data']['id']
         return data
 
+    def test_admission_date_defaults_and_updates(self):
+        from datetime import date
+        payload = nest(self.student_payload())
+        url = '/schools/1/students'
+        for value in ('omitted', None, ''):
+            if value != 'omitted':
+                payload['student_info']['admission_date'] = value
+            response = self.client.post(url, json=payload)
+            self.assertEqual(response.status_code, 201, response.text)
+            self.assertEqual(response.json()['data']['student_info']['admission_date'], date.today().isoformat())
+        payload['student_info']['admission_date'] = '2024-07-15'
+        response = self.client.post(url, json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        item = response.json()['data']
+        self.assertEqual(item['student_info']['admission_date'], '2024-07-15')
+        del payload['student_info']['admission_date']
+        response = self.client.put(f"{url}/{item['id']}", json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['student_info']['admission_date'], '2024-07-15')
+        payload['student_info']['admission_date'] = '2024-08-01'
+        response = self.client.put(f"{url}/{item['id']}", json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['student_info']['admission_date'], '2024-08-01')
+        fetched = self.client.get(f"{url}/{item['id']}")
+        self.assertEqual(fetched.json()['data']['student_info']['admission_date'], '2024-08-01')
+        payload['student_info']['admission_date'] = 'invalid-date'
+        self.assertEqual(self.client.post(url, json=payload).status_code, 422)
+
     def test_previous_school_and_extra_form_fields(self):
         from models.student import PreviousSchool
         payload = nest(self.student_payload())
@@ -54,7 +82,7 @@ class StudentTests(unittest.TestCase):
             connection.execute(text('CREATE TABLE student_addresses (id INTEGER PRIMARY KEY)'))
             migrate_student_form_fields(connection)
             migrate_student_form_fields(connection)
-            self.assertEqual(connection.execute(text('SELECT id, weight_kg, house_id, father_dob, mother_dob FROM students')).all(), [(1, None, None, None, None)])
+            self.assertEqual(connection.execute(text('SELECT id, weight_kg, house_id, father_dob, mother_dob, admission_date FROM students')).all(), [(1, None, None, None, None, None)])
         engine.dispose()
 
     def test_optional_student_dob(self):

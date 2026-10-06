@@ -11,6 +11,7 @@ class Student(Base):
         CheckConstraint("status IN ('active', 'inactive')", name="ck_student_status"),
     )
     login_id = Column(Integer, ForeignKey("student_login.id", ondelete="RESTRICT"), nullable=True, index=True)
+    admission_date = Column(Date, nullable=True)
     admission_number = Column(String(150), nullable=True)
     admission_sequence = Column(Integer, nullable=True)
     status = Column(String(20), nullable=False, default="active", server_default="active")

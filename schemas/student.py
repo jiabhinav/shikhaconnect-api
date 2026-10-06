@@ -15,6 +15,7 @@ class FormSection(BaseModel):
 
 
 class StudentInfo(FormSection):
+    admission_date: date | None = Field(default=None, description="Defaults to today when creating a student.")
     date_of_birth: date | None = None
     caste_category_id: int = Field(gt=0)
     fee_category_id: int = Field(gt=0)

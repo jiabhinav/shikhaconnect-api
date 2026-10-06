@@ -1,3 +1,4 @@
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from utils.passwords import hash_password
@@ -49,7 +50,9 @@ def save_student(db, item, message):
 @router.post("/students", response_model=StudentResult, status_code=201)
 def create_student(school_id: int, payload: StudentWrite, db: Session = Depends(student_school)):
     validate_student_references(db, school_id, payload)
-    item = Student(school_id=school_id, **payload.student_values())
+    values = payload.student_values()
+    values["admission_date"] = values["admission_date"] or date.today()
+    item = Student(school_id=school_id, **values)
     try:
         update_student_details(db, school_id, item, payload)
         return save_student(db, item, "Student created successfully")
@@ -107,6 +110,8 @@ def update_student(school_id: int, student_id: int, payload: StudentWrite, db: S
     try:
         update_student_details(db, school_id, item, payload)
         for key, value in payload.student_values().items():
+            if key == "admission_date" and value is None:
+                continue
             setattr(item, key, value)
         return save_student(db, item, "Student updated successfully")
     except Exception:
