@@ -2,7 +2,7 @@ import unittest
 
 import test_sessions
 import catalog_setup
-from models.class_section import SchoolClass, Section
+from models.class_section import SchoolClass, Section, ClassSectionMapping
 from models.user import UserRole
 
 
@@ -38,7 +38,7 @@ class ClassSectionTests(unittest.TestCase):
         self.assertEqual(self.client.post(url, json={"name": "bad", "class_order": 0}).status_code, 422)
 
     def test_auto_creation_validation_and_access(self):
-        for model in (SchoolClass, Section):
+        for model in (ClassSectionMapping, SchoolClass, Section):
             model.__table__.drop(self.engine)
         for resource in ("classes", "sections"):
             url = f"/schools/school/1/sessions/1/{resource}"

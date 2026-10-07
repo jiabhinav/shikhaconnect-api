@@ -44,3 +44,28 @@ class SectionListResult(BaseModel):
     status: str = "success"
     message: str
     data: list[SectionResponse]
+
+
+class ClassSectionMappingWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    class_id: int = Field(gt=0)
+    section_id: int = Field(gt=0)
+
+
+class ClassSectionMappingResponse(ClassSectionMappingWrite):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    school_id: int
+    session_id: int
+
+
+class ClassSectionMappingResult(BaseModel):
+    status: str = "success"
+    message: str
+    data: ClassSectionMappingResponse
+
+
+class ClassSectionMappingListResult(BaseModel):
+    status: str = "success"
+    message: str
+    data: list[ClassSectionMappingResponse]

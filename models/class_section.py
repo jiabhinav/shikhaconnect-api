@@ -1,4 +1,4 @@
-from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, Integer, String, func
+from sqlalchemy import CheckConstraint, Column, ForeignKey, Index, Integer, String, UniqueConstraint, func
 
 from database.database import Base
 
@@ -26,4 +26,17 @@ class Section(Base):
     name = Column(String(100), nullable=False)
     __table_args__ = (
         Index("uq_section_school_name", school_id, session_id, func.lower(func.trim(name)), unique=True),
+    )
+
+
+class ClassSectionMapping(Base):
+    __tablename__ = "class_section_mappings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id = Column(Integer, ForeignKey("sessions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    class_id = Column(Integer, ForeignKey("classes.id", ondelete="CASCADE"), nullable=False, index=True)
+    section_id = Column(Integer, ForeignKey("sections.id", ondelete="CASCADE"), nullable=False, index=True)
+    __table_args__ = (
+        UniqueConstraint("school_id", "session_id", "class_id", "section_id", name="uq_class_section_mapping"),
     )

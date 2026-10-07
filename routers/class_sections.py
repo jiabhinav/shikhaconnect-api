@@ -9,11 +9,12 @@ from database.class_section_tables import ensure_class_section_tables
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
 from dependencies.school_session import require_school_session
-from models.class_section import SchoolClass, Section
+from models.class_section import SchoolClass, Section, ClassSectionMapping
 from models.school import School
 from models.user import User, UserRole
 from schemas.class_section import (
     ClassWrite, SectionWrite, ClassResult, ClassListResult, SectionResult, SectionListResult,
+    ClassSectionMappingWrite, ClassSectionMappingResult, ClassSectionMappingListResult,
 )
 
 router = APIRouter()
@@ -132,3 +133,70 @@ def update_section(school_id: int, session_id: int, section_id: int, payload: Se
 @router.delete("/sections/{section_id}")
 def delete_section(school_id: int, session_id: int, section_id: int, db: Session = Depends(school_storage)):
     return remove(db, record(db, Section, school_id, session_id, section_id))
+
+
+def save_mapping(db, item):
+    record(db, SchoolClass, item.school_id, item.session_id, item.class_id)
+    record(db, Section, item.school_id, item.session_id, item.section_id)
+    try:
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "Class-section mapping already exists or conflicts with database constraints") from exc
+    except Exception:
+        db.rollback()
+        raise
+    return {"message": "Mapping saved successfully", "data": item}
+
+
+@router.post("/class-section-mappings", response_model=ClassSectionMappingResult, status_code=201)
+def create_class_section_mapping(school_id: int, session_id: int, payload: ClassSectionMappingWrite,
+                                 db: Session = Depends(school_storage)):
+    return save_mapping(db, ClassSectionMapping(school_id=school_id, session_id=session_id, **payload.model_dump()))
+
+
+@router.get("/class-section-mappings", response_model=ClassSectionMappingListResult | ClassSectionMappingResult)
+def list_class_section_mappings(school_id: int, session_id: int, class_id: int | None = None,
+                               mapping_id: int | None = None,
+                               db: Session = Depends(school_storage)):
+    if mapping_id is not None:
+        return {"message": "Mapping fetched successfully", "data": record(
+            db, ClassSectionMapping, school_id, session_id, mapping_id)}
+    query = db.query(ClassSectionMapping).filter_by(school_id=school_id, session_id=session_id)
+    if class_id is not None:
+        record(db, SchoolClass, school_id, session_id, class_id)
+        query = query.filter_by(class_id=class_id)
+    return {"message": "Mappings fetched successfully", "data": query.order_by(ClassSectionMapping.id).all()}
+
+
+@router.put("/class-section-mappings", response_model=ClassSectionMappingResult)
+def update_class_section_mapping(school_id: int, session_id: int, mapping_id: int,
+                                 payload: ClassSectionMappingWrite, db: Session = Depends(school_storage)):
+    record(db, SchoolClass, school_id, session_id, payload.class_id)
+    record(db, Section, school_id, session_id, payload.section_id)
+    item = record(db, ClassSectionMapping, school_id, session_id, mapping_id)
+    item.class_id = payload.class_id
+    item.section_id = payload.section_id
+    return save_mapping(db, item)
+
+
+@router.delete("/class-section-mappings")
+def delete_class_section_mapping(school_id: int, session_id: int, mapping_id: int,
+                                 db: Session = Depends(school_storage)):
+    return remove(db, record(db, ClassSectionMapping, school_id, session_id, mapping_id))
+
+
+@router.get("/classes/sections", response_model=SectionListResult)
+def list_sections_by_class(school_id: int, session_id: int, class_id: int,
+                          db: Session = Depends(school_storage)):
+    record(db, SchoolClass, school_id, session_id, class_id)
+    sections = db.query(Section).join(ClassSectionMapping, ClassSectionMapping.section_id == Section.id).filter(
+        ClassSectionMapping.school_id == school_id,
+        ClassSectionMapping.session_id == session_id,
+        ClassSectionMapping.class_id == class_id,
+        Section.school_id == school_id,
+        Section.session_id == session_id,
+    ).order_by(Section.id).all()
+    return {"message": "Mapped sections fetched successfully", "data": sections}

@@ -818,3 +818,36 @@ use `father_date_of_birth` and `mother_date_of_birth`.
 Student `student_info.date_of_birth` is optional: omit it or send null/blank
 to leave it unset. Provided dates must use `YYYY-MM-DD`. Startup removes the
 existing PostgreSQL NOT NULL constraint on this column.
+
+### Class–section mappings
+
+The `class_section_mappings` table is created automatically at startup or on the
+first class/section request. These authenticated endpoints require `school_id`
+and `session_id` as query parameters:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/schools/class-section-mappings` | Create a mapping |
+| GET | `/schools/class-section-mappings` | List mappings; optionally filter by `class_id` |
+| GET | `/schools/class-section-mappings?mapping_id={mapping_id}` | Fetch one mapping |
+| PUT | `/schools/class-section-mappings?mapping_id={mapping_id}` | Edit a mapping |
+| DELETE | `/schools/class-section-mappings?mapping_id={mapping_id}` | Delete a mapping |
+| GET | `/schools/classes/sections?class_id={class_id}` | Get sections from the mapping table |
+
+Example: `POST /schools/class-section-mappings?school_id=1&session_id=1`
+with body:
+
+```json
+{"class_id": 1, "section_id": 2}
+```
+
+PUT accepts the same body. Classes and sections must belong to the specified
+school and session (404 otherwise). Duplicate mappings return 409. Deleting a
+class or section also removes its mappings. Deleting a mapping preserves the
+class and section records. Responses use the existing `status`, `message`, and
+`data` envelope.
+
+Mapping IDs are passed as query parameters for GET, PUT, and DELETE:
+`/schools/class-section-mappings?mapping_id=5352&school_id=523&session_id=352`.
+GET with `mapping_id` returns one mapping; omit it to list mappings. PUT and
+DELETE require `mapping_id`. Mapping IDs are not part of the URL path.
