@@ -180,6 +180,7 @@ class LoginSchool(SchoolDetails, SchoolAddress):
 
 
 class UserLoginData(UserResponse):
+    email: Optional[EmailStr] = None
     schools: Optional[list[LoginSchool]] = None
 
 

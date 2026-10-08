@@ -45,7 +45,7 @@ class TableInitializationTests(unittest.TestCase):
                 self.assertIn("status", {c["name"] for c in inspect(connection).get_columns("login_user")})
                 for table in ("users", "staff"):
                     self.assertNotIn("status", {c["name"] for c in inspect(connection).get_columns(table)})
-                expected = {"login_user", "users", "schools", "school_permissions", "school_mapping", "sessions", "classes", "sections", "subjects"}
+                expected = {"login_user", "users", "schools", "school_permissions", "school_mapping", "sessions", "classes", "sections", "subjects", "teachers", "teacher_addresses", "teacher_login"}
                 self.assertTrue(expected.issubset(set(inspect(connection).get_table_names())))
                 connection.execute(text("INSERT INTO login_user (id, first_name, last_name, email, mobile, password, role) VALUES (1, 'Test', 'User', 'test@example.com', '12345', '', 'ADMIN')"))
                 connection.execute(text("INSERT INTO users (id, login_user_id) VALUES (1, 1)"))

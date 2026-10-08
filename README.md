@@ -851,3 +851,73 @@ Mapping IDs are passed as query parameters for GET, PUT, and DELETE:
 `/schools/class-section-mappings?mapping_id=5352&school_id=523&session_id=352`.
 GET with `mapping_id` returns one mapping; omit it to list mappings. PUT and
 DELETE require `mapping_id`. Mapping IDs are not part of the URL path.
+
+### Teachers
+
+Teacher profiles are stored in `teachers`, linked to `schools` and separate
+`teacher_login` accounts through `teacher_login_id`. Teacher addresses are stored in
+`teacher_addresses`. Startup creates these tables automatically.
+All teacher endpoints require authentication and a `school_id` query parameter.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/schools/teachers` | Create a teacher |
+| GET | `/schools/teachers` | List teachers; supports `status=Active` or `status=Inactive`, `offset`, and `limit` |
+| GET | `/schools/teachers/{teacher_id}` | Fetch one teacher |
+| PUT | `/schools/teachers/{teacher_id}` | Replace teacher details and address |
+| DELETE | `/schools/teachers/{teacher_id}` | Delete the teacher, addresses, and login account |
+| PATCH | `/schools/teachers/{teacher_id}/status` | Set `Active` or `Inactive` |
+
+Example: `POST /schools/teachers?school_id=1`:
+
+```json
+{
+  "teacher_info": {
+    "first_name": "Anita",
+    "father_name": "Father",
+    "mother_name": "Mother",
+    "date_of_birth": "1990-01-01",
+    "gender": "Female",
+    "mobile_number": "9876543210",
+    "alternate_contact_no": "9876543211",
+    "aadhaar_number": "123456789012",
+    "email": "anita@example.com",
+    "designation": "Teacher",
+    "nationality": "Indian",
+    "caste_category_id": 1
+  },
+  "address": {
+    "line_1": "Street 1",
+    "city": "Delhi",
+    "district": "Central",
+    "country": "India",
+    "state": "Delhi"
+  }
+}
+```
+
+The `address` object uses the fields: `line_1`, `line_2`, `city`,
+`district`, `state`, `country`, `pin_code`, and `landline_number`.
+`line_1`, `country`, and `state` are required.
+`line_2`, `city`, `district`, `pin_code`, and `landline_number` are optional.
+Teacher details also accept `middle_name`, `last_name`, `spouse_name`,
+`mode_of_transport`, `qualification`, `blood_group`, `joining_date`, `salary`,
+`religion`, `biometric_code`, `experience`, and `feedback`. Dates use `YYYY-MM-DD`.
+The role defaults to `Teacher`. The caste category must belong to the school;
+mobile numbers and provided email addresses must be unique within `teacher_login`.
+They may also be used by an independent admin or staff account.
+Teacher `email` and `aadhaar_number` are optional: omitted, null, or blank
+values are stored as null. Provided emails must be valid and unique.
+
+The initial password is the mobile number, stored as an Argon2 hash and never
+returned. Teachers log in through `POST /auth/teacher-login` with
+`{"mobile": "9876543210", "password": "9876543210"}`. `/auth/login` also supports
+teachers when no admin/staff account uses the mobile number. Editing the mobile
+number preserves the password. `POST /auth/teacher-reset-password` accepts
+`mobile` and optional `new_password` to reset only the teacher account.
+Startup migrates existing PostgreSQL teacher accounts from `login_user`,
+preserving their password hashes and statuses. Shared admin/staff accounts are
+preserved. Teacher responses now return `teacher_login_id` instead of `login_user_id`.
+For status changes send `{"status": "Inactive"}` or `{"status": "Active"}`.
+Inactive teachers cannot log in or use existing tokens. Classes/sessions are not
+required to create a teacher.

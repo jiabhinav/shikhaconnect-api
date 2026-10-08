@@ -9,6 +9,7 @@ from routers.auth import router as auth_router
 from routers.schools import router as school_router
 from routers.super_admin import router as super_admin_router
 from routers.users import router as user_router
+from routers.teachers import router as teacher_router
 
 from database.table_init import ensure_all_tables
 
@@ -59,6 +60,8 @@ app.include_router(auth_router)
 app.include_router(user_router)
 app.include_router(super_admin_router)
 app.include_router(school_router)
+
+app.include_router(teacher_router)
 
 
 @app.get("/")

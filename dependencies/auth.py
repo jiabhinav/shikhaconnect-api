@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from dependencies.db import get_db_session
 from models.user import User, UserStatus
 from models.staff import Staff
+from models.teacher import Teacher
 
 
 security = HTTPBearer()
@@ -13,7 +14,7 @@ security = HTTPBearer()
 
 def account_token(account):
     # Staff and user primary keys may overlap; keep their tokens distinct.
-    prefix = "staff:" if isinstance(account, Staff) else ""
+    prefix = "teacher:" if isinstance(account, Teacher) else "staff:" if isinstance(account, Staff) else ""
     return hashlib.sha256(
         f"{prefix}{account.id}:{account.mobile}:{account.email}:{account.password}".encode("utf-8")
     ).hexdigest()
@@ -28,7 +29,7 @@ def get_current_user(
 
     token = credentials.credentials
 
-    users = db.query(User).all() + db.query(Staff).all()
+    users = db.query(User).all() + db.query(Staff).all() + db.query(Teacher).all()
     for user in users:
         expected = account_token(user)
         if expected == token:

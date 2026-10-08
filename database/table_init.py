@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from database.database import Base
 from database.student_table import migrate_optional_student_identity_fields, migrate_student_form_fields
+from database.teacher_table import migrate_optional_teacher_city, migrate_optional_teacher_identity, migrate_teacher_logins
 from database.user_address_table import migrate_user_addresses
 from database.staff_account_table import migrate_user_accounts, migrate_staff_profiles, migrate_account_status
 from database.school_permissions_table import allow_legacy_service_name_null
@@ -83,6 +84,8 @@ def ensure_all_tables(connection):
     remove_legacy_session_year_index(connection)
     existing = set(inspect(connection).get_table_names())
     if set(Base.metadata.tables).issubset(existing):
+        migrate_optional_teacher_city(connection)
+        migrate_optional_teacher_identity(connection)
         migrate_staff_profiles(connection)
         migrate_user_addresses(connection)
         migrate_account_status(connection)
@@ -96,11 +99,14 @@ def ensure_all_tables(connection):
         migrate_optional_father_fields(connection)
         migrate_optional_student_pin_codes(connection)
         migrate_optional_student_identity_fields(connection)
+        migrate_teacher_logins(connection)
         return
     if connection.dialect.name == "postgresql":
         # Recheck within create_all after serializing concurrent initialization.
         connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
     Base.metadata.create_all(bind=connection, checkfirst=True)
+    migrate_optional_teacher_city(connection)
+    migrate_optional_teacher_identity(connection)
     migrate_staff_profiles(connection)
     migrate_user_addresses(connection)
     migrate_account_status(connection)
@@ -114,3 +120,4 @@ def ensure_all_tables(connection):
     migrate_optional_student_identity_fields(connection)
     migrate_student_roll_number(connection)
     migrate_student_form_fields(connection)
+    migrate_teacher_logins(connection)

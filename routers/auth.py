@@ -15,6 +15,7 @@ from models.school_mapping import SchoolMapping, SchoolMappingStatus
 from models.session import Session as SchoolSession
 from models.user import LoginUser, User, UserRole, UserStatus
 from models.staff import Staff
+from models.teacher import Teacher, TeacherLogin
 from schemas.user import LoginSchoolPermission, LoginStaffPermission, LoginSchool, UserCreate, UserLogin, UserLoginResponse, UserRegisterResponse
 from schemas.session import SessionResponse
 from schemas.user import PasswordResetRequest, PasswordResetResponse
@@ -31,9 +32,23 @@ def reset_password(
     db: Session = Depends(get_db_session),
 ):
     """Reset an account password by mobile number without an auth header."""
-    user = db.query(Staff).filter(Staff.mobile == payload.mobile).first()
-    if user is None:
-        user = db.query(User).filter(User.mobile == payload.mobile).first()
+    return reset_account_password(payload, db)
+
+
+@router.post("/teacher-reset-password", response_model=PasswordResetResponse, tags=["Teachers"])
+def reset_teacher_password(payload: PasswordResetRequest, db: Session = Depends(get_db_session)):
+    return reset_account_password(payload, db, teacher_only=True)
+
+
+def reset_account_password(payload, db, teacher_only=False):
+    if teacher_only:
+        user = db.query(Teacher).filter(Teacher.mobile == payload.mobile).first()
+    else:
+        user = db.query(Staff).filter(Staff.mobile == payload.mobile).first()
+        if user is None:
+            user = db.query(User).filter(User.mobile == payload.mobile).first()
+        if user is None:
+            user = db.query(Teacher).filter(Teacher.mobile == payload.mobile).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
@@ -51,11 +66,11 @@ def reset_password(
 
 def _build_user_payload(user, *, include_address=True):
     payload = {
-        "id": user.login_user_id,
+        "id": user.teacher_login_id if isinstance(user, Teacher) else user.login_user_id,
         "first_name": user.first_name,
         "middle_name": user.middle_name,
         "last_name": user.last_name,
-        "email": str(user.email),
+        "email": str(user.email) if user.email is not None else None,
         "mobile": user.mobile,
         "date_of_birth": user.date_of_birth.isoformat() if hasattr(user.date_of_birth, "isoformat") else user.date_of_birth,
         "designation": user.designation,
@@ -77,14 +92,28 @@ def _build_user_payload(user, *, include_address=True):
 
 @router.post("/login", response_model=UserLoginResponse, status_code=status.HTTP_200_OK)
 def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
-    account = db.query(LoginUser).filter(LoginUser.mobile == credentials.mobile).first()
+    return authenticate_login(credentials, db)
+
+
+@router.post("/teacher-login", response_model=UserLoginResponse, status_code=status.HTTP_200_OK,
+             tags=["Teachers"])
+def teacher_login(credentials: UserLogin, db: Session = Depends(get_db_session)):
+    return authenticate_login(credentials, db, teacher_only=True)
+
+
+def authenticate_login(credentials, db, teacher_only=False):
+    account = None if teacher_only else db.query(LoginUser).filter(LoginUser.mobile == credentials.mobile).first()
+    if account is None:
+        account = db.query(TeacherLogin).filter(TeacherLogin.mobile == credentials.mobile).first()
     if account is None or not verify_password(credentials.password, account.password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid mobile number or password",
         )
 
-    if account.role in (UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.SUB_ADMIN):
+    if isinstance(account, TeacherLogin):
+        user = db.query(Teacher).filter(Teacher.teacher_login_id == account.id).first()
+    elif account.role in (UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.SUB_ADMIN):
         user = db.query(User).filter(User.login_user_id == account.id).first()
     else:
         # Staff profiles remain independent of the users table.
@@ -101,7 +130,7 @@ def login(credentials: UserLogin, db: Session = Depends(get_db_session)):
 
     payload = _build_user_payload(user, include_address=account.role != UserRole.SUPER_ADMIN)
     if user.role != UserRole.SUPER_ADMIN:
-        if isinstance(user, Staff):
+        if isinstance(user, (Staff, Teacher)):
             schools = db.query(School, SchoolAssets.school_logo).outerjoin(
                 SchoolAssets, SchoolAssets.school_id == School.id
             ).filter(School.id == user.school_id).all()

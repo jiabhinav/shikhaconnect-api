@@ -7,6 +7,7 @@ from models.school import School
 from models.session import Session as SchoolSession
 from models.staff import Staff, StaffAddress, StaffPermission
 from models.student import Student
+from models.teacher import Teacher
 from models.user import LoginUser, User
 from models.school_mapping import SchoolMapping
 
@@ -15,6 +16,7 @@ def delete_school_data(db, school):
     register_models()
     school_id = school.id
     staff_account_ids = list(db.scalars(select(Staff.login_user_id).where(Staff.school_id == school_id)))
+    teacher_ids = select(Teacher.id).where(Teacher.school_id == school_id)
     student_ids = select(Student.id).where(Student.school_id == school_id)
     session_ids = select(SchoolSession.id).where(SchoolSession.school_id == school_id)
     # Explicit deletions also handle databases with older RESTRICT constraints.
@@ -25,6 +27,8 @@ def delete_school_data(db, school):
             condition = table.c.school_id == school_id
         elif "student_id" in table.c:
             condition = table.c.student_id.in_(student_ids)
+        elif "teacher_id" in table.c:
+            condition = table.c.teacher_id.in_(teacher_ids)
         elif "session_id" in table.c:
             condition = table.c.session_id.in_(session_ids)
         else:
