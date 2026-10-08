@@ -28,9 +28,15 @@ class TeacherLogin(Base):
 
 class Teacher(Base):
     __tablename__ = "teachers"
+    __table_args__ = (
+        UniqueConstraint("school_id", "employee_code", name="uq_teacher_employee_code"),
+        UniqueConstraint("school_id", "employee_sequence", name="uq_teacher_employee_sequence"),
+    )
 
     id = Column(Integer, primary_key=True)
     school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, index=True)
+    employee_code = Column(String(150))
+    employee_sequence = Column(Integer)
     teacher_login_id = Column(Integer, ForeignKey("teacher_login.id"), nullable=False, unique=True)
     teacher_login = relationship("TeacherLogin", lazy="joined")
     first_name = association_proxy("teacher_login", "first_name")

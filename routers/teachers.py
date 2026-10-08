@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from dependencies.auth import get_current_user
 from models.caste_category import CasteCategory
+from models.school import School
 from models.teacher import Teacher, TeacherAddress, TeacherLogin
 from models.user import UserStatus
 from routers.staff import staff_school, staff_constraint_error
@@ -65,6 +67,19 @@ def apply_teacher(db, school_id, payload, item=None):
     else:
         for field, value in address_values.items():
             setattr(item.address, field, value)
+    if item.employee_sequence is None:
+        # Hold the school lock until save_teacher commits the allocated number.
+        with db.no_autoflush:
+            school = db.query(School).filter_by(id=school_id).populate_existing().with_for_update().one()
+            last = db.query(func.max(Teacher.employee_sequence)).filter_by(school_id=school_id).scalar()
+            sequence = max(school.start_employee_no,
+                           last + 1 if last is not None else school.start_employee_no)
+            code = f"{school.employee_prefix or ''}{sequence}{school.employee_suffix or ''}"
+            while db.query(Teacher.id).filter_by(school_id=school_id, employee_code=code).first() is not None:
+                sequence += 1
+                code = f"{school.employee_prefix or ''}{sequence}{school.employee_suffix or ''}"
+        item.employee_sequence = sequence
+        item.employee_code = code
     return item
 
 

@@ -154,6 +154,50 @@ class TeacherTests(unittest.TestCase):
         self.assertIsNotNone(self.db.get(LoginUser, admin.id))
         self.assertEqual(self.db.query(TeacherLogin).count(), 0)
 
+    def test_employee_codes_follow_school_settings_and_preserve_on_edit(self):
+        school = self.db.get(School, 1)
+        school.employee_prefix = 'EMP-'
+        school.employee_suffix = '-T'
+        school.start_employee_no = 100
+        self.db.commit()
+        first = self.create()
+        self.assertEqual(first['teacher_info']['employee_code'], 'EMP-100-T')
+        self.payload['teacher_info']['mobile_number'] = '9876543220'
+        self.payload['teacher_info']['email'] = 'second@example.com'
+        second = self.create()
+        self.assertEqual(second['teacher_info']['employee_code'], 'EMP-101-T')
+        school.employee_prefix = 'NEW-'
+        school.start_employee_no = 200
+        self.db.commit()
+        response = self.client.put(self.detail_url(second), json=self.payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['teacher_info']['employee_code'], 'EMP-101-T')
+        self.payload['teacher_info']['mobile_number'] = '9876543230'
+        self.payload['teacher_info']['email'] = None
+        third = self.create()
+        self.assertEqual(third['teacher_info']['employee_code'], 'NEW-200-T')
+        other_school = self.db.get(School, 2)
+        other_school.employee_prefix = None
+        other_school.employee_suffix = None
+        other_school.start_employee_no = 0
+        self.db.commit()
+        payload = deepcopy(self.payload)
+        payload['teacher_info']['mobile_number'] = '9876543240'
+        payload['teacher_info']['caste_category_id'] = 2
+        response = self.client.post('/schools/teachers?school_id=2', json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()['data']['teacher_info']['employee_code'], '0')
+
+    def test_existing_teacher_gets_employee_code_when_edited(self):
+        item = self.create()
+        teacher = self.db.get(Teacher, item['id'])
+        teacher.employee_code = None
+        teacher.employee_sequence = None
+        self.db.commit()
+        response = self.client.put(self.detail_url(item), json=self.payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIsNotNone(response.json()['data']['teacher_info']['employee_code'])
+
     def test_status_login_and_tokens(self):
         item = self.create()
         credentials = {'mobile': '9876543210', 'password': '9876543210'}

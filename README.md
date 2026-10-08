@@ -854,6 +854,14 @@ DELETE require `mapping_id`. Mapping IDs are not part of the URL path.
 
 ### Teachers
 
+Teacher `employee_code` is generated from the school's `employee_prefix`,
+next employee number, and `employee_suffix` (for example, `EMP-100-T`). The first
+number uses `start_employee_no`; later numbers increment independently per school.
+Responses include it in `teacher_info.employee_code`. Editing a teacher preserves
+the code even if school settings change. Existing teachers receive a code on
+their next details update. Startup adds the columns and school-specific uniqueness
+constraints without replacing existing profiles.
+
 Teacher profiles are stored in `teachers`, linked to `schools` and separate
 `teacher_login` accounts through `teacher_login_id`. Teacher addresses are stored in
 `teacher_addresses`. Startup creates these tables automatically.

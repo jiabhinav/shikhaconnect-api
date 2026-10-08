@@ -3,6 +3,23 @@ from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
 
+def migrate_teacher_employee_codes(connection):
+    if not inspect(connection).has_table("teachers"):
+        return
+    if connection.dialect.name == "postgresql":
+        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    columns = {c["name"] for c in inspect(connection).get_columns("teachers")}
+    for name, definition in (("employee_code", "VARCHAR(150)"), ("employee_sequence", "INTEGER")):
+        if name not in columns:
+            connection.execute(text(f"ALTER TABLE teachers ADD COLUMN {name} {definition}"))
+    names = {c["name"] for c in inspect(connection).get_unique_constraints("teachers")}
+    names.update(index["name"] for index in inspect(connection).get_indexes("teachers"))
+    for name, field in (("uq_teacher_employee_code", "employee_code"),
+                        ("uq_teacher_employee_sequence", "employee_sequence")):
+        if name not in names:
+            connection.execute(text(f"CREATE UNIQUE INDEX {name} ON teachers (school_id, {field})"))
+
+
 def migrate_optional_teacher_city(connection):
     if not inspect(connection).has_table("teacher_addresses"):
         return
