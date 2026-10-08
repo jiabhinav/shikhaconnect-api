@@ -36,6 +36,38 @@ class ClassSectionMappingTests(unittest.TestCase):
         self.assertEqual(self.client.get(sections_url).json()['data'], [])
         self.assertEqual(self.client.delete(detail).status_code, 404)
 
+    def test_grouped_class_sections(self):
+        url = '/schools/class-sections?school_id=1&session_id=1'
+        self.assertEqual(self.client.get(url).json()['data'], [])
+        first = self.create_catalog('classes', 'Class 1')
+        second = self.create_catalog('classes', 'Class 2')
+        section_a = self.create_catalog('sections', 'A')
+        section_b = self.create_catalog('sections', 'B')
+        self.create_catalog('sections', 'Unmapped')
+        foreign_class = self.create_catalog('classes', 'Other school', school=2, session=2)
+        next_class = self.create_catalog('classes', 'Next session', session=3)
+        mapping_url = '/schools/class-section-mappings?school_id=1&session_id=1'
+        for section_id in (section_b, section_a):
+            response = self.client.post(mapping_url, json={'class_id': first, 'section_id': section_id})
+            self.assertEqual(response.status_code, 201, response.text)
+        expected = [
+            {'class_id': first, 'class_name': 'Class 1', 'sections': [
+                {'section_id': section_a, 'section_name': 'A'},
+                {'section_id': section_b, 'section_name': 'B'},
+            ]},
+            {'class_id': second, 'class_name': 'Class 2', 'sections': []},
+        ]
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['status'], 'success')
+        self.assertEqual(response.json()['data'], expected)
+        self.assertEqual(self.client.get(url + f'&class_id={first}').json()['data'], expected[:1])
+        for class_id in (foreign_class, next_class, 999):
+            self.assertEqual(self.client.get(url + f'&class_id={class_id}').status_code, 404)
+        self.client.put(f'/schools/classes/{first}?school_id=1&session_id=1',
+                        json={'name': 'Class 1', 'class_order': 3})
+        self.assertEqual(self.client.get(url).json()['data'], expected[::-1])
+
     def test_mapping_id_query_parameter(self):
         class_id = self.create_catalog('classes', 'Class 1')
         section_id = self.create_catalog('sections', 'A')

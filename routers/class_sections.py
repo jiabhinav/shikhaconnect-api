@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func
+from sqlalchemy import and_, func
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,7 @@ from models.user import User, UserRole
 from schemas.class_section import (
     ClassWrite, SectionWrite, ClassResult, ClassListResult, SectionResult, SectionListResult,
     ClassSectionMappingWrite, ClassSectionMappingResult, ClassSectionMappingListResult,
+    ClassSectionsListResult,
 )
 
 router = APIRouter()
@@ -186,6 +187,36 @@ def update_class_section_mapping(school_id: int, session_id: int, mapping_id: in
 def delete_class_section_mapping(school_id: int, session_id: int, mapping_id: int,
                                  db: Session = Depends(school_storage)):
     return remove(db, record(db, ClassSectionMapping, school_id, session_id, mapping_id))
+
+
+@router.get("/class-sections", response_model=ClassSectionsListResult)
+def list_grouped_class_sections(school_id: int, session_id: int, class_id: int | None = None,
+                                db: Session = Depends(school_storage)):
+    if class_id is not None:
+        record(db, SchoolClass, school_id, session_id, class_id)
+    query = db.query(SchoolClass, Section).outerjoin(
+        ClassSectionMapping, and_(
+            ClassSectionMapping.class_id == SchoolClass.id,
+            ClassSectionMapping.school_id == school_id,
+            ClassSectionMapping.session_id == session_id,
+        ),
+    ).outerjoin(
+        Section, and_(
+            Section.id == ClassSectionMapping.section_id,
+            Section.school_id == school_id,
+            Section.session_id == session_id,
+        ),
+    ).filter(SchoolClass.school_id == school_id, SchoolClass.session_id == session_id)
+    if class_id is not None:
+        query = query.filter(SchoolClass.id == class_id)
+    grouped = {}
+    for school_class, section in query.order_by(SchoolClass.class_order, SchoolClass.id, Section.id).all():
+        item = grouped.setdefault(school_class.id, {
+            "class_id": school_class.id, "class_name": school_class.name, "sections": [],
+        })
+        if section is not None:
+            item["sections"].append({"section_id": section.id, "section_name": section.name})
+    return {"message": "Class sections fetched successfully", "data": list(grouped.values())}
 
 
 @router.get("/classes/sections", response_model=SectionListResult)

@@ -69,3 +69,20 @@ class ClassSectionMappingListResult(BaseModel):
     status: str = "success"
     message: str
     data: list[ClassSectionMappingResponse]
+
+
+class GroupedSectionResponse(BaseModel):
+    section_id: int
+    section_name: str
+
+
+class ClassSectionsResponse(BaseModel):
+    class_id: int
+    class_name: str
+    sections: list[GroupedSectionResponse]
+
+
+class ClassSectionsListResult(BaseModel):
+    status: str = "success"
+    message: str
+    data: list[ClassSectionsResponse]
