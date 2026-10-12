@@ -982,3 +982,22 @@ response. Super Admin authentication is required. The response downloads
 mobile number, failure reason, and field validation errors. No server-side
 report storage is required; the frontend can submit the list when the user
 clicks Download failed students.
+
+### Student photos and documents
+
+Send multipart `file` uploads to `POST /schools/students/profile` or
+`POST /schools/students/documents`, with `school_id` and `student_id` query
+parameters. Document uploads also require `document_type`: `birth_certificate`,
+`aadhaar`, `previous_marksheet`, or `other`. Photos support JPEG, PNG and WebP
+(up to 5 MB). Documents support PDF (up to 10 MB) or these image formats.
+
+Files use `uploads/schools/{school_id}/students/{student_id}/profile/profile_{uuid}.jpg`
+and `documents/{document_type}_{uuid}.pdf`, with extensions matching uploaded
+content. Profile replacement updates `students.profile_img`; document paths and
+types are stored in the automatically created `student_documents` table.
+Super Admin and actively assigned Admin/Sub Admin accounts can manage files.
+
+Use `GET /schools/students/profile` to view a photo,
+`GET /schools/students/documents` to list documents, and
+`GET /schools/students/documents/{document_id}` to download one. These require
+the same school and student query parameters and authentication.

@@ -49,6 +49,8 @@ router.include_router(generation_settings_router)
 router.include_router(generation_settings_router, prefix="/school/{school_id}/sessions/{session_id}", include_in_schema=False)
 router.include_router(timetable_settings_router)
 router.include_router(timetable_settings_router, prefix="/school/{school_id}/sessions/{session_id}", include_in_schema=False)
+from routers.student_assets import router as student_assets_router
+router.include_router(student_assets_router)
 router.include_router(student_router)
 router.include_router(staff_router)
 router.include_router(staff_module_router)

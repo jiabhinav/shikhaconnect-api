@@ -124,6 +124,7 @@ class StudentWrite(BaseModel):
 
 
 class StudentInfoResponse(StudentInfo):
+    profile_img: str | None = None
     first_name: str | None = None
     mobile_number: str | None = None
     session_id: int | None = None

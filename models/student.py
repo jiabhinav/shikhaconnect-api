@@ -11,6 +11,7 @@ class Student(Base):
         CheckConstraint("status IN ('active', 'inactive')", name="ck_student_status"),
     )
     login_id = Column(Integer, ForeignKey("student_login.id", ondelete="RESTRICT"), nullable=True, index=True)
+    profile_img = Column(String(500), nullable=True)
     admission_date = Column(Date, nullable=True)
     admission_number = Column(String(150), nullable=True)
     admission_sequence = Column(Integer, nullable=True)
@@ -77,6 +78,7 @@ class Student(Base):
     previous_school = relationship("PreviousSchool", uselist=False, cascade="all, delete-orphan")
     login = relationship("StudentLogin", uselist=False)
     addresses = relationship("StudentAddressRecord", cascade="all, delete-orphan")
+    documents = relationship("StudentDocument", cascade="all, delete-orphan")
 
 
 class StudentLogin(Base):
