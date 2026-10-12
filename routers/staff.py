@@ -95,7 +95,7 @@ def apply_staff_profile(db, payload, item=None):
     account_values = {field: values.pop(field) for field in
                       ("first_name", "middle_name", "last_name", "email", "mobile", "role")}
     if item is None:
-        account = LoginUser(**account_values, password=hash_password(password or account_values["mobile"]))
+        account = LoginUser(**account_values, password=hash_password(account_values["mobile"]))
         item = Staff(login_user=account)
     else:
         for field, value in account_values.items():

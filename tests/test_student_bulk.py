@@ -41,14 +41,16 @@ class StudentBulkTests(unittest.TestCase):
         self.assertEqual(self.upload('admission_number,name,father_name,mobile_number\n001,C,F,9876543210').json()['failed'], 1)
         self.assertEqual(self.db.query(Student).count(), 2)
 
-    def test_invalid_rows_and_scope_create_nothing(self):
-        for text in ('admission_number,name,father_name,mobile_number\n001,A,F,123\n002,,F,456',
-                     'name,mobile_number\nA,123'):
-            self.assertIn(self.upload(text).status_code, (409, 422))
-            self.assertEqual(self.db.query(Student).count(), 0)
-        self.params['school_id'] = 2
-        self.assertEqual(self.upload('admission_number,name,father_name,mobile_number\n001,A,F,123').status_code, 404)
-        self.assertEqual(self.db.query(StudentLogin).count(), 0)
+    def test_invalid_rows_reported_and_valid_rows_inserted(self):
+        response = self.upload('admission_number,name,father_name,mobile_number,house_id\n001,Valid,Father,123,\n002,,Father,456,\n003,Wrong house,Father,789,99999')
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertEqual((body['total'], body['inserted'], body['failed']), (3, 1, 2))
+        self.assertEqual([row['row'] for row in body['failed_students']], [3, 4])
+        self.assertEqual(body['failed_students'][0]['mobile_number'], '456')
+        self.assertIn('errors', body['failed_students'][0])
+        self.assertIn('house_id', body['failed_students'][1]['reason'])
+        self.assertEqual(self.db.query(Student).count(), 1)
 
     def test_categories_in_csv_and_transaction_rollback(self):
         from unittest.mock import patch
@@ -77,7 +79,7 @@ class StudentBulkTests(unittest.TestCase):
         self.assertEqual(self.db.query(Student).one().mobile_number, '9876543210')
         sheet['A2'] = 102
         sheet['B2'] = '=1+1'
-        self.assertEqual(send().status_code, 422)
+        self.assertEqual(send().json()['failed'], 1)
         self.assertEqual(self.db.query(Student).count(), 1)
         workbook.close()
 
@@ -115,7 +117,8 @@ class StudentBulkTests(unittest.TestCase):
 
     def test_excel_scope_must_match_query(self):
         response = self.upload('admission_number,first_name,father_name,mobile_number,session_id\n001,A,F,123,99999')
-        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()['failed'], 1)
         self.assertEqual(self.db.query(Student).count(), 0)
 
     def test_excel_admission_survives_school_api_update(self):
@@ -184,6 +187,45 @@ class StudentBulkTests(unittest.TestCase):
             self.assertTrue(all(value is None for value in parsed.model_dump().values()))
             with self.assertRaises(ValidationError):
                 write_model.model_validate(values)
+
+    def test_database_row_failure_does_not_block_other_students(self):
+        from unittest.mock import patch
+        from sqlalchemy.exc import IntegrityError
+        from routers.students import update_student_details
+        def save(db, school_id, item, payload):
+            update_student_details(db, school_id, item, payload)
+            if item.admission_number == '002':
+                raise IntegrityError('insert', {}, Exception())
+        with patch('routers.student_bulk.update_student_details', side_effect=save):
+            response = self.upload('admission_number,name,father_name,mobile_number\n001,A,F,123\n002,B,F,456\n003,C,F,789')
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual((response.json()['inserted'], response.json()['failed']), (2, 1))
+        self.assertEqual(response.json()['failed_students'][0]['name'], 'B')
+        self.assertEqual([s.admission_number for s in self.db.query(Student).order_by(Student.id)], ['001', '003'])
+        self.assertEqual(self.db.query(StudentLogin).count(), 2)
+
+    def test_download_failed_students_excel(self):
+        from openpyxl import load_workbook
+        upload = self.upload('admission_number,name,father_name,mobile_number\n001,Valid,Father,0123\n002,,Father,0456')
+        failed = upload.json()['failed_students']
+        response = self.client.post('/super-admin/students/bulk-upload/failed/export',
+                                    json={'failed_students': failed})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn('failed_students.xlsx', response.headers['content-disposition'])
+        book = load_workbook(io.BytesIO(response.content))
+        values = list(book.active.values)
+        self.assertEqual(values[1][1], '002')
+        self.assertEqual(values[1][4], '0456')
+        self.assertEqual(values[1][5], 'Invalid student details')
+        book.close()
+        failed[0]['name'] = '=1+1'
+        response = self.client.post('/super-admin/students/bulk-upload/failed/export', json={'failed_students': failed})
+        book = load_workbook(io.BytesIO(response.content))
+        self.assertEqual(book.active['C2'].data_type, 's')
+        book.close()
+        self.user.role = UserRole.ADMIN
+        self.assertEqual(self.client.post('/super-admin/students/bulk-upload/failed/export',
+            json={'failed_students': failed}).status_code, 403)
 
     def test_requires_super_admin(self):
         for role in (UserRole.ADMIN, UserRole.SUB_ADMIN, 'Staff', 'Teacher', 'Student'):

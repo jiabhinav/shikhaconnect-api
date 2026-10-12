@@ -949,8 +949,12 @@ The upload is limited to 5 MB and 1000 students. Existing admission numbers in
 the selected school and repeated admission numbers in the workbook are skipped;
 other rows are inserted without changing existing students. Results include
 `total`, `inserted`, `failed`, and `failed_rows` with Excel row numbers and reasons.
-`count` remains the inserted count. Other validation or database errors still
-reject the upload without committing students. Success also returns created
+`count` remains the inserted count. Invalid student fields, missing references, and per-row database constraint
+errors are reported in `failed_students` while valid rows are inserted. Each
+failed entry includes the Excel row number, admission number, name, father name,
+mobile number, and reason; validation failures also include field errors.
+`failed_rows` remains an alias for this list. Invalid files and final transaction
+failures still reject the upload. Success also returns created
 students' IDs, admission numbers, names, and mobile numbers.
 
 New logins use a hashed mobile number as their initial password. Students sharing
@@ -969,3 +973,12 @@ are mandatory in each row. If session/class/section IDs are included in the
 workbook, they must match the query parameters. Nonblank optional fields retain
 the Add Student API validation rules. Present and permanent addresses and previous
 school details are saved separately.
+
+After a bulk upload, download the failures as Excel with
+`POST /super-admin/students/bulk-upload/failed/export`. Send JSON
+`{"failed_students": [...]}` using the `failed_students` array from the upload
+response. Super Admin authentication is required. The response downloads
+`failed_students.xlsx` with row number, admission number, name, father name,
+mobile number, failure reason, and field validation errors. No server-side
+report storage is required; the frontend can submit the list when the user
+clicks Download failed students.

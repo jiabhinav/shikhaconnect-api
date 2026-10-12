@@ -123,13 +123,16 @@ def result(school_id, item, message):
     return {"message": message, "data": data}
 
 
-@router.get("/school/{school_id}/assets", response_model=SchoolAssetsResult)
+@router.get("/school/assets", response_model=SchoolAssetsResult)
+@router.get("/school/{school_id}/assets", response_model=SchoolAssetsResult, include_in_schema=False)
 def get_assets(school_id: int, db: Session = Depends(assets_db)):
     return result(school_id, db.get(SchoolAssets, school_id), "School assets fetched successfully")
 
 
-@router.post("/school/{school_id}/assets", response_model=SchoolAssetsResult)
-@router.put("/school/{school_id}/assets", response_model=SchoolAssetsResult)
+@router.post("/school/assets", response_model=SchoolAssetsResult)
+@router.post("/school/{school_id}/assets", response_model=SchoolAssetsResult, include_in_schema=False)
+@router.put("/school/assets", response_model=SchoolAssetsResult)
+@router.put("/school/{school_id}/assets", response_model=SchoolAssetsResult, include_in_schema=False)
 def upload_assets(school_id: int, school_logo: UploadFile | None = File(None),
                   board_logo: UploadFile | None = File(None),
                   principal_signature: UploadFile | None = File(None),
@@ -161,7 +164,8 @@ def upload_assets(school_id: int, school_logo: UploadFile | None = File(None),
     return result(school_id, item, "School assets saved successfully")
 
 
-@router.get("/school/{school_id}/assets/{asset_name}")
+@router.get("/school/assets/{asset_name}")
+@router.get("/school/{school_id}/assets/{asset_name}", include_in_schema=False)
 def download_asset(school_id: int, asset_name: SchoolAssetField, db: Session = Depends(assets_db)):
     item = db.get(SchoolAssets, school_id)
     value = getattr(item, asset_name.value, None)
@@ -172,7 +176,8 @@ def download_asset(school_id: int, asset_name: SchoolAssetField, db: Session = D
                         headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
 
-@router.delete("/school/{school_id}/assets/{asset_name}", response_model=SchoolAssetsResult)
+@router.delete("/school/assets/{asset_name}", response_model=SchoolAssetsResult)
+@router.delete("/school/{school_id}/assets/{asset_name}", response_model=SchoolAssetsResult, include_in_schema=False)
 def delete_asset(school_id: int, asset_name: SchoolAssetField, db: Session = Depends(assets_db)):
     item = db.get(SchoolAssets, school_id)
     value = getattr(item, asset_name.value, None)

@@ -280,7 +280,8 @@ class StaffTests(unittest.TestCase):
         self.assertEqual(str(self.db.execute(text(
             "SELECT salary FROM staff WHERE id=:id"
         ), {"id": staff_id}).scalar()), "25000.5")
-        self.assertTrue(verify_password("staff-secret", account.password))
+        self.assertTrue(verify_password(payload["staff_info"]["mobile_number"], account.password))
+        self.assertFalse(verify_password("staff-secret", account.password))
         self.assertEqual(staff.designation, "Teacher")
         self.assertNotIn("first_name", Staff.__table__.columns)
         self.assertIn("designation", Staff.__table__.columns)
@@ -296,7 +297,7 @@ class StaffTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.db.expire_all()
         self.assertEqual(self.db.get(LoginUser, account_id).first_name, "Updated")
-        self.assertTrue(verify_password("staff-secret", self.db.get(LoginUser, account_id).password))
+        self.assertTrue(verify_password(payload["staff_info"]["mobile_number"], self.db.get(LoginUser, account_id).password))
         self.assertEqual(self.db.get(Staff, staff_id).qualification, "B.Ed.")
         self.assertEqual(self.client.post(self.url, json=payload).status_code, 409)
 
@@ -306,6 +307,17 @@ class StaffTests(unittest.TestCase):
         self.assertEqual(self.db.query(User).count(), 1)
         self.assertIsNone(self.db.get(LoginUser, account_id))
         self.assertIsNone(self.db.get(Staff, staff_id))
+
+    def test_new_staff_password_is_mobile_even_when_password_supplied(self):
+        from routers.staff import apply_staff_profile
+        from schemas.staff import StaffCreate
+        from utils.passwords import verify_password
+        payload = deepcopy(self.payload)
+        payload['staff_info']['password'] = 'custom-secret'
+        item = apply_staff_profile(self.db, StaffCreate.model_validate(payload))
+        self.assertTrue(verify_password(payload['staff_info']['mobile_number'], item.login_user.password))
+        self.assertFalse(verify_password('custom-secret', item.login_user.password))
+        self.assertNotEqual(item.login_user.password, payload['staff_info']['mobile_number'])
 
     def test_staff_can_login_with_mobile_default_password(self):
         from routers.auth import login

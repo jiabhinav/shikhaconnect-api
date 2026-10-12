@@ -1,5 +1,5 @@
 from copy import deepcopy
-from pydantic import AliasChoices, Field, create_model
+from pydantic import AliasChoices, Field, create_model, BaseModel, ConfigDict
 from schemas.student import FormSection, StudentInfo, StudentWrite, ParentInfo, StudentAddress, PreviousSchoolInfo
 
 
@@ -70,3 +70,18 @@ def bulk_payload(row, session_id, class_id, section_id, caste_category_id=None, 
     if not data["previous_school"]:
         data["previous_school"] = None
     return StudentBulkWrite.model_validate(data)
+
+
+class FailedStudentExport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    row: int = Field(gt=0)
+    admission_number: str = ''
+    name: str = ''
+    father_name: str = ''
+    mobile_number: str = ''
+    reason: str
+    errors: list[dict] | None = None
+
+
+class FailedStudentsExportRequest(FormSection):
+    failed_students: list[FailedStudentExport] = Field(min_length=1, max_length=1000)
