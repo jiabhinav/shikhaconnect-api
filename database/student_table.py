@@ -7,7 +7,8 @@ def migrate_optional_student_identity_fields(connection):
     if not inspect(connection).has_table("students"):
         return
     columns = {column["name"]: column for column in inspect(connection).get_columns("students")}
-    fields = [field for field in ("last_name", "apar_id", "email", "guardian_email", "date_of_birth")
+    fields = [field for field in ("last_name", "apar_id", "email", "guardian_email", "date_of_birth",
+                                 "caste_category_id", "fee_category_id")
               if field in columns and not columns[field]["nullable"]]
     if not fields:
         return

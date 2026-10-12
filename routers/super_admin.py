@@ -28,6 +28,9 @@ from routers.school_mappings import router as school_mapping_router
 router = APIRouter(
     prefix="/super-admin",
     tags=["Super Admin"],)
+from routers.student_bulk import router as student_bulk_router
+
+router.include_router(student_bulk_router)
 router.include_router(module_router)
 router.include_router(school_assets_router)
 router.include_router(school_mapping_router)

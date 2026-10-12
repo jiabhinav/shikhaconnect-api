@@ -180,6 +180,8 @@ def validate_student_references(db, school_id, payload):
 
     for field, model in (("session_id", SchoolSession), ("class_id", SchoolClass), ("section_id", Section),
                          ("fee_category_id", FeeCategory), ("caste_category_id", CasteCategory)):
+        if field in {"fee_category_id", "caste_category_id"} and getattr(payload.student_info, field) is None:
+            continue
         query = db.query(model.id).filter(model.id == getattr(payload.student_info, field), model.school_id == school_id)
         if model is not SchoolSession:
             query = query.filter(model.session_id == payload.student_info.session_id)
@@ -194,7 +196,7 @@ def validate_student_references(db, school_id, payload):
 
 
 def update_student_details(db, school_id, item, payload):
-    if item.admission_sequence is None:
+    if item.admission_number is None:
         # Serialize admission allocation per school until the transaction commits.
         school = db.query(School).filter_by(id=school_id).populate_existing().with_for_update().one()
         last = db.query(func.max(Student.admission_sequence)).filter_by(school_id=school_id).scalar()

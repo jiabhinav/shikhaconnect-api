@@ -929,3 +929,43 @@ preserved. Teacher responses now return `teacher_login_id` instead of `login_use
 For status changes send `{"status": "Inactive"}` or `{"status": "Active"}`.
 Inactive teachers cannot log in or use existing tokens. Classes/sessions are not
 required to create a teacher.
+
+### Super Admin student Excel bulk upload
+
+`POST /super-admin/students/bulk-upload` accepts a multipart `file` containing
+an Excel `.xlsx` workbook (first worksheet). Requires Super Admin authentication and query parameters `school_id`,
+`session_id`, `class_id`, and `section_id`. Optionally supply `caste_category_id` and
+`fee_category_id` as query parameters for the whole upload, or as Excel columns
+for each student. Omitted categories are stored as null. All supplied references must belong to the selected school and session.
+
+| admission_number | name | father_name | mobile_number |
+| --- | --- | --- | --- |
+| ADM001 | Alice Kumar | Raj Kumar | 0987654321 |
+| ADM002 | Bob Kumar | Raj Kumar | 0987654321 |
+
+`first_name` can replace the `name` column. Admission numbers and mobile numbers
+should be formatted as Text in Excel to preserve leading zeros. Integer numeric cells are also accepted. Required values cannot be blank.
+The upload is limited to 5 MB and 1000 students. Existing admission numbers in
+the selected school and repeated admission numbers in the workbook are skipped;
+other rows are inserted without changing existing students. Results include
+`total`, `inserted`, `failed`, and `failed_rows` with Excel row numbers and reasons.
+`count` remains the inserted count. Other validation or database errors still
+reject the upload without committing students. Success also returns created
+students' IDs, admission numbers, names, and mobile numbers.
+
+New logins use a hashed mobile number as their initial password. Students sharing
+a mobile number within a school share a login; existing passwords are preserved.
+Profiles are active and admission date defaults to today. Required profile fields
+omitted from this minimal import (gender, nationality, mother's name, and address)
+use `Not specified` until completed through the student edit API.
+
+The Excel import also accepts every Add Student form field. Student and parent
+fields use their payload keys as column headers (for example `last_name`,
+`father_date_of_birth`, `weight_kg`). Address and previous school fields use
+`present_address.line_1`, `permanent_address.line_1`, `previous_school.school_name`,
+and the equivalent `section.field` headers for all other fields. Only
+`admission_number`, `first_name` (or `name`), `father_name`, and `mobile_number`
+are mandatory in each row. If session/class/section IDs are included in the
+workbook, they must match the query parameters. Nonblank optional fields retain
+the Add Student API validation rules. Present and permanent addresses and previous
+school details are saved separately.

@@ -1,6 +1,6 @@
 from datetime import date
 from typing import Literal
-from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, StrictBool, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, StrictBool, field_validator, model_validator, model_serializer
 
 
 class FormSection(BaseModel):
@@ -124,7 +124,15 @@ class StudentWrite(BaseModel):
 
 
 class StudentInfoResponse(StudentInfo):
-    status: Literal["active", "inactive"]
+    first_name: str | None = None
+    mobile_number: str | None = None
+    session_id: int | None = None
+    class_id: int | None = None
+    gender: str | None = None
+    nationality: str | None = None
+    caste_category_id: int | None = None
+    fee_category_id: int | None = None
+    status: Literal["active", "inactive"] | None = None
     admission_number: str | None = None
     admission_sequence: int | None = None
     # Older records may not have these details until they are updated.
@@ -132,25 +140,49 @@ class StudentInfoResponse(StudentInfo):
     apar_id: str | None = None
 
 
+class ParentInfoResponse(ParentInfo):
+    father_name: str | None = None
+    mother_name: str | None = None
+
+
+class StudentAddressResponse(StudentAddress):
+    line_1: str | None = None
+    city: str | None = None
+    country: str | None = None
+    state: str | None = None
+
+
 class StudentResponse(BaseModel):
     id: int
     school_id: int
     student_info: StudentInfoResponse
-    parent_info: ParentInfo
-    present_address: StudentAddress
-    permanent_address: StudentAddress
+    parent_info: ParentInfoResponse
+    present_address: StudentAddressResponse
+    permanent_address: StudentAddressResponse
     previous_school: PreviousSchoolResponse | None = None
     login: StudentLoginResponse | None
+
+    @model_serializer(mode="wrap", when_used="json")
+    def empty_missing_values(self, handler):
+        def replace_null(value):
+            if value is None:
+                return ""
+            if isinstance(value, dict):
+                return {key: replace_null(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [replace_null(item) for item in value]
+            return value
+        return replace_null(handler(self))
 
     @model_validator(mode="before")
     @classmethod
     def from_student(cls, value):
         if not isinstance(value, dict):
-            addresses = {a.address_type: StudentAddress.model_validate(a) for a in value.addresses}
-            legacy = StudentAddress.model_validate(value)
+            addresses = {a.address_type: StudentAddressResponse.model_validate(a) for a in value.addresses}
+            legacy = StudentAddressResponse.model_validate(value)
             return {"id": value.id, "school_id": value.school_id,
                     "student_info": StudentInfoResponse.model_validate(value),
-                    "parent_info": ParentInfo.model_validate(value),
+                    "parent_info": ParentInfoResponse.model_validate(value),
                     "present_address": addresses.get("present", legacy),
                     "permanent_address": addresses.get("permanent", legacy),
                     "login": value.login, "previous_school": value.previous_school}

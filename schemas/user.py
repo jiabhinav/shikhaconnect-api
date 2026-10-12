@@ -146,6 +146,7 @@ class LoginSchoolPermission(BaseModel):
     school_id: int
     module_id: int
     name: Optional[str] = None
+    key: Optional[str] = None
     is_enabled: bool
     read: bool
     delete: bool
@@ -160,6 +161,7 @@ class LoginStaffPermission(BaseModel):
     login_user_id: int
     staff_module_id: int
     name: Optional[str] = None
+    key: Optional[str] = None
     is_enabled: bool
     read: bool = True
     delete: bool = False

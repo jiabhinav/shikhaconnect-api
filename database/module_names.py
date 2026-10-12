@@ -21,3 +21,17 @@ def get_module_names(db: Session, module_ids: list[int]) -> dict[int, str]:
 
 def get_staff_module_names(db: Session, module_ids: list[int]) -> dict[int, str]:
     return get_module_names(db, module_ids)
+
+
+def get_module_keys(db: Session, module_ids: list[int]) -> dict[int, str]:
+    if not module_ids:
+        return {}
+    try:
+        modules = Table("modules", MetaData(), autoload_with=db.connection())
+    except NoSuchTableError:
+        return {}
+    if "key" not in modules.c:
+        return {}
+    return dict(db.execute(
+        select(modules.c.id, modules.c.key).where(modules.c.id.in_(module_ids))
+    ).all())

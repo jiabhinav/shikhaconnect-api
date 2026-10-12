@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, selectinload
 
 from dependencies.db import get_db_session
-from database.module_names import get_module_names, get_staff_module_names
+from database.module_names import get_module_keys, get_module_names, get_staff_module_names
 from dependencies.auth import account_token
 from models.school import School
 from models.school_assets import SchoolAssets
@@ -163,16 +163,20 @@ def authenticate_login(credentials, db, teacher_only=False):
         payload["schools"] = []
         staff_permissions = None
         if account.role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
-            module_names = get_module_names(db, list({
+            module_ids = list({
                 permission.module_id
                 for school, logo in schools
                 for permission in school.permissions
-            }))
+            })
+            module_names = get_module_names(db, module_ids)
+            module_keys = get_module_keys(db, module_ids)
         else:
             module_names = get_staff_module_names(db, [p.staff_module_id for p in account.permissions])
+            module_keys = get_module_keys(db, [p.staff_module_id for p in account.permissions])
             staff_permissions = [LoginStaffPermission(
                 id=p.id, login_user_id=p.login_user_id, staff_module_id=p.staff_module_id,
-                name=module_names.get(p.staff_module_id), is_enabled=p.is_enabled,
+                name=module_names.get(p.staff_module_id), key=module_keys.get(p.staff_module_id),
+                is_enabled=p.is_enabled,
                 read=p.read, delete=p.delete, update=p.update, create=p.create,
             ) for p in sorted(account.permissions, key=lambda permission: permission.id)]
         session_ids = current_session_ids(db, [school.id for school, _ in schools])
@@ -191,7 +195,8 @@ def authenticate_login(credentials, db, teacher_only=False):
                        if field not in {"permissions", "sessions", "school_logo", "current_session_id"}},
                     "permissions": [LoginSchoolPermission(
                         id=p.id, school_id=p.school_id, module_id=p.module_id,
-                        name=module_names.get(p.module_id), is_enabled=p.is_enabled,
+                        name=module_names.get(p.module_id), key=module_keys.get(p.module_id),
+                        is_enabled=p.is_enabled,
                         read=p.is_enabled, delete=p.is_enabled,
                         update=p.is_enabled, create=p.is_enabled,
                     ) for p in sorted(school.permissions, key=lambda permission: permission.id)],

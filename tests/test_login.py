@@ -97,8 +97,8 @@ class LoginTests(unittest.TestCase):
     def test_permissions_match_each_assigned_school(self):
         self.second_school()
         self.assign(1)
-        self.db.execute(text("CREATE TABLE modules (id INTEGER PRIMARY KEY, name VARCHAR(255))"))
-        self.db.execute(text("INSERT INTO modules (id, name) VALUES (10, 'Students')"))
+        self.db.execute(text("CREATE TABLE modules (id INTEGER PRIMARY KEY, name VARCHAR(255), key VARCHAR(255))"))
+        self.db.execute(text("INSERT INTO modules (id, name, key) VALUES (10, 'Students', 'students')"))
         self.db.add_all([
             SchoolPermission(id=2, school_id=1, module_id=20, is_enabled=False),
             SchoolPermission(id=1, school_id=1, module_id=10, is_enabled=True),
@@ -111,15 +111,15 @@ class LoginTests(unittest.TestCase):
         schools = response.json()["data"]["schools"]
         self.assertEqual(len(schools), 1)
         self.assertEqual(schools[0]["permissions"], [
-            {"id": 1, "school_id": 1, "module_id": 10, "name": "Students", "is_enabled": True,
+            {"id": 1, "school_id": 1, "module_id": 10, "name": "Students", "key": "students", "is_enabled": True,
              "read": True, "delete": True, "update": True, "create": True},
-            {"id": 2, "school_id": 1, "module_id": 20, "name": None, "is_enabled": False,
+            {"id": 2, "school_id": 1, "module_id": 20, "name": None, "key": None, "is_enabled": False,
              "read": False, "delete": False, "update": False, "create": False},
         ])
         self.assign(2)
         schools = self.login().json()["data"]["schools"]
         self.assertEqual(schools[1]["permissions"], [
-            {"id": 3, "school_id": 2, "module_id": 10, "name": "Students", "is_enabled": True,
+            {"id": 3, "school_id": 2, "module_id": 10, "name": "Students", "key": "students", "is_enabled": True,
              "read": True, "delete": True, "update": True, "create": True},
         ])
 
