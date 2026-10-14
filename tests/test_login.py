@@ -64,6 +64,38 @@ class LoginTests(unittest.TestCase):
         self.assertEqual(response.json()["detail"],
                          "User not active yet, please contact the administrator")
 
+    def test_inactive_school_blocks_admin_and_sub_admin_login(self):
+        self.assign()
+        school = self.db.get(School, 1)
+        school.status = False
+        self.db.commit()
+        for role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
+            with self.subTest(role=role):
+                self.db.get(User, 2).role = role
+                self.db.commit()
+                response = self.login()
+                self.assertEqual(response.status_code, 403, response.text)
+                self.assertEqual(response.json()['detail'], 'Please contact to administrator')
+                self.assertNotIn('token', response.json())
+                self.assertNotIn('Authorization', response.headers)
+                self.assertEqual(self.login(password='wrong').status_code, 401)
+        school.status = True
+        self.db.commit()
+        self.assertEqual(self.login().status_code, 200)
+
+    def test_inactive_schools_are_excluded_when_an_active_school_remains(self):
+        self.second_school()
+        self.assign(1)
+        self.assign(2)
+        self.db.get(School, 1).status = False
+        self.db.commit()
+        for role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
+            self.db.get(User, 2).role = role
+            self.db.commit()
+            response = self.login()
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual([school['id'] for school in response.json()['data']['schools']], [2])
+
     def test_admin_multiple_schools_and_json_serialization(self):
         self.second_school()
         self.assign(2)

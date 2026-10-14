@@ -178,7 +178,7 @@ def migrate_student_form_fields(connection):
     """Add optional form columns while preserving existing records."""
     if connection.dialect.name == "postgresql":
         connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
-    additions = {"students": {'profile_img': 'VARCHAR(500)', 'admission_date': 'DATE', 'house_id': 'INTEGER REFERENCES houses(id) ON DELETE RESTRICT', 'student_type': 'VARCHAR(100)', 'admission_type': 'VARCHAR(100)', 'first_admission_class': 'VARCHAR(255)', 'abha_number': 'VARCHAR(100)', 'mode_of_transport': 'VARCHAR(100)', 'weight_kg': 'FLOAT', 'height_cm': 'FLOAT', 'father_dob': 'DATE', 'mother_dob': 'DATE'}, "student_addresses": {"landline_number": "VARCHAR(20)"}}
+    additions = {"students": {'profile_img': 'VARCHAR(500)', 'admission_date': 'DATE', 'student_type': 'VARCHAR(100)', 'admission_type': 'VARCHAR(100)', 'first_admission_class': 'VARCHAR(255)', 'abha_number': 'VARCHAR(100)', 'mode_of_transport': 'VARCHAR(100)', 'weight_kg': 'FLOAT', 'height_cm': 'FLOAT', 'father_dob': 'DATE', 'mother_dob': 'DATE'}, "student_addresses": {"landline_number": "VARCHAR(20)"}}
     for table, fields in additions.items():
         if not inspect(connection).has_table(table):
             continue
@@ -186,3 +186,52 @@ def migrate_student_form_fields(connection):
         for name, definition in fields.items():
             if name not in columns:
                 connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}"))
+
+
+def migrate_student_dropdown_names(connection):
+    """Persist dropdown labels without overwriting saved labels."""
+    if not inspect(connection).has_table("students"):
+        return
+    if connection.dialect.name == "postgresql":
+        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    columns = {column["name"] for column in inspect(connection).get_columns("students")}
+    for field, table in (("caste_category", "caste_categories"),
+                         ("fee_category", "fee_categories"), ("house", "houses")):
+        name_column, id_column = f"{field}_name", f"{field}_id"
+        if name_column not in columns:
+            connection.execute(text(f"ALTER TABLE students ADD COLUMN {name_column} VARCHAR(100)"))
+        if id_column in columns and inspect(connection).has_table(table):
+            connection.execute(text(f"""
+                UPDATE students SET {name_column} = (
+                    SELECT name FROM {table}
+                    WHERE {table}.id = students.{id_column}
+                      AND {table}.school_id = students.school_id
+                ) WHERE {name_column} IS NULL AND {id_column} IS NOT NULL
+            """))
+
+
+def migrate_student_dropdown_storage(connection):
+    """Backfill labels before removing obsolete student dropdown foreign keys."""
+    migrate_student_dropdown_names(connection)
+    inspector = inspect(connection)
+    if not inspector.has_table("students"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("students")}
+    for field in ("caste_category", "fee_category", "house"):
+        id_column, name_column = f"{field}_id", f"{field}_name"
+        if id_column not in columns:
+            continue
+        missing = connection.execute(text(
+            f"SELECT id FROM students WHERE {id_column} IS NOT NULL AND {name_column} IS NULL LIMIT 1"
+        )).first()
+        if missing:
+            from sqlalchemy.exc import SQLAlchemyError
+            raise SQLAlchemyError(f"Cannot remove {id_column}: a student has no matching dropdown name")
+    # Validate all backfills before dropping any columns. Do not cascade to other tables.
+    for field in ("caste_category_id", "fee_category_id", "house_id"):
+        if field in columns:
+            for index in inspect(connection).get_indexes("students"):
+                if field in index.get("column_names", []):
+                    quoted = connection.dialect.identifier_preparer.quote(index["name"])
+                    connection.execute(text(f"DROP INDEX {quoted}"))
+            connection.execute(text(f"ALTER TABLE students DROP COLUMN {field}"))

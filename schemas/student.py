@@ -17,8 +17,8 @@ class FormSection(BaseModel):
 class StudentInfo(FormSection):
     admission_date: date | None = Field(default=None, description="Defaults to today when creating a student.")
     date_of_birth: date | None = None
-    caste_category_id: int = Field(gt=0)
-    fee_category_id: int = Field(gt=0)
+    caste_category_name: str = Field(min_length=1, max_length=100)
+    fee_category_name: str = Field(min_length=1, max_length=100)
     session_id: int = Field(gt=0)
     class_id: int = Field(gt=0)
     section_id: int = Field(gt=0)
@@ -34,7 +34,7 @@ class StudentInfo(FormSection):
     blood_group: str | None = Field(default=None, max_length=10)
     religion: str | None = Field(default=None, max_length=100)
     aadhaar_number: str | None = Field(default=None, max_length=20)
-    house_id: int | None = Field(default=None, gt=0)
+    house_name: str | None = Field(default=None, min_length=1, max_length=100)
     student_type: str | None = Field(default=None, max_length=100)
     admission_type: str | None = Field(default=None, max_length=100)
     first_admission_class: str | None = Field(default=None, max_length=255)
@@ -131,8 +131,9 @@ class StudentInfoResponse(StudentInfo):
     class_id: int | None = None
     gender: str | None = None
     nationality: str | None = None
-    caste_category_id: int | None = None
-    fee_category_id: int | None = None
+    caste_category_name: str | None = None
+    fee_category_name: str | None = None
+    house_name: str | None = None
     status: Literal["active", "inactive"] | None = None
     admission_number: str | None = None
     admission_sequence: int | None = None
@@ -202,11 +203,14 @@ class StudentListResult(BaseModel):
     data: list[StudentResponse]
 
 
-class StudentDropdownOption(BaseModel):
+class StudentDropdownNameOption(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: int
     name: str
     session_id: int | None
+
+
+class StudentDropdownOption(StudentDropdownNameOption):
+    id: int
 
 
 class StudentClassOption(StudentDropdownOption):
@@ -216,11 +220,11 @@ class StudentClassOption(StudentDropdownOption):
 class StudentDropdownData(BaseModel):
     school_id: int
     session_id: int | None
-    caste_categories: list[StudentDropdownOption]
-    fee_categories: list[StudentDropdownOption]
+    caste_categories: list[StudentDropdownNameOption]
+    fee_categories: list[StudentDropdownNameOption]
     classes: list[StudentClassOption]
     sections: list[StudentDropdownOption]
-    houses: list[StudentDropdownOption]
+    houses: list[StudentDropdownNameOption]
 
 
 class StudentDropdownResult(BaseModel):

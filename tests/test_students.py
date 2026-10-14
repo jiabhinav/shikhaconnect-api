@@ -19,6 +19,74 @@ class StudentTests(unittest.TestCase):
             data[field]=self.client.post(f"{base}/sessions/{data['session_id']}/{route}",json={'name':'Test'}).json()['data']['id']
         return data
 
+    def test_dropdown_names_are_stored_and_returned(self):
+        from models.house import House
+        from models.caste_category import CasteCategory
+        from models.fee_category import FeeCategory
+        payload = nest(self.student_payload())
+        info = payload['student_info']
+        house = House(school_id=1, session_id=info['session_id'], name='Blue')
+        self.db.add(house)
+        self.db.query(CasteCategory).filter_by(school_id=1, session_id=info['session_id']).one().name = 'General'
+        self.db.query(FeeCategory).filter_by(school_id=1, session_id=info['session_id']).one().name = 'Regular'
+        self.db.commit()
+        info.update(caste_category_name='General', fee_category_name='Regular', house_name='Blue')
+        response = self.client.post('/schools/1/students', json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        student_id = response.json()['data']['id']
+        for data in (response.json()['data'],
+                     self.client.get(f'/schools/1/students/{student_id}').json()['data'],
+                     self.client.get('/schools/1/students').json()['data'][0]):
+            for field, name in (('caste_category', 'General'), ('fee_category', 'Regular'), ('house', 'Blue')):
+                self.assertEqual(data['student_info'][f'{field}_name'], name)
+                self.assertNotIn(f'{field}_id', data['student_info'])
+                self.assertEqual(getattr(self.db.get(Student, student_id), f'{field}_name'), name)
+        invalid = {**payload, 'student_info': {**info, 'caste_category_name': 'Missing'}}
+        self.assertEqual(self.client.post('/schools/1/students', json=invalid).status_code, 404)
+        invalid['student_info'] = {**info, 'caste_category_id': 1}
+        self.assertEqual(self.client.post('/schools/1/students', json=invalid).status_code, 422)
+        info['house_name'] = None
+        response = self.client.put(f'/schools/1/students/{student_id}', json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['student_info']['house_name'], '')
+        self.assertIsNone(self.db.get(Student, student_id).house_name)
+
+    def test_dropdown_name_migration(self):
+        from sqlalchemy import create_engine, text
+        from database.student_table import migrate_student_dropdown_names
+        engine = create_engine('sqlite://')
+        with engine.begin() as connection:
+            connection.execute(text('CREATE TABLE students (id INTEGER PRIMARY KEY, school_id INTEGER, house_id INTEGER)'))
+            connection.execute(text('CREATE TABLE houses (id INTEGER PRIMARY KEY, school_id INTEGER, name VARCHAR(100))'))
+            connection.execute(text("INSERT INTO houses VALUES (1, 1, 'Blue')"))
+            connection.execute(text('INSERT INTO students VALUES (1, 1, 1)'))
+            migrate_student_dropdown_names(connection)
+            self.assertEqual(connection.execute(text('SELECT house_name FROM students')).scalar(), 'Blue')
+            connection.execute(text("UPDATE houses SET name = 'Red'"))
+            migrate_student_dropdown_names(connection)
+            self.assertEqual(connection.execute(text('SELECT house_name FROM students')).scalar(), 'Blue')
+        engine.dispose()
+
+    def test_dropdown_storage_removes_ids_and_preserves_names(self):
+        from sqlalchemy import create_engine, inspect, text
+        from database.student_table import migrate_student_dropdown_storage
+        engine = create_engine('sqlite://')
+        with engine.begin() as connection:
+            for field, table in (('caste_category', 'caste_categories'), ('fee_category', 'fee_categories'), ('house', 'houses')):
+                connection.execute(text(f'CREATE TABLE {table} (id INTEGER PRIMARY KEY, school_id INTEGER, name VARCHAR(100))'))
+                connection.execute(text(f"INSERT INTO {table} VALUES (1, 1, '{field} label')"))
+            connection.execute(text('CREATE TABLE students (id INTEGER PRIMARY KEY, school_id INTEGER, caste_category_id INTEGER REFERENCES caste_categories(id), fee_category_id INTEGER REFERENCES fee_categories(id), house_id INTEGER REFERENCES houses(id))'))
+            connection.execute(text('CREATE INDEX ix_students_house_id ON students (house_id)'))
+            connection.execute(text('INSERT INTO students VALUES (1, 1, 1, 1, 1), (2, 1, NULL, NULL, NULL)'))
+            migrate_student_dropdown_storage(connection)
+            migrate_student_dropdown_storage(connection)
+            columns = {column['name'] for column in inspect(connection).get_columns('students')}
+            for field in ('caste_category', 'fee_category', 'house'):
+                self.assertNotIn(f'{field}_id', columns)
+                self.assertNotIn(f'{field}_id', Student.__table__.columns)
+                self.assertEqual(connection.execute(text(f'SELECT {field}_name FROM students ORDER BY id')).scalars().all(), [f'{field} label', None])
+        engine.dispose()
+
     def test_admission_date_defaults_and_updates(self):
         from datetime import date
         payload = nest(self.student_payload())
@@ -82,7 +150,7 @@ class StudentTests(unittest.TestCase):
             connection.execute(text('CREATE TABLE student_addresses (id INTEGER PRIMARY KEY)'))
             migrate_student_form_fields(connection)
             migrate_student_form_fields(connection)
-            self.assertEqual(connection.execute(text('SELECT id, weight_kg, house_id, father_dob, mother_dob, admission_date FROM students')).all(), [(1, None, None, None, None, None)])
+            self.assertEqual(connection.execute(text('SELECT id, weight_kg, father_dob, mother_dob, admission_date FROM students')).all(), [(1, None, None, None, None)])
         engine.dispose()
 
     def test_optional_student_dob(self):
@@ -167,8 +235,10 @@ class StudentTests(unittest.TestCase):
                 missing=dict(payload)
                 del missing[key]
                 self.assertEqual(self.client.post(url,json=nest(missing)).status_code,422,key)
-        for field in ('class_id','section_id','session_id','fee_category_id','caste_category_id'):
+        for field in ('class_id','section_id','session_id'):
             self.assertEqual(self.client.post(url,json=nest(dict(payload,**{field:99999}))).status_code,404)
+        for field in ('fee_category_name', 'caste_category_name'):
+            self.assertEqual(self.client.post(url,json=nest(dict(payload,**{field:'Missing'}))).status_code,404)
         other_session=self.client.post('/schools/school/2/sessions',json=self.payload).json()['data']['id']
         foreign=self.client.post(f'/schools/school/2/sessions/{other_session}/classes',json={'name':'Other'}).json()['data']['id']
         self.assertEqual(self.client.post(url,json=nest(dict(payload,class_id=foreign))).status_code,404)
@@ -481,6 +551,11 @@ class StudentTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual([row['name'] for row in response.json()['data']['houses']], ['Blue'])
         self.assertEqual(response.json()['data']['houses'][0]['session_id'], payload['session_id'])
+        for key in ('caste_categories', 'fee_categories', 'houses'):
+            for option in response.json()['data'][key]:
+                self.assertEqual(set(option), {'name', 'session_id'})
+        for key in ('classes', 'sections'):
+            self.assertIn('id', response.json()['data'][key][0])
         self.assertEqual(response.json()['data']['sections'], [
             {'id': payload['section_id'], 'name': 'Test', 'session_id': payload['session_id']}])
         self.assertEqual(self.client.get(url, params={'session_id': 99999}).status_code, 404)

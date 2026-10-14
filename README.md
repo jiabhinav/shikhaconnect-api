@@ -932,11 +932,13 @@ required to create a teacher.
 
 ### Super Admin student Excel bulk upload
 
+Use [the Excel template](templates/student_bulk_upload.xlsx), which includes all supported form columns and one dummy student. Replace the sample category and house names with your school/session dropdown values before uploading.
+
 `POST /super-admin/students/bulk-upload` accepts a multipart `file` containing
 an Excel `.xlsx` workbook (first worksheet). Requires Super Admin authentication and query parameters `school_id`,
-`session_id`, `class_id`, and `section_id`. Optionally supply `caste_category_id` and
-`fee_category_id` as query parameters for the whole upload, or as Excel columns
-for each student. Omitted categories are stored as null. All supplied references must belong to the selected school and session.
+`session_id`, `class_id`, and `section_id`. Optionally supply `caste_category_name` and
+`fee_category_name` as query parameters for the whole upload, or as Excel columns
+for each student. Use `house_name` as an Excel column for the selected house. Names must match the dropdown values for the selected school and session. Omitted categories and house are stored as null. The removed `caste_category_id`, `fee_category_id`, and `house_id` Excel columns are rejected.
 
 | admission_number | name | father_name | mobile_number |
 | --- | --- | --- | --- |

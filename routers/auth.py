@@ -154,6 +154,13 @@ def authenticate_login(credentials, db, teacher_only=False):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="User not active yet, please contact the administrator",
             )
+        if account.role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
+            schools = [(school, logo) for school, logo in schools if school.status]
+            if not schools:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Please contact to administrator",
+                )
         sessions_by_school = {school.id: [] for school, logo in schools}
         sessions = db.query(SchoolSession).filter(
             SchoolSession.school_id.in_(sessions_by_school)

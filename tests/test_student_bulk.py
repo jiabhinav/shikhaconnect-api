@@ -17,7 +17,7 @@ class StudentBulkTests(unittest.TestCase):
         self.client.app.include_router(router)
         data = self.student_payload()
         self.params = dict(school_id=1, **{key: data[key] for key in (
-            'class_id', 'section_id', 'session_id', 'caste_category_id', 'fee_category_id')})
+            'class_id', 'section_id', 'session_id', 'caste_category_name', 'fee_category_name')})
 
     def upload(self, text):
         workbook = Workbook()
@@ -42,22 +42,22 @@ class StudentBulkTests(unittest.TestCase):
         self.assertEqual(self.db.query(Student).count(), 2)
 
     def test_invalid_rows_reported_and_valid_rows_inserted(self):
-        response = self.upload('admission_number,name,father_name,mobile_number,house_id\n001,Valid,Father,123,\n002,,Father,456,\n003,Wrong house,Father,789,99999')
+        response = self.upload('admission_number,name,father_name,mobile_number,house_name\n001,Valid,Father,123,\n002,,Father,456,\n003,Wrong house,Father,789,Missing')
         self.assertEqual(response.status_code, 201, response.text)
         body = response.json()
         self.assertEqual((body['total'], body['inserted'], body['failed']), (3, 1, 2))
         self.assertEqual([row['row'] for row in body['failed_students']], [3, 4])
         self.assertEqual(body['failed_students'][0]['mobile_number'], '456')
         self.assertIn('errors', body['failed_students'][0])
-        self.assertIn('house_id', body['failed_students'][1]['reason'])
+        self.assertIn('house_name', body['failed_students'][1]['reason'])
         self.assertEqual(self.db.query(Student).count(), 1)
 
     def test_categories_in_csv_and_transaction_rollback(self):
         from unittest.mock import patch
         from sqlalchemy.exc import IntegrityError
-        caste = self.params.pop('caste_category_id')
-        fee = self.params.pop('fee_category_id')
-        text = ('admission_number,name,father_name,mobile_number,caste_category_id,fee_category_id\n'
+        caste = self.params.pop('caste_category_name')
+        fee = self.params.pop('fee_category_name')
+        text = ('admission_number,name,father_name,mobile_number,caste_category_name,fee_category_name\n'
                 f'001,A,F,123,{caste},{fee}\n')
         with patch.object(self.db, 'commit', side_effect=IntegrityError('insert', {}, Exception())):
             self.assertEqual(self.upload(text).status_code, 409)
@@ -91,16 +91,16 @@ class StudentBulkTests(unittest.TestCase):
         self.assertEqual(self.db.query(Student).count(), 0)
 
     def test_categories_are_optional(self):
-        self.params.pop('caste_category_id')
-        self.params.pop('fee_category_id')
+        self.params.pop('caste_category_name')
+        self.params.pop('fee_category_name')
         response = self.upload('admission_number,name,father_name,mobile_number\n001,Alice,Father,0123456789')
         self.assertEqual(response.status_code, 201, response.text)
         student = self.db.query(Student).one()
-        self.assertIsNone(student.caste_category_id)
-        self.assertIsNone(student.fee_category_id)
+        self.assertIsNone(student.caste_category_name)
+        self.assertIsNone(student.fee_category_name)
         response = self.client.get(f'/schools/1/students/{student.id}')
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()['data']['student_info']['caste_category_id'], '')
+        self.assertEqual(response.json()['data']['student_info']['caste_category_name'], '')
 
     def test_full_student_fields_are_saved(self):
         response = self.upload('admission_number,first_name,father_name,mobile_number,last_name,admission_date,father_date_of_birth,weight_kg,present_address.line_1,present_address.city,permanent_address.line_1,previous_school.school_name\nADM99,Alice,Father,0123456789,Kumar,2024-06-01,1980-01-01,25.5,Present Street,Delhi,Permanent Street,Old School')
@@ -132,9 +132,13 @@ class StudentBulkTests(unittest.TestCase):
         payload = bulk_payload(StudentBulkRow(admission_number='0007-EXCEL', first_name='Alice',
             father_name='Father', mobile_number='0123456789'),
             self.params['session_id'], self.params['class_id'], self.params['section_id'],
-            self.params['caste_category_id'], self.params['fee_category_id'])
+            self.params['caste_category_name'], self.params['fee_category_name'])
+        values = payload.model_dump(mode='json')
+        for field in ('caste_category', 'fee_category', 'house'):
+            values['student_info'].pop(f'{field}_id', None)
+            values['student_info'][f'{field}_name'] = getattr(item, f'{field}_name')
         response = self.client.put('/schools/students',
-            params={'school_id': 1, 'student_id': student_id}, json=payload.model_dump(mode='json'))
+            params={'school_id': 1, 'student_id': student_id}, json=values)
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()['data']['student_info']['admission_number'], '0007-EXCEL')
         self.assertEqual(self.db.query(StudentLogin).count(), 1)
@@ -155,8 +159,8 @@ class StudentBulkTests(unittest.TestCase):
         self.assertEqual((response.json()['inserted'], response.json()['failed']), (0, 1))
 
     def test_list_includes_incomplete_imported_profiles(self):
-        self.params.pop('caste_category_id')
-        self.params.pop('fee_category_id')
+        self.params.pop('caste_category_name')
+        self.params.pop('fee_category_name')
         self.upload('admission_number,first_name,father_name,mobile_number\n001,Alice,Father,123\n002,Bob,Father,456')
         item = self.db.query(Student).first()
         for field in ('gender', 'nationality', 'mother_name', 'line_1', 'city', 'state', 'country'):
@@ -170,7 +174,7 @@ class StudentBulkTests(unittest.TestCase):
         self.assertEqual(len(response.json()['data']), 2)
         data = response.json()['data'][0]
         self.assertEqual(data['student_info']['date_of_birth'], '')
-        self.assertEqual(data['student_info']['caste_category_id'], '')
+        self.assertEqual(data['student_info']['caste_category_name'], '')
         self.assertEqual(data['present_address']['line_1'], '')
         self.assertEqual(data['parent_info']['mother_name'], '')
         self.assertEqual(data['previous_school'], '')
@@ -226,6 +230,51 @@ class StudentBulkTests(unittest.TestCase):
         self.user.role = UserRole.ADMIN
         self.assertEqual(self.client.post('/super-admin/students/bulk-upload/failed/export',
             json={'failed_students': failed}).status_code, 403)
+
+    def test_removed_id_columns_are_rejected(self):
+        from schemas.student_bulk import StudentBulkRow
+        from pydantic import ValidationError
+        for field in ('caste_category_id', 'fee_category_id', 'house_id'):
+            with self.subTest(field=field):
+                with self.assertRaises(ValidationError):
+                    StudentBulkRow.model_validate(dict(admission_number='001', first_name='Alice',
+                        father_name='Father', mobile_number='123', **{field: 1}))
+        operation = self.client.app.openapi()['paths']['/super-admin/students/bulk-upload']['post']
+        parameters = {parameter['name'] for parameter in operation['parameters']}
+        self.assertIn('caste_category_name', parameters)
+        self.assertIn('fee_category_name', parameters)
+        self.assertNotIn('caste_category_id', parameters)
+        self.assertNotIn('fee_category_id', parameters)
+
+    def test_template_dummy_student_imports_with_names(self):
+        from pathlib import Path
+        from openpyxl import load_workbook
+        from schemas.student_bulk import BULK_COLUMNS
+        from models.caste_category import CasteCategory
+        from models.fee_category import FeeCategory
+        from models.house import House
+        self.db.query(CasteCategory).filter_by(school_id=1).one().name = 'General'
+        self.db.query(FeeCategory).filter_by(school_id=1).one().name = 'Regular'
+        self.db.add(House(school_id=1, session_id=self.params['session_id'], name='Blue'))
+        self.db.commit()
+        template = Path(__file__).resolve().parents[1] / 'templates/student_bulk_upload.xlsx'
+        book = load_workbook(template, read_only=True)
+        rows = list(book['Students'].values)
+        headers = set(rows[0])
+        self.assertEqual(headers, {'admission_number'} | (set(BULK_COLUMNS) - {'session_id', 'class_id', 'section_id'}))
+        self.assertEqual(sum(any(value is not None for value in row) for row in rows[1:]), 1)
+        book.close()
+        response = self.client.post('/super-admin/students/bulk-upload', params=self.params,
+            files={'file': ('students.xlsx', template.read_bytes())})
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual((response.json()['inserted'], response.json()['failed']), (1, 0), response.text)
+        student = self.db.query(Student).one()
+        self.assertEqual(student.mobile_number, '0987654321')
+        data = self.client.get(f'/schools/1/students/{student.id}').json()['data']['student_info']
+        for field, expected in (('caste_category', 'General'), ('fee_category', 'Regular'), ('house', 'Blue')):
+            self.assertEqual(getattr(student, f'{field}_name'), expected)
+            self.assertEqual(data[f'{field}_name'], expected)
+            self.assertNotIn(f'{field}_id', data)
 
     def test_requires_super_admin(self):
         for role in (UserRole.ADMIN, UserRole.SUB_ADMIN, 'Staff', 'Teacher', 'Student'):

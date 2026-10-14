@@ -43,8 +43,8 @@ def bulk_upload_students(
     class_id: int = Query(..., gt=0),
     section_id: int = Query(..., gt=0),
     session_id: int = Query(..., gt=0),
-    caste_category_id: int | None = Query(None, gt=0),
-    fee_category_id: int | None = Query(None, gt=0),
+    caste_category_name: str | None = Query(None, min_length=1, max_length=100),
+    fee_category_name: str | None = Query(None, min_length=1, max_length=100),
     file: UploadFile = File(...),
     db: Session = Depends(get_db_session),
     user=Depends(get_current_user),
@@ -129,7 +129,7 @@ def bulk_upload_students(
             continue
         seen.add(row.admission_number)
         try:
-            payload = bulk_payload(row, session_id, class_id, section_id, caste_category_id, fee_category_id)
+            payload = bulk_payload(row, session_id, class_id, section_id, caste_category_name, fee_category_name)
         except ValidationError as exc:
             failed_rows.append(failed_student(number, row, 'Invalid student details',
                 exc.errors(include_input=False, include_context=False)))

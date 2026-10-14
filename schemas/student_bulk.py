@@ -8,13 +8,11 @@ class _StudentBulkRow(FormSection):
     first_name: str = Field(min_length=1, max_length=255, validation_alias=AliasChoices('name', 'first_name'))
     father_name: str = Field(min_length=1, max_length=255)
     mobile_number: str = Field(min_length=1, max_length=20)
-    caste_category_id: int | None = Field(default=None, gt=0)
-    fee_category_id: int | None = Field(default=None, gt=0)
 
 
 class StudentBulkInfo(StudentInfo):
-    caste_category_id: int | None = Field(default=None, gt=0)
-    fee_category_id: int | None = Field(default=None, gt=0)
+    caste_category_name: str | None = Field(default=None, min_length=1, max_length=100)
+    fee_category_name: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class StudentBulkWrite(StudentWrite):
@@ -48,7 +46,7 @@ for section, model in (("student_info", StudentInfo), ("parent_info", ParentInfo
 StudentBulkRow = create_model("StudentBulkRow", __base__=_StudentBulkRow, **extra_fields)
 
 
-def bulk_payload(row, session_id, class_id, section_id, caste_category_id=None, fee_category_id=None):
+def bulk_payload(row, session_id, class_id, section_id, caste_category_name=None, fee_category_name=None):
     data = {section: {} for section in ("student_info", "parent_info", "present_address", "permanent_address", "previous_school")}
     for column, value in row.model_dump(exclude_none=True).items():
         if column in BULK_COLUMNS:
@@ -59,8 +57,8 @@ def bulk_payload(row, session_id, class_id, section_id, caste_category_id=None, 
         if key in info and info[key] != value:
             raise ValueError(f"{key} in Excel must match the query parameter")
         info[key] = value
-    info.setdefault("caste_category_id", caste_category_id)
-    info.setdefault("fee_category_id", fee_category_id)
+    info.setdefault("caste_category_name", caste_category_name)
+    info.setdefault("fee_category_name", fee_category_name)
     info.setdefault("gender", "Not specified")
     info.setdefault("nationality", "Not specified")
     data["parent_info"].setdefault("mother_name", "Not specified")
