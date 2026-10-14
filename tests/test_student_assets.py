@@ -18,7 +18,8 @@ class StudentAssetTests(unittest.TestCase):
         response = self.client.post('/schools/students', params={'school_id': 1}, json=payload)
         self.assertEqual(response.status_code, 201, response.text)
         self.student_id = response.json()['data']['id']
-        self.params = {'school_id': 1, 'student_id': self.student_id}
+        self.params = {'school_id': 1, 'student_id': self.student_id,
+                       'session_id': payload['student_info']['session_id']}
         self.temp = tempfile.TemporaryDirectory()
         self.storage = patch('routers.school_assets.STORAGE_ROOT', Path(self.temp.name))
         self.storage.start()
@@ -68,6 +69,69 @@ class StudentAssetTests(unittest.TestCase):
             old_path = relative
         self.assertEqual(self.db.query(Student).count(), 1)
         self.assertEqual(len(list(Path(self.temp.name).rglob('profile_*.jpg'))), 1)
+
+    def upload_profile(self):
+        stream = io.BytesIO()
+        Image.new('RGB', (20, 20), 'blue').save(stream, format='JPEG')
+        response = self.client.post('/schools/students/profile', params=self.params,
+            files={'file': ('photo.jpg', stream.getvalue(), 'image/jpeg')})
+        self.assertEqual(response.status_code, 201, response.text)
+        return response.json()['data']['profile_img']
+
+    def test_delete_profile_clears_details_and_file(self):
+        relative = self.upload_profile()
+        response = self.client.delete('/schools/students/profile', params=self.params)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data'], {'student_id': self.student_id, 'profile_img': ''})
+        self.assertIsNone(self.db.get(Student, self.student_id).profile_img)
+        self.assertFalse((Path(self.temp.name) / relative).exists())
+        self.assertEqual(self.client.get('/schools/students/profile', params=self.params).status_code, 404)
+        details = self.client.get(f'/schools/1/students/{self.student_id}').json()['data']
+        self.assertEqual(details['student_info']['profile_img'], '')
+        self.assertEqual(self.client.delete('/schools/students/profile', params=self.params).status_code, 200)
+
+    def test_delete_profile_checks_school_and_permissions(self):
+        relative = self.upload_profile()
+        response = self.client.delete('/schools/students/profile', params=dict(self.params, school_id=2))
+        self.assertEqual(response.status_code, 404)
+        for role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
+            self.user.role = role
+            self.assertEqual(self.client.delete('/schools/students/profile', params=self.params).status_code, 403)
+        self.assertTrue((Path(self.temp.name) / relative).exists())
+        self.assertEqual(self.db.get(Student, self.student_id).profile_img, relative)
+
+    def test_delete_profile_requires_matching_session(self):
+        from models.session import Session as SchoolSession
+        from datetime import date
+        relative = self.upload_profile()
+        other = SchoolSession(school_id=1, name='Other session',
+            start_date=date(2030, 4, 1), end_date=date(2031, 3, 31))
+        self.db.add(other)
+        self.db.commit()
+        for params, expected in (
+            ({key: value for key, value in self.params.items() if key != 'session_id'}, 422),
+            (dict(self.params, session_id=0), 422),
+            (dict(self.params, session_id=99999), 404),
+            (dict(self.params, session_id=other.id), 404),
+        ):
+            response = self.client.delete('/schools/students/profile', params=params)
+            self.assertEqual(response.status_code, expected, response.text)
+        self.assertEqual(self.db.get(Student, self.student_id).profile_img, relative)
+        self.assertTrue((Path(self.temp.name) / relative).exists())
+
+    def test_delete_profile_commit_failure_preserves_file(self):
+        relative = self.upload_profile()
+        with patch.object(self.db, 'commit', side_effect=RuntimeError('commit failed')):
+            with self.assertRaises(RuntimeError):
+                self.client.delete('/schools/students/profile', params=self.params)
+        self.assertEqual(self.db.get(Student, self.student_id).profile_img, relative)
+        self.assertTrue((Path(self.temp.name) / relative).exists())
+
+    def test_delete_profile_with_missing_file(self):
+        relative = self.upload_profile()
+        (Path(self.temp.name) / relative).unlink()
+        self.assertEqual(self.client.delete('/schools/students/profile', params=self.params).status_code, 200)
+        self.assertIsNone(self.db.get(Student, self.student_id).profile_img)
 
     def test_large_profile_saved_below_50_kb(self):
         import random

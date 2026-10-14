@@ -999,6 +999,12 @@ content. Profile replacement updates `students.profile_img`; document paths and
 types are stored in the automatically created `student_documents` table.
 Super Admin and actively assigned Admin/Sub Admin accounts can manage files.
 
+Use `DELETE /schools/students/profile?school_id=32&student_id=1&session_id=1` to remove a student's
+profile photo. All three query parameters are required; the student must belong to the selected school and session. Uses the same authorization as uploads. Returns 200 with
+`{"status":"success","message":"Student profile photo deleted successfully","data":{"student_id":1,"profile_img":""}}`.
+The stored file is removed after the database update succeeds. Repeated deletes
+succeed even when the photo is already absent.
+
 Use `GET /schools/students/profile` to view a photo,
 `GET /schools/students/documents` to list documents, and
 `GET /schools/students/documents/{document_id}` to download one. These require

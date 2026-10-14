@@ -1,7 +1,7 @@
 from enum import Enum
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -75,6 +75,33 @@ def upload_student_profile(school_id: int, student_id: int, file: UploadFile = F
     if old_path and old_path.startswith(f'{school_id}/students/{student_id}/profile/'):
         asset_path(old_path).unlink(missing_ok=True)
     return {'status': 'success', 'data': {'student_id': student_id, 'profile_img': relative}}
+
+
+@router.delete('/students/profile')
+def delete_student_profile(school_id: int, student_id: int,
+                           session_id: int = Query(..., gt=0),
+                           db: Session = Depends(student_assets_db)):
+    from dependencies.school_session import require_school_session
+    require_school_session(db, school_id, session_id)
+    item = db.query(Student).filter_by(
+        id=student_id, school_id=school_id, session_id=session_id,
+    ).with_for_update().first()
+    if item is None:
+        raise HTTPException(404, 'Student not found in this session')
+    old_path = item.profile_img
+    # Resolve the owned path before committing; remove the file only after saving.
+    path = (asset_path(old_path) if old_path and
+            old_path.startswith(f'{school_id}/students/{student_id}/profile/') else None)
+    try:
+        item.profile_img = None
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    if path is not None:
+        path.unlink(missing_ok=True)
+    return {'status': 'success', 'message': 'Student profile photo deleted successfully',
+            'data': {'student_id': student_id, 'profile_img': ''}}
 
 
 @router.get('/students/profile')
