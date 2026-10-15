@@ -1,4 +1,7 @@
 from enum import Enum
+import os
+import re
+from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -53,6 +56,19 @@ def write_file(school_id, student_id, folder, prefix, extension, data):
     return relative
 
 
+def replace_profile_file(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with NamedTemporaryFile(dir=path.parent, delete=False) as output:
+            temporary = output.name
+            output.write(data)
+        os.replace(temporary, path)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 @router.put('/students/profile')
 @router.post('/students/profile', status_code=201)
 def upload_student_profile(school_id: int, student_id: int, file: UploadFile = File(...),
@@ -64,15 +80,25 @@ def upload_student_profile(school_id: int, student_id: int, file: UploadFile = F
         raise HTTPException(422, str(exc)) from exc
     item = db.query(Student).filter_by(id=student_id, school_id=school_id).with_for_update().one()
     old_path = item.profile_img
-    relative = write_file(school_id, student_id, 'profile', 'profile', extension, data)
+    if not item.admission_number:
+        raise HTTPException(422, 'Student admission number is required for the profile image')
+    # Keep admission numbers containing separators inside a single filename.
+    admission_number = re.sub(r'[^\w.-]', '_', item.admission_number)
+    relative = f'{school_id}/students/{student_id}/profile/profile_{admission_number}{extension}'
+    path = asset_path(relative)
+    previous_data = path.read_bytes() if path.is_file() else None
+    replace_profile_file(path, data)
     try:
         item.profile_img = relative
         db.commit()
     except Exception:
         db.rollback()
-        asset_path(relative).unlink(missing_ok=True)
+        if previous_data is None:
+            path.unlink(missing_ok=True)
+        else:
+            replace_profile_file(path, previous_data)
         raise
-    if old_path and old_path.startswith(f'{school_id}/students/{student_id}/profile/'):
+    if old_path and old_path != relative and old_path.startswith(f'{school_id}/students/{student_id}/profile/'):
         asset_path(old_path).unlink(missing_ok=True)
     return {'status': 'success', 'data': {'student_id': student_id, 'profile_img': relative}}
 

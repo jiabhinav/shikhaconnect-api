@@ -36,7 +36,8 @@ class StudentAssetTests(unittest.TestCase):
                                     files={'file': ('photo.jpg', stream.getvalue(), 'image/jpeg')})
         self.assertEqual(response.status_code, 201, response.text)
         relative = response.json()['data']['profile_img']
-        self.assertTrue(relative.startswith(f'1/students/{self.student_id}/profile/profile_'))
+        admission_number = self.db.get(Student, self.student_id).admission_number
+        self.assertEqual(relative, f'1/students/{self.student_id}/profile/profile_{admission_number}.jpg')
         self.assertTrue((Path(self.temp.name) / relative).is_file())
         self.assertEqual(self.db.get(Student, self.student_id).profile_img, relative)
         self.assertEqual(self.client.get('/schools/students/profile', params=self.params).status_code, 200)
@@ -64,8 +65,8 @@ class StudentAssetTests(unittest.TestCase):
             relative = response.json()['data']['profile_img']
             self.assertEqual(self.db.get(Student, self.student_id).profile_img, relative)
             if index:
-                self.assertNotEqual(relative, old_path)
-                self.assertFalse((Path(self.temp.name) / old_path).exists())
+                self.assertEqual(relative, old_path)
+                self.assertTrue((Path(self.temp.name) / old_path).is_file())
             old_path = relative
         self.assertEqual(self.db.query(Student).count(), 1)
         self.assertEqual(len(list(Path(self.temp.name).rglob('profile_*.jpg'))), 1)
@@ -77,6 +78,33 @@ class StudentAssetTests(unittest.TestCase):
             files={'file': ('photo.jpg', stream.getvalue(), 'image/jpeg')})
         self.assertEqual(response.status_code, 201, response.text)
         return response.json()['data']['profile_img']
+
+    def test_profile_update_commit_failure_preserves_previous_image(self):
+        relative = self.upload_profile()
+        path = Path(self.temp.name) / relative
+        previous_data = path.read_bytes()
+        stream = io.BytesIO()
+        Image.new('RGB', (20, 20), 'red').save(stream, format='JPEG')
+        with patch.object(self.db, 'commit', side_effect=RuntimeError('commit failed')):
+            with self.assertRaises(RuntimeError):
+                self.client.put('/schools/students/profile', params=self.params,
+                    files={'file': ('photo.jpg', stream.getvalue(), 'image/jpeg')})
+        self.assertEqual(path.read_bytes(), previous_data)
+        self.assertEqual(self.db.get(Student, self.student_id).profile_img, relative)
+
+    def test_profile_filename_uses_admission_number_and_image_extension(self):
+        self.db.get(Student, self.student_id).admission_number = 'ADM/2026/001'
+        self.db.commit()
+        for extension, image_format in (('jpg', 'JPEG'), ('png', 'PNG')):
+            stream = io.BytesIO()
+            Image.new('RGB', (20, 20), 'blue').save(stream, format=image_format)
+            response = self.client.put('/schools/students/profile', params=self.params,
+                files={'file': (f'photo.{extension}', stream.getvalue())})
+            self.assertEqual(response.status_code, 200, response.text)
+            relative = response.json()['data']['profile_img']
+            self.assertEqual(Path(relative).name, f'profile_ADM_2026_001.{extension}')
+            self.assertTrue((Path(self.temp.name) / relative).is_file())
+        self.assertFalse((Path(self.temp.name) / relative).with_suffix('.jpg').exists())
 
     def test_delete_profile_clears_details_and_file(self):
         relative = self.upload_profile()
