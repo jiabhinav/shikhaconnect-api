@@ -154,7 +154,7 @@ def authenticate_login(credentials, db, teacher_only=False):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="User not active yet, please contact the administrator",
             )
-        if account.role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
+        if account.role in (UserRole.ADMIN, UserRole.SUB_ADMIN) or isinstance(user, Staff):
             schools = [(school, logo) for school, logo in schools if school.status]
             if not schools:
                 raise HTTPException(

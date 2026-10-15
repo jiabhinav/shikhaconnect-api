@@ -319,6 +319,39 @@ class StaffTests(unittest.TestCase):
         self.assertFalse(verify_password('custom-secret', item.login_user.password))
         self.assertNotEqual(item.login_user.password, payload['staff_info']['mobile_number'])
 
+    def test_inactive_school_blocks_staff_login(self):
+        from models.school import School
+        from models.user import LoginUser
+        from routers.auth import router as auth_router
+
+        self.client.app.include_router(auth_router)
+        mobile = self.payload['staff_info']['mobile_number']
+        self.db.add(Staff(school_id=1, login_user=LoginUser(
+            first_name='Staff', email='staff@example.com', mobile=mobile,
+            password=mobile, role='Staff',
+        )))
+        school = self.db.get(School, 1)
+        school.primary_email = 'school@example.com'
+        school.primary_number = '1234567890'
+        school.status = False
+        self.db.commit()
+        credentials = {'mobile': mobile, 'password': mobile}
+
+        response = self.client.post('/auth/login', json=credentials)
+        self.assertEqual(response.status_code, 403, response.text)
+        self.assertEqual(response.json()['detail'], 'Please contact to administrator')
+        self.assertNotIn('token', response.json())
+        self.assertNotIn('Authorization', response.headers)
+        self.assertEqual(self.client.post('/auth/login', json={
+            **credentials, 'password': 'wrong',
+        }).status_code, 401)
+
+        school.status = True
+        self.db.commit()
+        response = self.client.post('/auth/login', json=credentials)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn('token', response.json())
+
     def test_staff_can_login_with_mobile_default_password(self):
         from routers.auth import login
         from models.school import School
