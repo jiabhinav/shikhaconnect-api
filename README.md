@@ -1039,3 +1039,18 @@ The API still validates images at a maximum input size of 5 MB and saves school,
 student, and teacher images below 30,000 bytes. The 12 MB request limit also
 allows 10 MB student documents plus multipart overhead. When sending several
 school images at once, their combined upload must fit within 12 MB.
+
+If photo upload reports `Image storage is unavailable`, check the API logs and
+make the bind-mounted upload directory writable by the container user (UID 10001).
+From the deployment project directory, run:
+
+```sh
+mkdir -p uploads/schools
+sudo chown -R 10001:10001 uploads
+sudo chmod -R u+rwX uploads
+docker compose up -d --build api
+```
+
+The image's built-in folder ownership does not override ownership of an existing
+host bind mount. For curl uploads, use `-F 'file=@/path/to/photo.jpeg;type=image/jpeg'`
+and let curl supply the multipart Content-Type with its boundary.
