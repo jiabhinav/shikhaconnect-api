@@ -4,7 +4,7 @@ from io import BytesIO
 from PIL import Image, ImageOps
 
 
-def compress_image(data: bytes, extension: str, *, max_bytes: int = 50_000) -> bytes:
+def compress_image(data: bytes, extension: str, *, max_bytes: int = 30_000) -> bytes:
     """Compress validated JPEG/PNG/WebP bytes strictly below max_bytes.
 
     Keeps the output format and reduces dimensions when quality alone is

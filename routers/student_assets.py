@@ -19,7 +19,7 @@ from utils.images import compress_image
 
 router = APIRouter()
 MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
-MAX_PROFILE_BYTES = 50_000
+MAX_PROFILE_BYTES = 30_000
 
 
 class DocumentType(str, Enum):

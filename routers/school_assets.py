@@ -6,7 +6,7 @@ import warnings
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, UnidentifiedImageError
 from sqlalchemy.orm import Session
 
 from dependencies.auth import get_current_user
@@ -19,54 +19,15 @@ from schemas.school_assets import SchoolAssetField, SchoolAssetsResult
 router = APIRouter()
 STORAGE_ROOT = Path(__file__).resolve().parents[1] / "uploads" / "schools"
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
-TARGET_IMAGE_SIZE_KB = 100
-TARGET_IMAGE_SIZE_BYTES = TARGET_IMAGE_SIZE_KB * 1024
+TARGET_IMAGE_SIZE_KB = 30
+TARGET_IMAGE_SIZE_BYTES = TARGET_IMAGE_SIZE_KB * 1000
 FORMATS = {"PNG": (".png", "image/png"), "JPEG": (".jpg", "image/jpeg"), "WEBP": (".webp", "image/webp")}
 logger = logging.getLogger(__name__)
 
 
 def compress_image(data, image_format):
-    if len(data) <= TARGET_IMAGE_SIZE_BYTES:
-        return data
-
-    try:
-        with Image.open(BytesIO(data)) as image:
-            image = ImageOps.exif_transpose(image)
-            image = image.copy()
-            working = image
-            for quality in (85, 75, 65, 55, 45, 35):
-                buffer = BytesIO()
-                if image_format in {"JPEG", "WEBP"}:
-                    working = working.convert("RGB")
-                    save_kwargs = {"format": image_format, "quality": quality, "optimize": True}
-                    if image_format == "WEBP":
-                        save_kwargs["method"] = 6
-                    working.save(buffer, **save_kwargs)
-                else:
-                    working.save(buffer, format="PNG", optimize=True, compress_level=9)
-
-                if len(buffer.getvalue()) <= TARGET_IMAGE_SIZE_BYTES:
-                    return buffer.getvalue()
-
-                if working.width > 1200 or working.height > 1200:
-                    working = working.resize(
-                        (max(1, int(working.width * 0.85)), max(1, int(working.height * 0.85))),
-                        Image.Resampling.LANCZOS,
-                    )
-
-            final_buffer = BytesIO()
-            if image_format in {"JPEG", "WEBP"}:
-                working = working.convert("RGB")
-                save_kwargs = {"format": image_format, "quality": 35, "optimize": True}
-                if image_format == "WEBP":
-                    save_kwargs["method"] = 6
-                working.save(final_buffer, **save_kwargs)
-            else:
-                working.save(final_buffer, format="PNG", optimize=True, compress_level=9)
-            return final_buffer.getvalue()
-    except Exception:
-        logger.warning("Failed to compress uploaded image; using original file", exc_info=True)
-    return data
+    from utils.images import compress_image as compress_to_limit
+    return compress_to_limit(data, FORMATS[image_format][0], max_bytes=TARGET_IMAGE_SIZE_BYTES)
 
 
 def assets_db(school_id: int, db: Session = Depends(get_db_session),

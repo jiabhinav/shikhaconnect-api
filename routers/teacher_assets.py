@@ -43,7 +43,7 @@ def upload_teacher_profile(request: Request, school_id: int, teacher_id: int,
                            file: UploadFile = File(...), db: Session = Depends(teacher_assets_db)):
     data, extension = validate_image(file)
     try:
-        data = compress_image(data, extension, max_bytes=50_000)
+        data = compress_image(data, extension, max_bytes=30_000)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     item = db.query(Teacher).filter_by(id=teacher_id, school_id=school_id).with_for_update().one()

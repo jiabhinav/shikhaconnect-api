@@ -1018,7 +1018,24 @@ Teacher profile images use `/schools/teachers/{teacher_id}/profile?school_id={sc
 - `DELETE` removes the image and clears the teacher profile field.
 
 Send uploads as `multipart/form-data` with the field `file`. PNG, JPEG, and WebP
-images up to 5 MB are accepted and compressed to below 50 KB. Upload responses
+images up to 5 MB are accepted and compressed to below 30 KB. Upload responses
 contain `data.profile_img` (storage path) and `data.profile_url` (authenticated
 download URL). Teacher details and lists expose `teacher_info.profile_img`.
 Super Admins and active school-mapped Admins/Sub Admins can manage these images.
+
+
+Nginx upload limit: install `deploy/nginx-upload-limits.conf` into the Nginx
+`http` configuration (Ubuntu includes `/etc/nginx/conf.d/*.conf` there):
+
+```sh
+sudo cp deploy/nginx-upload-limits.conf /etc/nginx/conf.d/shikhaconnect-upload-limits.conf
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+If the API's `server` or `location` block already sets `client_max_body_size`,
+set that directive to `12m` as well because it overrides the global setting.
+The proxy must accept the original upload before the API can compress it.
+The API still validates images at a maximum input size of 5 MB and saves school,
+student, and teacher images below 30,000 bytes. The 12 MB request limit also
+allows 10 MB student documents plus multipart overhead. When sending several
+school images at once, their combined upload must fit within 12 MB.
