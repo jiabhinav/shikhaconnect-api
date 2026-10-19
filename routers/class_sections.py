@@ -11,6 +11,7 @@ from dependencies.db import get_db_session
 from dependencies.school_session import require_school_session
 from models.class_section import SchoolClass, Section, ClassSectionMapping
 from models.school import School
+from models.student import Student
 from models.user import User, UserRole
 from schemas.class_section import (
     ClassWrite, SectionWrite, ClassResult, ClassListResult, SectionResult, SectionListResult,
@@ -106,7 +107,10 @@ def update_class(school_id: int, session_id: int, class_id: int, payload: ClassW
 @router.delete("/school/{school_id}/sessions/{session_id}/classes/{class_id}", include_in_schema=False)
 @router.delete("/classes/{class_id}")
 def delete_class(school_id: int, session_id: int, class_id: int, db: Session = Depends(school_storage)):
-    return remove(db, record(db, SchoolClass, school_id, session_id, class_id))
+    item = record(db, SchoolClass, school_id, session_id, class_id)
+    if db.query(Student.id).filter(Student.class_id == class_id).first() is not None:
+        raise HTTPException(409, "Class is assigned to students and cannot be deleted")
+    return remove(db, item)
 
 
 @router.post("/school/{school_id}/sessions/{session_id}/sections", response_model=SectionResult, status_code=201, include_in_schema=False)
@@ -133,7 +137,10 @@ def update_section(school_id: int, session_id: int, section_id: int, payload: Se
 @router.delete("/school/{school_id}/sessions/{session_id}/sections/{section_id}", include_in_schema=False)
 @router.delete("/sections/{section_id}")
 def delete_section(school_id: int, session_id: int, section_id: int, db: Session = Depends(school_storage)):
-    return remove(db, record(db, Section, school_id, session_id, section_id))
+    item = record(db, Section, school_id, session_id, section_id)
+    if db.query(Student.id).filter(Student.section_id == section_id).first() is not None:
+        raise HTTPException(409, "Section is assigned to students and cannot be deleted")
+    return remove(db, item)
 
 
 def save_mapping(db, item):

@@ -35,6 +35,7 @@ class Teacher(Base):
 
     id = Column(Integer, primary_key=True)
     school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, index=True)
+    profile_img = Column(String(500))
     employee_code = Column(String(150))
     employee_sequence = Column(Integer)
     teacher_login_id = Column(Integer, ForeignKey("teacher_login.id"), nullable=False, unique=True)

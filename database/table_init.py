@@ -8,7 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from database.database import Base
 from database.student_table import migrate_optional_student_identity_fields, migrate_student_form_fields, migrate_student_dropdown_storage
-from database.teacher_table import migrate_optional_teacher_city, migrate_optional_teacher_identity, migrate_teacher_logins, migrate_teacher_employee_codes
+from database.teacher_table import migrate_teacher_profile_image, migrate_optional_teacher_city, migrate_optional_teacher_identity, migrate_teacher_logins, migrate_teacher_employee_codes
 from database.user_address_table import migrate_user_addresses
 from database.staff_account_table import migrate_user_accounts, migrate_staff_profiles, migrate_account_status
 from database.school_permissions_table import allow_legacy_service_name_null
@@ -102,6 +102,7 @@ def ensure_all_tables(connection):
         migrate_optional_student_identity_fields(connection)
         migrate_teacher_logins(connection)
         migrate_teacher_employee_codes(connection)
+        migrate_teacher_profile_image(connection)
         return
     if connection.dialect.name == "postgresql":
         # Recheck within create_all after serializing concurrent initialization.
@@ -125,3 +126,4 @@ def ensure_all_tables(connection):
     migrate_student_dropdown_storage(connection)
     migrate_teacher_logins(connection)
     migrate_teacher_employee_codes(connection)
+    migrate_teacher_profile_image(connection)

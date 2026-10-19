@@ -26,6 +26,7 @@ class TeacherWrite(BaseModel):
 
 
 class TeacherInfoResponse(StaffInfoResponse):
+    profile_img: str | None = None
     employee_code: str | None = None
     email: str | None = None
     alternate_contact_no: str | None = None

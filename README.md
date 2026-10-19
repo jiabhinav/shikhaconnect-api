@@ -1009,3 +1009,16 @@ Use `GET /schools/students/profile` to view a photo,
 `GET /schools/students/documents` to list documents, and
 `GET /schools/students/documents/{document_id}` to download one. These require
 the same school and student query parameters and authentication.
+
+Teacher profile images use `/schools/teachers/{teacher_id}/profile?school_id={school_id}`:
+
+- `POST` creates or replaces the profile image (201).
+- `PUT` updates the profile image (200).
+- `GET` downloads the image using authentication.
+- `DELETE` removes the image and clears the teacher profile field.
+
+Send uploads as `multipart/form-data` with the field `file`. PNG, JPEG, and WebP
+images up to 5 MB are accepted and compressed to below 50 KB. Upload responses
+contain `data.profile_img` (storage path) and `data.profile_url` (authenticated
+download URL). Teacher details and lists expose `teacher_info.profile_img`.
+Super Admins and active school-mapped Admins/Sub Admins can manage these images.

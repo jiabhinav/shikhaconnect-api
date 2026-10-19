@@ -286,3 +286,24 @@ class StudentBulkTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+    def test_day_first_dates_are_normalized_for_all_bulk_date_fields(self):
+        response = self.upload(
+            'admission_number,name,father_name,mobile_number,admission_date,date_of_birth,father_date_of_birth,mother_date_of_birth\n'
+            'DATE1,Alice,Father,0123456789,05/06/2024,07-08-2015,09.10.1980,1982-11-12\n'
+            'DATE2,Bob,Father,0123456789,06-07-2024,08.09.2015,10/11/1980,12-01-1982')
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()['count'], 2, response.text)
+        students = self.db.query(Student).order_by(Student.id).all()
+        self.assertEqual(
+            [(str(s.admission_date), str(s.date_of_birth), str(s.father_dob), str(s.mother_dob)) for s in students],
+            [('2024-06-05', '2015-08-07', '1980-10-09', '1982-11-12'),
+             ('2024-07-06', '2015-09-08', '1980-11-10', '1982-01-12')])
+
+    def test_impossible_day_first_date_remains_a_row_error(self):
+        response = self.upload(
+            'admission_number,name,father_name,mobile_number,date_of_birth\n'
+            'BADDATE,Alice,Father,0123456789,31/02/2015')
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()['count'], 0, response.text)
+        self.assertEqual(self.db.query(Student).count(), 0)

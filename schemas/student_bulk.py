@@ -1,5 +1,7 @@
 from copy import deepcopy
-from pydantic import AliasChoices, Field, create_model, BaseModel, ConfigDict
+from datetime import datetime
+import re
+from pydantic import AliasChoices, Field, create_model, BaseModel, ConfigDict, field_validator
 from schemas.student import FormSection, StudentInfo, StudentWrite, ParentInfo, StudentAddress, PreviousSchoolInfo
 
 
@@ -8,6 +10,17 @@ class _StudentBulkRow(FormSection):
     first_name: str = Field(min_length=1, max_length=255, validation_alias=AliasChoices('name', 'first_name'))
     father_name: str = Field(min_length=1, max_length=255)
     mobile_number: str = Field(min_length=1, max_length=20)
+
+    @field_validator('admission_date', 'date_of_birth', 'father_date_of_birth',
+                     'mother_date_of_birth', mode='before', check_fields=False)
+    @classmethod
+    def normalize_date(cls, value):
+        if isinstance(value, str):
+            value = value.strip()
+            if re.fullmatch(r'\d{2}([/.-])\d{2}\1\d{4}', value):
+                # Day first for all supported spreadsheet text date formats.
+                return datetime.strptime(value.replace('/', '-').replace('.', '-'), '%d-%m-%Y').date()
+        return value
 
 
 class StudentBulkInfo(StudentInfo):

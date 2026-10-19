@@ -90,3 +90,12 @@ def migrate_teacher_logins(connection):
               AND NOT EXISTS (SELECT 1 FROM staff_permission p WHERE p.login_user_id=l.id)
               AND NOT EXISTS (SELECT 1 FROM staff_address a WHERE a.login_user_id=l.id)
         """), {"old_id": row["login_user_id"]})
+
+
+def migrate_teacher_profile_image(connection):
+    if not inspect(connection).has_table("teachers"):
+        return
+    if connection.dialect.name == "postgresql":
+        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    if "profile_img" not in {c["name"] for c in inspect(connection).get_columns("teachers")}:
+        connection.execute(text("ALTER TABLE teachers ADD COLUMN profile_img VARCHAR(500)"))

@@ -84,7 +84,7 @@ def upload_student_profile(school_id: int, student_id: int, file: UploadFile = F
         raise HTTPException(422, 'Student admission number is required for the profile image')
     # Keep admission numbers containing separators inside a single filename.
     admission_number = re.sub(r'[^\w.-]', '_', item.admission_number)
-    relative = f'{school_id}/students/{student_id}/profile/profile_{admission_number}{extension}'
+    relative = f'{school_id}/students/{student_id}/profile/{admission_number}{extension}'
     path = asset_path(relative)
     previous_data = path.read_bytes() if path.is_file() else None
     replace_profile_file(path, data)

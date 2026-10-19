@@ -11,6 +11,7 @@ from models.user import UserStatus
 from routers.staff import staff_school, staff_constraint_error
 from schemas.teacher import TeacherWrite, TeacherResult, TeacherListResult, TeacherStatusUpdate
 from utils.passwords import hash_password
+from routers.teacher_assets import router as teacher_assets_router
 
 router = APIRouter(prefix="/schools", tags=["Teachers"])
 
@@ -135,3 +136,6 @@ def delete_teacher(school_id: int, teacher_id: int, db: Session = Depends(staff_
         db.rollback()
         raise
     return {"status": "success", "message": "Teacher deleted successfully", "data": {"id": teacher_id}}
+
+
+router.include_router(teacher_assets_router)
