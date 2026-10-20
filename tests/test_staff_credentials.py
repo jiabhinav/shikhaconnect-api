@@ -40,14 +40,16 @@ class StaffCredentialTests(unittest.TestCase):
         self.assertEqual(password, self.staff.password)
         self.assertNotEqual(token, account_token(self.staff))
 
-    def test_self_service_requires_current_password(self):
+    def test_self_service_requires_current_password_only_for_password_changes(self):
         self.client.app.dependency_overrides[test_sessions.get_current_user] = lambda: self.staff
-        for kind, body in [('password', {'new_password': 'new password'}),
-                           ('mobile', {'mobile_number': '9999999999'})]:
-            self.assertEqual(self.change(kind, body).status_code, 403)
-            self.assertEqual(self.change(kind, body | {'current_password': 'wrong'}).status_code, 403)
-        self.assertEqual(self.change('mobile', {'mobile_number': '9999999999',
-                                              'current_password': 'old password'}).status_code, 200)
+        body = {'new_password': 'new password'}
+        self.assertEqual(self.change('password', body).status_code, 403)
+        self.assertEqual(self.change('password', body | {'current_password': 'wrong'}).status_code, 403)
+        password = self.staff.password
+        self.assertEqual(self.change('mobile', {'mobile_number': '9999999999'}).status_code, 200)
+        self.db.expire_all()
+        self.assertEqual(self.staff.mobile, '9999999999')
+        self.assertEqual(self.staff.password, password)
         self.assertEqual(self.change('password', {'new_password': 'new password',
                                                 'current_password': 'old password'}).status_code, 200)
 
@@ -99,6 +101,7 @@ class StaffCredentialTests(unittest.TestCase):
         self.user.role = UserRole.ADMIN
         self.user.login_user_id = self.db.query(test_sessions.User).first().login_user_id
         self.assertEqual(self.change('password', {'new_password': 'new'}).status_code, 403)
+        self.assertEqual(self.change('mobile', {'mobile_number': '9999999999'}).status_code, 403)
         self.db.add(SchoolMapping(school_id=1, user_id=self.user.login_user_id,
                                  status=SchoolMappingStatus.ACTIVE))
         self.db.commit()

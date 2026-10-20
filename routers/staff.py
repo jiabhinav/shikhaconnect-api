@@ -280,7 +280,8 @@ def staff_id_for_user(db: Session, school_id: int, user_id: int) -> int:
     return item.id
 
 
-def credential_account(db, school_id, user_id, current_user, current_password):
+def credential_account(db, school_id, user_id, current_user, current_password=None,
+                       require_current_password=True):
     from models.school_mapping import SchoolMapping, SchoolMappingStatus
 
     account = db.get(LoginUser, user_id)
@@ -295,7 +296,9 @@ def credential_account(db, school_id, user_id, current_user, current_password):
     if staff_link is None and school_link is None:
         raise HTTPException(404, "Login user not found in this school")
     if getattr(current_user, "login_user_id", None) == user_id:
-        if current_password is None or not verify_password(current_password, account.password):
+        if require_current_password and (
+            current_password is None or not verify_password(current_password, account.password)
+        ):
             raise HTTPException(403, "Current password is incorrect or missing")
         return account
     if current_user.role == UserRole.SUPER_ADMIN:
@@ -336,7 +339,8 @@ def change_staff_password(payload: StaffPasswordChange, school_id: int = Query(.
 def change_staff_mobile(payload: StaffMobileChange, school_id: int = Query(..., gt=0),
                         user_id: int = Query(..., gt=0), db: Session = Depends(staff_school),
                         current_user: User = Depends(get_current_user)):
-    account = credential_account(db, school_id, user_id, current_user, payload.current_password)
+    account = credential_account(db, school_id, user_id, current_user,
+                                 require_current_password=False)
     if db.query(LoginUser.id).filter(LoginUser.mobile == payload.mobile_number,
                                      LoginUser.id != user_id).first():
         raise HTTPException(409, "Mobile already exists")

@@ -202,7 +202,6 @@ class StaffPasswordChange(BaseModel):
 class StaffMobileChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mobile_number: str = Field(min_length=1, max_length=20, pattern=r"^\S+$")
-    current_password: str | None = Field(default=None, min_length=1, max_length=1024)
 
 
 class StaffCredentialData(BaseModel):
