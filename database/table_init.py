@@ -17,7 +17,7 @@ from database.session_table import remove_legacy_session_year_index
 from database.staff_permission_table import rename_staff_module_id, add_staff_permission_actions
 from database.school_mapping_table import migrate_school_mapping_accounts
 from database.session_catalogs import migrate_session_catalogs
-from database.student_table import migrate_shared_student_logins, migrate_student_admission_storage, migrate_student_roll_number, migrate_student_section, migrate_optional_father_fields, migrate_optional_student_pin_codes
+from database.student_table import migrate_student_session_admissions, migrate_shared_student_logins, migrate_student_admission_storage, migrate_student_roll_number, migrate_student_section, migrate_optional_father_fields, migrate_optional_student_pin_codes
 
 
 def register_models():
@@ -92,6 +92,7 @@ def ensure_all_tables(connection):
         migrate_school_mapping_accounts(connection)
         migrate_session_catalogs(connection)
         migrate_student_admission_storage(connection)
+        migrate_student_session_admissions(connection)
         migrate_shared_student_logins(connection)
         migrate_student_section(connection)
         migrate_student_form_fields(connection)
@@ -116,6 +117,7 @@ def ensure_all_tables(connection):
     migrate_school_mapping_accounts(connection)
     migrate_session_catalogs(connection)
     migrate_student_admission_storage(connection)
+    migrate_student_session_admissions(connection)
     migrate_shared_student_logins(connection)
     migrate_student_section(connection)
     migrate_optional_father_fields(connection)

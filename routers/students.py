@@ -138,10 +138,11 @@ def update_admission_number(school_id: int, student_id: int, payload: StudentAdm
     duplicate = db.query(Student.id).filter(
         Student.school_id == school_id,
         Student.admission_number == payload.admission_number,
+        Student.session_id == item.session_id,
         Student.id != student_id,
     ).first()
     if duplicate:
-        raise HTTPException(409, "Admission number already exists in this school")
+        raise HTTPException(409, "Admission number already exists in this school session")
     item.admission_number = payload.admission_number
     return save_student(db, item, "Admission number updated successfully")
 

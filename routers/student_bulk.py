@@ -1,4 +1,4 @@
-"""Super Admin Excel import; duplicate admissions are skipped."""
+"""Super Admin Excel import; duplicate admissions within a session are skipped."""
 import io
 import json
 from xml.etree.ElementTree import ParseError
@@ -60,7 +60,7 @@ def bulk_upload_students(
         raise HTTPException(413, 'Excel file exceeds 5 MB')
     failed_rows = []
     total = 0
-    existing_admissions = {value for (value,) in db.query(Student.admission_number).filter_by(school_id=school_id).all()}
+    existing_admissions = {value for (value,) in db.query(Student.admission_number).filter_by(school_id=school_id, session_id=session_id).all()}
     workbook = None
     try:
         with ZipFile(io.BytesIO(raw)) as archive:
@@ -104,7 +104,7 @@ def bulk_upload_students(
             admission = row.get('admission_number')
             admission = admission.strip() if isinstance(admission, str) else admission
             if admission and admission in existing_admissions:
-                failed_rows.append(failed_student(number, row, 'Admission number already exists in this school'))
+                failed_rows.append(failed_student(number, row, 'Admission number already exists in this school session'))
                 continue
             try:
                 rows.append((number, StudentBulkRow.model_validate(row)))
@@ -153,8 +153,8 @@ def bulk_upload_students(
         db.query(School).filter_by(id=school_id).with_for_update().one()
         created = []
         for number, row, payload in prepared:
-            if db.query(Student.id).filter_by(school_id=school_id, admission_number=row.admission_number).first():
-                failed_rows.append(failed_student(number, row, 'Admission number already exists in this school'))
+            if db.query(Student.id).filter_by(school_id=school_id, session_id=session_id, admission_number=row.admission_number).first():
+                failed_rows.append(failed_student(number, row, 'Admission number already exists in this school session'))
                 continue
             try:
                 with db.begin_nested():

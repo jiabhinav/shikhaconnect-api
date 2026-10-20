@@ -41,6 +41,29 @@ class StudentBulkTests(unittest.TestCase):
         self.assertEqual(self.upload('admission_number,name,father_name,mobile_number\n001,C,F,9876543210').json()['failed'], 1)
         self.assertEqual(self.db.query(Student).count(), 2)
 
+    def test_admission_can_repeat_in_another_session_with_existing_login(self):
+        header = 'admission_number,name,father_name,mobile_number\n'
+        first = self.upload(header + '001,Alice,Father,0123456789')
+        self.assertEqual(first.json()['inserted'], 1, first.text)
+        account = self.db.query(StudentLogin).one()
+        original_password = account.password
+        self.payload = dict(self.payload, name='2026-2027', start_date='2026-04-01', end_date='2027-03-31')
+        data = self.student_payload()
+        self.params.update({key: data[key] for key in ('session_id', 'class_id', 'section_id')})
+        response = self.upload(header + '001,Alice,Father,0123456789')
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()['inserted'], 1, response.text)
+        students = self.db.query(Student).order_by(Student.id).all()
+        self.assertEqual(len(students), 2)
+        self.assertNotEqual(students[0].session_id, students[1].session_id)
+        self.assertEqual(students[0].login_id, students[1].login_id)
+        self.assertEqual(self.db.query(StudentLogin).count(), 1)
+        self.assertEqual(self.db.query(StudentLogin).one().password, original_password)
+        repeated = self.upload(header + '001,Duplicate,Father,9999999999')
+        self.assertEqual(repeated.json()['failed'], 1, repeated.text)
+        self.assertEqual(self.db.query(Student).count(), 2)
+        self.assertEqual(self.db.query(StudentLogin).count(), 1)
+
     def test_invalid_rows_reported_and_valid_rows_inserted(self):
         response = self.upload('admission_number,name,father_name,mobile_number,house_name\n001,Valid,Father,123,\n002,,Father,456,\n003,Wrong house,Father,789,Missing')
         self.assertEqual(response.status_code, 201, response.text)

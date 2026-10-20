@@ -6,7 +6,7 @@ from sqlalchemy.orm import relationship
 class Student(Base):
     __tablename__ = "students"
     __table_args__ = (
-        UniqueConstraint("school_id", "admission_number", name="uq_student_admission"),
+        UniqueConstraint("school_id", "session_id", "admission_number", name="uq_student_admission"),
         UniqueConstraint("school_id", "admission_sequence", name="uq_student_admission_sequence"),
         CheckConstraint("status IN ('active', 'inactive')", name="ck_student_status"),
     )

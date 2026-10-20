@@ -235,3 +235,22 @@ def migrate_student_dropdown_storage(connection):
                     quoted = connection.dialect.identifier_preparer.quote(index["name"])
                     connection.execute(text(f"DROP INDEX {quoted}"))
             connection.execute(text(f"ALTER TABLE students DROP COLUMN {field}"))
+
+
+def migrate_student_session_admissions(connection):
+    """Allow an admission number to be reused in another school session."""
+    if not inspect(connection).has_table("students"):
+        return
+    constraints = inspect(connection).get_unique_constraints("students")
+    target = ["school_id", "session_id", "admission_number"]
+    if any(c["name"] == "uq_student_admission" and c["column_names"] == target
+           for c in constraints):
+        return
+    if connection.dialect.name != "postgresql":
+        from sqlalchemy.exc import SQLAlchemyError
+        raise SQLAlchemyError("Existing student session admission migration requires PostgreSQL")
+    connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    connection.execute(text("LOCK TABLE students IN ACCESS EXCLUSIVE MODE"))
+    connection.execute(text("ALTER TABLE students DROP CONSTRAINT IF EXISTS uq_student_admission"))
+    connection.execute(text("ALTER TABLE students ADD CONSTRAINT uq_student_admission "
+                            "UNIQUE (school_id, session_id, admission_number)"))
