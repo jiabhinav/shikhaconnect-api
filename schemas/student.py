@@ -90,7 +90,8 @@ class StudentAddress(FormSection):
     city: str = Field(min_length=1, max_length=255)
     country: str = Field(min_length=1, max_length=100)
     state: str = Field(min_length=1, max_length=255)
-    pin_code: str | None = Field(default=None, max_length=20)
+    pin_code: str | None = Field(default=None, max_length=20,
+                                 description="Optional for present and permanent addresses. May be omitted, null, or blank.")
     line_2: str | None = Field(default=None, max_length=500)
 
 
@@ -134,7 +135,7 @@ class StudentInfoResponse(StudentInfo):
     caste_category_name: str | None = None
     fee_category_name: str | None = None
     house_name: str | None = None
-    status: Literal["active", "inactive"] | None = None
+    status: Literal["active", "inactive", "completed", "promoted"] | None = None
     admission_number: str | None = None
     admission_sequence: int | None = None
     # Older records may not have these details until they are updated.
@@ -200,6 +201,7 @@ class StudentResult(BaseModel):
 class StudentListResult(BaseModel):
     status: str = "success"
     message: str
+    total_records: int = Field(ge=0, description="Total students in the school and optional session, independent of search, status, and pagination.")
     data: list[StudentResponse]
 
 

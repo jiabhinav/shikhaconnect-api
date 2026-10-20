@@ -787,6 +787,25 @@ from Swagger. Student GET and dropdown URLs remain as documented above.
 
 ### Active student list and activation
 
+Student search: `GET /schools/students/search?school_id=21&search=Ananya`.
+Enter one required `search` value: it matches student names, mobile numbers, or
+class names. For example, use `search=987` for mobile or `search=Grade%205` for
+class Grade 5. Name and class matching ignore case and support partial matches;
+each whitespace-separated name part can match first, middle, or last name.
+`%` and `_` are treated literally. The student list endpoint also accepts
+`search`, alongside its existing separate `name`, `mobile`, and `class_id` filters.
+List and search responses include `status`, `message`, `total_records`, and `data`.
+Both endpoints sort students by class order, class name, section name, then
+student first, middle, and last name (case-insensitive), before pagination.
+Students without a section appear after named sections within their class.
+Student ID breaks ties to keep pagination stable.
+`total_records` counts all students in the selected `school_id` and optional
+`session_id`, including active and inactive students. Search filters, status,
+offset, and limit affect only `data`. Without `session_id`, the total includes
+all sessions in the school. Search defaults
+to active students, and accepts `status=false` for inactive students, optional
+`session_id`, and pagination (`offset=0`, `limit=50`, maximum 200). Missing or blank `search` values on the search endpoint return 422.
+
 `GET /schools/students?school_id=21` returns only active students. Optional
 `offset` and `limit` apply after the active filter. The previous list URL remains
 available for compatibility and also returns active students only.
@@ -940,6 +959,17 @@ an Excel `.xlsx` workbook (first worksheet). Requires Super Admin authentication
 `fee_category_name` as query parameters for the whole upload, or as Excel columns
 for each student. Use `house_name` as an Excel column for the selected house. Names must match the dropdown values for the selected school and session. Omitted categories and house are stored as null. The removed `caste_category_id`, `fee_category_id`, and `house_id` Excel columns are rejected.
 
+Choose one optional `status` query parameter for the whole upload: `Active`
+(default), `Inactive`, `Completed`, or `Promoted`. For example:
+`POST /super-admin/students/bulk-upload?school_id=1&session_id=2&class_id=3&section_id=4&status=Promoted`.
+The selected status applies to every inserted student; existing students are
+unchanged. Student statuses are stored and returned in lowercase, including in
+the upload's `data` entries. Invalid status choices return 422. This selection
+is a query parameter, not an Excel column. Startup expands the status constraint
+on existing PostgreSQL databases. List/search still default to active students;
+completed and promoted students remain available through the student detail API
+and count toward `total_records`.
+
 | admission_number | name | father_name | mobile_number |
 | --- | --- | --- | --- |
 | ADM001 | Alice Kumar | Raj Kumar | 0987654321 |
@@ -1054,3 +1084,27 @@ docker compose up -d --build api
 The image's built-in folder ownership does not override ownership of an existing
 host bind mount. For curl uploads, use `-F 'file=@/path/to/photo.jpeg;type=image/jpeg'`
 and let curl supply the multipart Content-Type with its boundary.
+
+### Staff / sub-user credential changes
+
+Use the staff account's `login_user_id` as the `user_id` query parameter:
+
+- `PATCH /schools/staff/change-password?school_id=1&user_id=12`
+  accepts `{"new_password":"new secret"}`.
+- `PATCH /schools/staff/change-mobile?school_id=1&user_id=12`
+  accepts `{"mobile_number":"9876543210"}`.
+
+Both require bearer authentication. Super Admins can manage staff accounts;
+Admins and Sub Admins require an active assignment to the selected school.
+Staff can change their own credentials by also sending `current_password` in
+the request body. Self-service always verifies the current password.
+Passwords are hashed and never returned. Mobile numbers must be nonblank,
+contain no whitespace, be at most 20 characters, and be unique across login
+accounts. Changing a mobile number preserves the existing password.
+
+Responses contain `status`, `message`, and
+`data: {"user_id":12,"mobile_number":"9876543210"}`. Missing staff/school returns
+404, unauthorized changes or incorrect current passwords return 403, duplicate
+mobiles return 409, and invalid request bodies return 422.
+After either credential changes, existing tokens for that account expire;
+log in again with the updated credentials.

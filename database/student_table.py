@@ -2,6 +2,27 @@
 from sqlalchemy import inspect, text
 
 
+def migrate_student_status_choices(connection):
+    """Expand existing status checks without changing student statuses."""
+    if not inspect(connection).has_table("students"):
+        return
+    if connection.dialect.name == "postgresql":
+        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    checks = {check['name']: check['sqltext']
+              for check in inspect(connection).get_check_constraints("students")}
+    existing = checks.get("ck_student_status", "")
+    if "completed" in existing and "promoted" in existing:
+        return
+    if connection.dialect.name != "postgresql":
+        from sqlalchemy.exc import SQLAlchemyError
+        raise SQLAlchemyError("Existing student status-choice migration requires PostgreSQL")
+    connection.execute(text("ALTER TABLE students DROP CONSTRAINT IF EXISTS ck_student_status"))
+    connection.execute(text(
+        "ALTER TABLE students ADD CONSTRAINT ck_student_status "
+        "CHECK (status IN ('active', 'inactive', 'completed', 'promoted'))"
+    ))
+
+
 def migrate_optional_student_identity_fields(connection):
     """Allow absent optional identity details on existing student tables."""
     if not inspect(connection).has_table("students"):

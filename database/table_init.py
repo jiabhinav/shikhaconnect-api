@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from database.database import Base
 from database.student_table import migrate_optional_student_identity_fields, migrate_student_form_fields, migrate_student_dropdown_storage
+from database.student_table import migrate_student_status_choices
 from database.teacher_table import migrate_teacher_profile_image, migrate_optional_teacher_city, migrate_optional_teacher_identity, migrate_teacher_logins, migrate_teacher_employee_codes
 from database.user_address_table import migrate_user_addresses
 from database.staff_account_table import migrate_user_accounts, migrate_staff_profiles, migrate_account_status
@@ -92,6 +93,7 @@ def ensure_all_tables(connection):
         migrate_school_mapping_accounts(connection)
         migrate_session_catalogs(connection)
         migrate_student_admission_storage(connection)
+        migrate_student_status_choices(connection)
         migrate_student_session_admissions(connection)
         migrate_shared_student_logins(connection)
         migrate_student_section(connection)
@@ -117,6 +119,7 @@ def ensure_all_tables(connection):
     migrate_school_mapping_accounts(connection)
     migrate_session_catalogs(connection)
     migrate_student_admission_storage(connection)
+    migrate_student_status_choices(connection)
     migrate_student_session_admissions(connection)
     migrate_shared_student_logins(connection)
     migrate_student_section(connection)

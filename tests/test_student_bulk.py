@@ -41,6 +41,47 @@ class StudentBulkTests(unittest.TestCase):
         self.assertEqual(self.upload('admission_number,name,father_name,mobile_number\n001,C,F,9876543210').json()['failed'], 1)
         self.assertEqual(self.db.query(Student).count(), 2)
 
+    def test_upload_status_choices_and_student_detail(self):
+        header = 'admission_number,name,father_name,mobile_number\n'
+        for index, status in enumerate(('Active', 'Inactive', 'Completed', 'Promoted')):
+            self.params['status'] = status
+            response = self.upload(header + f'{index},Student,Father,0123456789')
+            self.assertEqual(response.status_code, 201, response.text)
+            self.assertEqual(response.json()['inserted'], 1, response.text)
+            item = response.json()['data'][0]
+            self.assertEqual(item['status'], status.lower())
+            self.assertEqual(self.db.get(Student, item['id']).status, status.lower())
+            detail = self.client.get(f"/schools/1/students/{item['id']}")
+            self.assertEqual(detail.status_code, 200, detail.text)
+            self.assertEqual(detail.json()['data']['student_info']['status'], status.lower())
+        self.params.pop('status')
+        default = self.upload(header + 'default,Student,Father,0123456789')
+        self.assertEqual(default.json()['data'][0]['status'], 'active')
+        for status in ('Unknown', '', 'Active,Inactive'):
+            self.params['status'] = status
+            self.assertEqual(self.upload(header + 'invalid,Student,Father,0123456789').status_code, 422)
+        self.assertEqual(self.db.query(Student).count(), 5)
+
+    def test_status_constraint_migration_is_repeatable(self):
+        from unittest.mock import MagicMock, patch
+        from database.student_table import migrate_student_status_choices
+        connection = MagicMock()
+        connection.dialect.name = 'postgresql'
+        inspector = MagicMock()
+        inspector.has_table.return_value = True
+        inspector.get_check_constraints.return_value = [
+            {'name': 'ck_student_status', 'sqltext': "status IN ('active', 'inactive')"}]
+        with patch('database.student_table.inspect', return_value=inspector):
+            migrate_student_status_choices(connection)
+            sql = [str(call.args[0]) for call in connection.execute.call_args_list]
+            self.assertIn('DROP CONSTRAINT IF EXISTS ck_student_status', sql[1])
+            self.assertIn("'completed', 'promoted'", sql[2])
+            inspector.get_check_constraints.return_value = [
+                {'name': 'ck_student_status', 'sqltext': sql[2]}]
+            connection.reset_mock()
+            migrate_student_status_choices(connection)
+            self.assertEqual(connection.execute.call_count, 1)  # Only the startup lock.
+
     def test_admission_can_repeat_in_another_session_with_existing_login(self):
         header = 'admission_number,name,father_name,mobile_number\n'
         first = self.upload(header + '001,Alice,Father,0123456789')

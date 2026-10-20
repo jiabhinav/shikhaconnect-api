@@ -8,7 +8,7 @@ class Student(Base):
     __table_args__ = (
         UniqueConstraint("school_id", "session_id", "admission_number", name="uq_student_admission"),
         UniqueConstraint("school_id", "admission_sequence", name="uq_student_admission_sequence"),
-        CheckConstraint("status IN ('active', 'inactive')", name="ck_student_status"),
+        CheckConstraint("status IN ('active', 'inactive', 'completed', 'promoted')", name="ck_student_status"),
     )
     login_id = Column(Integer, ForeignKey("student_login.id", ondelete="RESTRICT"), nullable=True, index=True)
     profile_img = Column(String(500), nullable=True)

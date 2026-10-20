@@ -1,6 +1,6 @@
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from utils.passwords import hash_password
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -65,14 +65,80 @@ def create_student(school_id: int, payload: StudentWrite, db: Session = Depends(
 @router.get("/students", response_model=StudentListResult)
 def list_students(school_id: int, session_id: int | None = Query(None, gt=0),
                   status: bool = True, offset: int = Query(0, ge=0),
-                  limit: int = Query(50, ge=1, le=200), db: Session = Depends(student_school)):
+                  limit: int = Query(50, ge=1, le=200),
+                  name: str | None = Query(None, min_length=1, max_length=767),
+                  mobile: str | None = Query(None, min_length=1, max_length=20),
+                  class_id: int | None = Query(None, gt=0),
+                  search: str | None = Query(None, min_length=1, max_length=767),
+                  db: Session = Depends(student_school)):
     from dependencies.school_session import require_school_session
-    query = db.query(Student).filter_by(school_id=school_id, status="active" if status else "inactive")
+    query = db.query(Student).filter_by(school_id=school_id)
     if session_id is not None:
         require_school_session(db, school_id, session_id)
         query = query.filter(Student.session_id == session_id)
+    total_records = query.count()
+    query = query.filter(Student.status == ("active" if status else "inactive"))
+    if name is not None:
+        if not name.strip():
+            raise HTTPException(422, "name must not be blank")
+        # Match every name part, including records without a middle/last name.
+        for part in name.split():
+            query = query.filter(or_(
+                Student.first_name.icontains(part, autoescape=True),
+                Student.middle_name.icontains(part, autoescape=True),
+                Student.last_name.icontains(part, autoescape=True),
+            ))
+    if mobile is not None:
+        if not mobile.strip():
+            raise HTTPException(422, "mobile must not be blank")
+        query = query.filter(Student.mobile_number.contains(mobile.strip(), autoescape=True))
+    if class_id is not None:
+        query = query.filter(Student.class_id == class_id)
+    if search is not None:
+        from models.class_section import SchoolClass
+        term = search.strip()
+        if not term:
+            raise HTTPException(422, "search must not be blank")
+        name_match = and_(*(or_(
+            Student.first_name.icontains(part, autoescape=True),
+            Student.middle_name.icontains(part, autoescape=True),
+            Student.last_name.icontains(part, autoescape=True),
+        ) for part in term.split()))
+        class_match = db.query(SchoolClass.id).filter(
+            SchoolClass.id == Student.class_id,
+            SchoolClass.school_id == Student.school_id,
+            SchoolClass.session_id == Student.session_id,
+            SchoolClass.name.icontains(term, autoescape=True),
+        ).correlate(Student).exists()
+        query = query.filter(or_(name_match,
+                                 Student.mobile_number.contains(term, autoescape=True),
+                                 class_match))
+    from models.class_section import SchoolClass, Section
+    query = query.outerjoin(SchoolClass, Student.class_id == SchoolClass.id).outerjoin(
+        Section, Student.section_id == Section.id,
+    )
+    ordering = (
+        SchoolClass.class_order.asc().nulls_last(),
+        func.lower(SchoolClass.name), SchoolClass.id,
+        func.lower(Section.name).asc().nulls_last(), Section.id,
+        func.lower(Student.first_name),
+        func.lower(func.coalesce(Student.middle_name, "")),
+        func.lower(func.coalesce(Student.last_name, "")), Student.id,
+    )
     return {"message": "Students fetched successfully",
-            "data": query.order_by(Student.id).offset(offset).limit(limit).all()}
+            "total_records": total_records,
+            "data": query.order_by(*ordering).offset(offset).limit(limit).all()}
+
+
+@router.get("/{school_id}/students/search", response_model=StudentListResult, include_in_schema=False)
+@router.get("/students/search", response_model=StudentListResult)
+def search_students(school_id: int, search: str = Query(..., min_length=1, max_length=767),
+                    session_id: int | None = Query(None, gt=0), status: bool = True,
+                    offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200),
+                    db: Session = Depends(student_school)):
+    return list_students(school_id=school_id, session_id=session_id, status=status,
+                         offset=offset, limit=limit, name=None, mobile=None,
+                         class_id=None, search=search, db=db)
 
 
 @router.get("/{school_id}/students/dropdowns", response_model=StudentDropdownResult)

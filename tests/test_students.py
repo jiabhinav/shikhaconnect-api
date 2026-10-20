@@ -10,6 +10,100 @@ class StudentTests(unittest.TestCase):
     setUp = test_sessions.SessionTests.setUp
     tearDown = test_sessions.SessionTests.tearDown
 
+    def test_student_list_and_search_order_by_class_section_name(self):
+        from models.class_section import SchoolClass, Section
+        payload = nest(self.student_payload())
+        info = payload['student_info']
+        first_class = self.db.get(SchoolClass, info['class_id'])
+        first_class.name = 'Class 2'
+        first_class.class_order = 2
+        second_class = SchoolClass(school_id=1, session_id=info['session_id'],
+                                   name='Class 10', class_order=10)
+        section_a = self.db.get(Section, info['section_id'])
+        section_a.name = 'A'
+        section_b = Section(school_id=1, session_id=info['session_id'], name='B')
+        self.db.add_all([second_class, section_b])
+        self.db.commit()
+        ids = []
+        # Insert in a different order from the requested display order.
+        for class_id, section_id, first, middle, last in (
+            (second_class.id, section_a.id, 'Aaron', None, None),
+            (first_class.id, section_b.id, 'Aaron', None, None),
+            (first_class.id, section_a.id, 'Zoya', None, None),
+            (first_class.id, section_a.id, 'ananya', 'K', 'Sharma'),
+            (first_class.id, section_a.id, 'Ananya', 'K', 'Gupta'),
+        ):
+            info.update(class_id=class_id, section_id=section_id, first_name=first,
+                        middle_name=middle, last_name=last)
+            response = self.client.post('/schools/students', params={'school_id': 1}, json=payload)
+            self.assertEqual(response.status_code, 201, response.text)
+            ids.append(response.json()['data']['id'])
+        expected = list(reversed(ids))
+        for url in ('/schools/students', '/schools/students/search',
+                    '/schools/1/students', '/schools/1/students/search'):
+            params = {'school_id': 1, 'search': info['mobile_number']}
+            response = self.client.get(url, params=params)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual([row['id'] for row in response.json()['data']], expected)
+            self.assertEqual(response.json()['total_records'], 5)
+            response = self.client.get(url, params=params | {'offset': 1, 'limit': 2})
+            self.assertEqual([row['id'] for row in response.json()['data']], expected[1:3])
+            self.assertEqual(response.json()['total_records'], 5)
+
+    def test_student_search(self):
+        from models.class_section import SchoolClass
+        payload = nest(self.student_payload())
+        info = payload['student_info']
+        info.update(first_name='Ananya', middle_name=None, last_name='Sharma', mobile_number='9876543210')
+        self.db.get(SchoolClass, info['class_id']).name = 'Grade 5'
+        self.db.commit()
+        for _ in range(2):
+            response = self.client.post('/schools/students', params={'school_id': 1}, json=payload)
+            self.assertEqual(response.status_code, 201, response.text)
+        for url in ('/schools/students/search', '/schools/1/students/search'):
+            for term in ('aNa', 'ananya sharma', '7654', 'grade 5'):
+                params = {'school_id': 1, 'search': term, 'limit': 1}
+                response = self.client.get(url, params=params)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()['total_records'], 2)
+                self.assertEqual(len(response.json()['data']), 1)
+                response = self.client.get(url, params=params | {'offset': 10})
+                self.assertEqual(response.json()['total_records'], 2)
+                self.assertEqual(response.json()['data'], [])
+            for term in ('missing', '%', '_'):
+                response = self.client.get(url, params={'school_id': 1, 'search': term})
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()['total_records'], 2)
+                self.assertEqual(response.json()['data'], [])
+            for term in ('', '  '):
+                self.assertEqual(self.client.get(url, params={'school_id': 1, 'search': term}).status_code, 422)
+            self.assertEqual(self.client.get(url, params={'school_id': 1}).status_code, 422)
+        for filters in ({'school_id': 2}, {'status': False}):
+            response = self.client.get('/schools/students/search', params={
+                'school_id': 1, 'search': 'Ananya'} | filters)
+            self.assertEqual(response.json()['total_records'], 0 if 'school_id' in filters else 2)
+        response = self.client.get('/schools/students', params={'school_id': 1, 'limit': 1})
+        self.assertEqual(response.json()['total_records'], 2)
+        self.assertEqual(len(response.json()['data']), 1)
+        other_session = self.client.post('/schools/school/1/sessions', json={
+            'name': 'Other', 'start_date': '2030-04-01', 'end_date': '2031-03-31',
+        }).json()['data']['id']
+        for url in ('/schools/students', '/schools/students/search'):
+            for session_id, expected in ((info['session_id'], 2), (other_session, 0)):
+                response = self.client.get(url, params={
+                    'school_id': 1, 'session_id': session_id, 'search': 'missing',
+                })
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()['total_records'], expected)
+                self.assertEqual(response.json()['data'], [])
+        response = self.client.get('/schools/students/search', params={
+            'school_id': 1, 'search': 'Ananya', 'session_id': 99999})
+        self.assertEqual(response.status_code, 404)
+        parameters = self.client.app.openapi()['paths']['/schools/students/search']['get']['parameters']
+        self.assertNotIn('name', {p['name'] for p in parameters})
+        self.assertNotIn('mobile', {p['name'] for p in parameters})
+        self.assertNotIn('class_id', {p['name'] for p in parameters})
+
     def student_payload(self):
         base='/schools/school/1'
         data={k:'Test' for k,v in {**StudentInfo.model_fields, **ParentInfo.model_fields, **StudentAddress.model_fields}.items() if v.is_required()}
@@ -394,14 +488,21 @@ class StudentTests(unittest.TestCase):
         self.assertEqual(response.status_code, 201, response.text)
         item = response.json()['data']
         for kind in ('present_address', 'permanent_address'):
-            self.assertIsNone(item[kind]['pin_code'])
+            self.assertEqual(item[kind]['pin_code'], '')
+        self.assertIsNone(self.db.get(Student, item['id']).pin_code)
+        self.assertTrue(all(address.pin_code is None for address in self.db.get(Student, item['id']).addresses))
+        from schemas.student import StudentWrite
+        address_schema = StudentWrite.model_json_schema()['$defs']['StudentAddress']
+        self.assertNotIn('pin_code', address_schema['required'])
         for value in (None, '', '   ', '001234'):
             for kind in ('present_address', 'permanent_address'):
                 payload[kind]['pin_code'] = value
             response = self.client.put(f"{url}/{item['id']}", json=payload)
             self.assertEqual(response.status_code, 200, response.text)
             for kind in ('present_address', 'permanent_address'):
-                self.assertEqual(response.json()['data'][kind]['pin_code'], '001234' if value == '001234' else None)
+                self.assertEqual(response.json()['data'][kind]['pin_code'], '001234' if value == '001234' else '')
+            created = self.client.post(url, json=payload)
+            self.assertEqual(created.status_code, 201, created.text)
 
     def test_admission_edit_requires_super_admin(self):
         payload = nest(self.student_payload())

@@ -1,6 +1,7 @@
 """Super Admin Excel import; duplicate admissions within a session are skipped."""
 import io
 import json
+from typing import Literal
 from xml.etree.ElementTree import ParseError
 from zipfile import BadZipFile, ZipFile
 from openpyxl import load_workbook, Workbook
@@ -43,6 +44,7 @@ def bulk_upload_students(
     class_id: int = Query(..., gt=0),
     section_id: int = Query(..., gt=0),
     session_id: int = Query(..., gt=0),
+    status: Literal['Active', 'Inactive', 'Completed', 'Promoted'] = Query('Active'),
     caste_category_name: str | None = Query(None, min_length=1, max_length=100),
     fee_category_name: str | None = Query(None, min_length=1, max_length=100),
     file: UploadFile = File(...),
@@ -160,7 +162,8 @@ def bulk_upload_students(
                 with db.begin_nested():
                     values = payload.student_values()
                     values['admission_date'] = values.get('admission_date') or today()
-                    item = Student(school_id=school_id, admission_number=row.admission_number, **values)
+                    item = Student(school_id=school_id, admission_number=row.admission_number,
+                                   status=status.lower(), **values)
                     # Follow the Schools create API for login, addresses and previous school.
                     # The supplied admission number skips automatic admission allocation.
                     update_student_details(db, school_id, item, payload)
@@ -173,7 +176,8 @@ def bulk_upload_students(
             created.append(item)
         db.flush()
         result = [{'id': item.id, 'admission_number': item.admission_number,
-                   'name': item.first_name, 'mobile_number': item.mobile_number} for item in created]
+                   'name': item.first_name, 'mobile_number': item.mobile_number,
+                   'status': item.status} for item in created]
         db.commit()
     except IntegrityError as exc:
         db.rollback()

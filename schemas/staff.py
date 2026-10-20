@@ -191,3 +191,26 @@ class StaffStatusResult(BaseModel):
     status: str = "success"
     message: str
     data: StaffStatusData
+
+
+class StaffPasswordChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    new_password: str = Field(min_length=1, max_length=1024, pattern=r"\S")
+    current_password: str | None = Field(default=None, min_length=1, max_length=1024)
+
+
+class StaffMobileChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mobile_number: str = Field(min_length=1, max_length=20, pattern=r"^\S+$")
+    current_password: str | None = Field(default=None, min_length=1, max_length=1024)
+
+
+class StaffCredentialData(BaseModel):
+    user_id: int
+    mobile_number: str
+
+
+class StaffCredentialResult(BaseModel):
+    status: str = "success"
+    message: str
+    data: StaffCredentialData

@@ -9,7 +9,8 @@ from models.caste_category import CasteCategory
 from models.school import School, SchoolPermission
 from models.staff import Staff, StaffAddress, StaffPermission
 from models.user import LoginUser, User, UserRole, UserStatus
-from utils.passwords import hash_password
+from utils.passwords import hash_password, verify_password
+from schemas.staff import StaffPasswordChange, StaffMobileChange, StaffCredentialResult
 from schemas.staff import StaffCreate, StaffListResult, StaffResult, StaffStatusUpdate, StaffStatusResult
 from database.module_names import get_staff_module_names
 from schemas.staff import StaffPermissionUpdate, StaffPermissionResult
@@ -277,6 +278,60 @@ def staff_id_for_user(db: Session, school_id: int, user_id: int) -> int:
     if item is None:
         raise HTTPException(404, "Staff profile not found for this user in this school")
     return item.id
+
+
+def credential_account(db, school_id, user_id, current_user, current_password):
+    staff_id_for_user(db, school_id, user_id)
+    account = db.get(LoginUser, user_id)
+    if getattr(current_user, "login_user_id", None) == user_id:
+        if current_password is None or not verify_password(current_password, account.password):
+            raise HTTPException(403, "Current password is incorrect or missing")
+        return account
+    if current_user.role == UserRole.SUPER_ADMIN:
+        return account
+    if current_user.role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
+        from models.school_mapping import SchoolMapping, SchoolMappingStatus
+        assigned = db.query(SchoolMapping.id).filter_by(
+            school_id=school_id, user_id=current_user.login_user_id,
+            status=SchoolMappingStatus.ACTIVE,
+        ).first()
+        if assigned is not None:
+            return account
+    raise HTTPException(403, "You cannot change credentials for this staff account")
+
+
+def save_staff_credentials(db, account, message):
+    try:
+        db.commit()
+        db.refresh(account)
+    except IntegrityError as exc:
+        db.rollback()
+        raise staff_constraint_error(exc) from exc
+    except Exception:
+        db.rollback()
+        raise
+    return {"message": message, "data": {"user_id": account.id, "mobile_number": account.mobile}}
+
+
+@router.patch("/staff/change-password", response_model=StaffCredentialResult)
+def change_staff_password(payload: StaffPasswordChange, school_id: int = Query(..., gt=0),
+                          user_id: int = Query(..., gt=0), db: Session = Depends(staff_school),
+                          current_user: User = Depends(get_current_user)):
+    account = credential_account(db, school_id, user_id, current_user, payload.current_password)
+    account.password = hash_password(payload.new_password)
+    return save_staff_credentials(db, account, "Staff password changed successfully")
+
+
+@router.patch("/staff/change-mobile", response_model=StaffCredentialResult)
+def change_staff_mobile(payload: StaffMobileChange, school_id: int = Query(..., gt=0),
+                        user_id: int = Query(..., gt=0), db: Session = Depends(staff_school),
+                        current_user: User = Depends(get_current_user)):
+    account = credential_account(db, school_id, user_id, current_user, payload.current_password)
+    if db.query(LoginUser.id).filter(LoginUser.mobile == payload.mobile_number,
+                                     LoginUser.id != user_id).first():
+        raise HTTPException(409, "Mobile already exists")
+    account.mobile = payload.mobile_number
+    return save_staff_credentials(db, account, "Staff mobile number changed successfully")
 
 
 @router.patch("/staff/status", response_model=StaffStatusResult)
