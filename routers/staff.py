@@ -3,7 +3,7 @@ from sqlalchemy import MetaData, Table, select
 from sqlalchemy.exc import IntegrityError, NoSuchTableError
 from sqlalchemy.orm import Session, contains_eager, selectinload
 
-from dependencies.auth import get_current_user
+from dependencies.auth import account_token, get_current_user
 from dependencies.db import get_db_session
 from models.caste_category import CasteCategory
 from models.school import School, SchoolPermission
@@ -314,6 +314,13 @@ def credential_account(db, school_id, user_id, current_user, current_password=No
 
 
 def save_staff_credentials(db, account, message):
+    # Tokens use profile IDs and type prefixes, matching the login endpoint.
+    with db.no_autoflush:
+        profile = db.query(User).filter_by(login_user_id=account.id).first()
+        if profile is None:
+            profile = db.query(Staff).filter_by(login_user_id=account.id).first()
+    if profile is None:
+        raise HTTPException(404, "Login profile not found")
     try:
         db.commit()
         db.refresh(account)
@@ -323,7 +330,8 @@ def save_staff_credentials(db, account, message):
     except Exception:
         db.rollback()
         raise
-    return {"message": message, "data": {"user_id": account.id, "mobile_number": account.mobile}}
+    return {"message": message, "data": {"user_id": account.id, "mobile_number": account.mobile},
+            "token": account_token(profile), "token_type": "bearer"}
 
 
 @router.patch("/staff/change-password", response_model=StaffCredentialResult)

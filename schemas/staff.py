@@ -213,3 +213,5 @@ class StaffCredentialResult(BaseModel):
     status: str = "success"
     message: str
     data: StaffCredentialData
+    token: str
+    token_type: str = "bearer"

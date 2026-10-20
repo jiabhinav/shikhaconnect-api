@@ -2,6 +2,7 @@ import unittest
 
 import test_sessions
 from dependencies.auth import account_token
+from fastapi.security import HTTPAuthorizationCredentials
 from models.staff import Staff
 from models.user import LoginUser, UserRole, UserStatus
 from models.school_mapping import SchoolMapping, SchoolMappingStatus
@@ -24,6 +25,15 @@ class StaffCredentialTests(unittest.TestCase):
         return self.client.patch('/schools/staff/change-' + kind,
                                  params=self.params if params is None else params, json=body)
 
+    def assert_valid_token(self, response, profile, old_token):
+        token = response.json()['token']
+        self.assertEqual(response.json()['token_type'], 'bearer')
+        self.assertNotEqual(token, old_token)
+        self.assertEqual(token, account_token(profile))
+        resolved = test_sessions.get_current_user(
+            HTTPAuthorizationCredentials(scheme='Bearer', credentials=token), self.db)
+        self.assertIs(resolved, profile)
+
     def test_password_and_mobile_persist_without_exposing_password(self):
         token = account_token(self.staff)
         response = self.change('password', {'new_password': 'new password'})
@@ -31,6 +41,7 @@ class StaffCredentialTests(unittest.TestCase):
         self.assertNotIn('password', response.json()['data'])
         self.assertTrue(verify_password('new password', self.staff.password))
         self.assertNotEqual(token, account_token(self.staff))
+        self.assert_valid_token(response, self.staff, token)
         password = self.staff.password
         token = account_token(self.staff)
         response = self.change('mobile', {'mobile_number': '9999999999'})
@@ -39,6 +50,7 @@ class StaffCredentialTests(unittest.TestCase):
         self.assertEqual(self.staff.mobile, '9999999999')
         self.assertEqual(password, self.staff.password)
         self.assertNotEqual(token, account_token(self.staff))
+        self.assert_valid_token(response, self.staff, token)
 
     def test_self_service_requires_current_password_only_for_password_changes(self):
         self.client.app.dependency_overrides[test_sessions.get_current_user] = lambda: self.staff
@@ -75,19 +87,24 @@ class StaffCredentialTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
 
     def test_mapped_login_user_without_staff_profile(self):
-        account = self.db.query(test_sessions.User).first().login_user
+        profile = self.db.query(test_sessions.User).first()
+        account = profile.login_user
         self.db.add(SchoolMapping(school_id=1, user_id=account.id,
                                  status=SchoolMappingStatus.ACTIVE))
         self.db.commit()
         params = {'school_id': 1, 'user_id': account.id}
+        old_token = account_token(profile)
         response = self.change('password', {'new_password': 'updated password'}, params)
         self.assertEqual(response.status_code, 200, response.text)
         self.db.expire_all()
         self.assertTrue(verify_password('updated password', account.password))
+        self.assert_valid_token(response, profile, old_token)
+        old_token = response.json()['token']
         response = self.change('mobile', {'mobile_number': '8888888888'}, params)
         self.assertEqual(response.status_code, 200, response.text)
         self.db.expire_all()
         self.assertEqual(account.mobile, '8888888888')
+        self.assert_valid_token(response, profile, old_token)
         self.assertEqual(self.change('password', {'new_password': 'wrong school'},
                                      params | {'school_id': 2}).status_code, 404)
         self.db.query(SchoolMapping).filter_by(user_id=account.id).update(
