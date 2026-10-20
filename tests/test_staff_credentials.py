@@ -3,7 +3,7 @@ import unittest
 import test_sessions
 from dependencies.auth import account_token
 from models.staff import Staff
-from models.user import LoginUser, UserRole
+from models.user import LoginUser, UserRole, UserStatus
 from models.school_mapping import SchoolMapping, SchoolMappingStatus
 from utils.passwords import hash_password, verify_password
 
@@ -50,6 +50,27 @@ class StaffCredentialTests(unittest.TestCase):
                                               'current_password': 'old password'}).status_code, 200)
         self.assertEqual(self.change('password', {'new_password': 'new password',
                                                 'current_password': 'old password'}).status_code, 200)
+
+    def test_duplicate_mobile_is_rejected_across_schools_and_inactive_accounts(self):
+        other = Staff(school_id=2, login_user=LoginUser(
+            first_name='Other', email='other@example.com', mobile='8888888888',
+            role='Teacher', password=hash_password('other password')))
+        self.db.add(other)
+        self.db.commit()
+        original_mobile = self.staff.mobile
+        original_password = self.staff.password
+        for status in (UserStatus.ACTIVE, UserStatus.INACTIVE):
+            other.login_user.status = status
+            self.db.commit()
+            response = self.change('mobile', {'mobile_number': other.mobile})
+            self.assertEqual(response.status_code, 409, response.text)
+            self.assertEqual(response.json()['detail'], 'Mobile already exists')
+            self.db.expire_all()
+            self.assertEqual(self.staff.mobile, original_mobile)
+            self.assertEqual(self.staff.password, original_password)
+            self.assertEqual(self.db.query(LoginUser).filter_by(mobile=other.mobile).count(), 1)
+        response = self.change('mobile', {'mobile_number': original_mobile})
+        self.assertEqual(response.status_code, 200, response.text)
 
     def test_mapped_login_user_without_staff_profile(self):
         account = self.db.query(test_sessions.User).first().login_user
