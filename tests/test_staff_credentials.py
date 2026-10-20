@@ -51,6 +51,29 @@ class StaffCredentialTests(unittest.TestCase):
         self.assertEqual(self.change('password', {'new_password': 'new password',
                                                 'current_password': 'old password'}).status_code, 200)
 
+    def test_mapped_login_user_without_staff_profile(self):
+        account = self.db.query(test_sessions.User).first().login_user
+        self.db.add(SchoolMapping(school_id=1, user_id=account.id,
+                                 status=SchoolMappingStatus.ACTIVE))
+        self.db.commit()
+        params = {'school_id': 1, 'user_id': account.id}
+        response = self.change('password', {'new_password': 'updated password'}, params)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.db.expire_all()
+        self.assertTrue(verify_password('updated password', account.password))
+        response = self.change('mobile', {'mobile_number': '8888888888'}, params)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.db.expire_all()
+        self.assertEqual(account.mobile, '8888888888')
+        self.assertEqual(self.change('password', {'new_password': 'wrong school'},
+                                     params | {'school_id': 2}).status_code, 404)
+        self.db.query(SchoolMapping).filter_by(user_id=account.id).update(
+            {'status': SchoolMappingStatus.DEACTIVE})
+        self.db.commit()
+        self.assertEqual(self.change('password', {'new_password': 'inactive'}, params).status_code, 404)
+        self.assertEqual(self.change('password', {'new_password': 'missing'},
+                                     params | {'user_id': 99999}).status_code, 404)
+
     def test_permissions_duplicates_and_validation(self):
         self.user.role = UserRole.ADMIN
         self.user.login_user_id = self.db.query(test_sessions.User).first().login_user_id

@@ -281,8 +281,19 @@ def staff_id_for_user(db: Session, school_id: int, user_id: int) -> int:
 
 
 def credential_account(db, school_id, user_id, current_user, current_password):
-    staff_id_for_user(db, school_id, user_id)
+    from models.school_mapping import SchoolMapping, SchoolMappingStatus
+
     account = db.get(LoginUser, user_id)
+    if account is None:
+        raise HTTPException(404, "Login user not found")
+    staff_link = db.query(Staff.id).filter_by(
+        school_id=school_id, login_user_id=user_id,
+    ).first()
+    school_link = db.query(SchoolMapping.id).filter_by(
+        school_id=school_id, user_id=user_id, status=SchoolMappingStatus.ACTIVE,
+    ).first()
+    if staff_link is None and school_link is None:
+        raise HTTPException(404, "Login user not found in this school")
     if getattr(current_user, "login_user_id", None) == user_id:
         if current_password is None or not verify_password(current_password, account.password):
             raise HTTPException(403, "Current password is incorrect or missing")
@@ -290,7 +301,6 @@ def credential_account(db, school_id, user_id, current_user, current_password):
     if current_user.role == UserRole.SUPER_ADMIN:
         return account
     if current_user.role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
-        from models.school_mapping import SchoolMapping, SchoolMappingStatus
         assigned = db.query(SchoolMapping.id).filter_by(
             school_id=school_id, user_id=current_user.login_user_id,
             status=SchoolMappingStatus.ACTIVE,
