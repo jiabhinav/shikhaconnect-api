@@ -799,16 +799,20 @@ Both endpoints sort students by class order, class name, section name, then
 student first, middle, and last name (case-insensitive), before pagination.
 Students without a section appear after named sections within their class.
 Student ID breaks ties to keep pagination stable.
-`total_records` counts all students in the selected `school_id` and optional
-`session_id`, including active and inactive students. Search filters, status,
-offset, and limit affect only `data`. Without `session_id`, the total includes
-all sessions in the school. Search defaults
+`total_records` counts matching students after the selected session, status,
+search, and field filters, but before offset and limit are applied. Without
+`session_id`, the count can include matches from all sessions in the school. Search defaults
 to active students, and accepts `status=false` for inactive students, optional
 `session_id`, and pagination (`offset=0`, `limit=50`, maximum 200). Missing or blank `search` values on the search endpoint return 422.
 
 `GET /schools/students?school_id=21` returns only active students. Optional
 `offset` and `limit` apply after the active filter. The previous list URL remains
 available for compatibility and also returns active students only.
+The list also accepts `class_id`, `section_id`, `house_name`, `student_type`,
+`gender`, `religion`, `caste_category_name`, and `fee_category_name`. Each filter
+defaults to `all`, which leaves that field unfiltered. Pass class and section
+IDs for those filters and the selected text value for the remaining filters;
+for example, `?school_id=21&class_id=4&section_id=2&gender=Female`.
 
 `PATCH /schools/students/status?school_id=21&student_id=32` accepts
 `{"status":"inactive"}` to disable a student or `{"status":"active"}` to enable

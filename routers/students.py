@@ -68,7 +68,14 @@ def list_students(school_id: int, session_id: int | None = Query(None, gt=0),
                   limit: int = Query(50, ge=1, le=200),
                   name: str | None = Query(None, min_length=1, max_length=767),
                   mobile: str | None = Query(None, min_length=1, max_length=20),
-                  class_id: int | None = Query(None, gt=0),
+                  class_id: str = Query("all", max_length=100),
+                  section_id: str = Query("all", max_length=100),
+                  house_name: str = Query("all", max_length=100),
+                  student_type: str = Query("all", max_length=100),
+                  gender: str = Query("all", max_length=50),
+                  religion: str = Query("all", max_length=100),
+                  caste_category_name: str = Query("all", max_length=100),
+                  fee_category_name: str = Query("all", max_length=100),
                   search: str | None = Query(None, min_length=1, max_length=767),
                   db: Session = Depends(student_school)):
     from dependencies.school_session import require_school_session
@@ -76,7 +83,6 @@ def list_students(school_id: int, session_id: int | None = Query(None, gt=0),
     if session_id is not None:
         require_school_session(db, school_id, session_id)
         query = query.filter(Student.session_id == session_id)
-    total_records = query.count()
     query = query.filter(Student.status == ("active" if status else "inactive"))
     if name is not None:
         if not name.strip():
@@ -92,8 +98,22 @@ def list_students(school_id: int, session_id: int | None = Query(None, gt=0),
         if not mobile.strip():
             raise HTTPException(422, "mobile must not be blank")
         query = query.filter(Student.mobile_number.contains(mobile.strip(), autoescape=True))
-    if class_id is not None:
-        query = query.filter(Student.class_id == class_id)
+    # Dropdowns send their selected value; the default sentinel means "all".
+    for field, value in (("class_id", class_id), ("section_id", section_id)):
+        if value.strip().lower() != "all":
+            try:
+                identifier = int(value)
+            except ValueError as exc:
+                raise HTTPException(422, f"{field} must be a positive ID or 'all'") from exc
+            if identifier <= 0:
+                raise HTTPException(422, f"{field} must be a positive ID or 'all'")
+            query = query.filter(getattr(Student, field) == identifier)
+    for field, value in (("house_name", house_name), ("student_type", student_type),
+                         ("gender", gender), ("religion", religion),
+                         ("caste_category_name", caste_category_name),
+                         ("fee_category_name", fee_category_name)):
+        if value.strip().lower() != "all":
+            query = query.filter(func.lower(func.trim(getattr(Student, field))) == value.strip().lower())
     if search is not None:
         from models.class_section import SchoolClass
         term = search.strip()
@@ -113,6 +133,8 @@ def list_students(school_id: int, session_id: int | None = Query(None, gt=0),
         query = query.filter(or_(name_match,
                                  Student.mobile_number.contains(term, autoescape=True),
                                  class_match))
+    # Report the count for the selected filters, before applying pagination.
+    total_records = query.count()
     from models.class_section import SchoolClass, Section
     query = query.outerjoin(SchoolClass, Student.class_id == SchoolClass.id).outerjoin(
         Section, Student.section_id == Section.id,
@@ -138,7 +160,7 @@ def search_students(school_id: int, search: str = Query(..., min_length=1, max_l
                     db: Session = Depends(student_school)):
     return list_students(school_id=school_id, session_id=session_id, status=status,
                          offset=offset, limit=limit, name=None, mobile=None,
-                         class_id=None, search=search, db=db)
+                         class_id="all", search=search, db=db)
 
 
 @router.get("/{school_id}/students/dropdowns", response_model=StudentDropdownResult)
