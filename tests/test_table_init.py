@@ -85,3 +85,35 @@ class TableInitializationTests(unittest.TestCase):
                 self.assertIn("school_name", {c["name"] for c in inspect(connection).get_columns("schools")})
         finally:
             engine.dispose()
+
+    def test_all_fee_tables_are_created_and_recreated(self):
+        from utils.fee_months import MONTH_COLUMNS
+
+        engine = create_engine("sqlite://")
+        fee_tables = {"fee_categories", "fee_heads", "fee_structures",
+                      "fee_configurations", "fee_configuration_heads"}
+        try:
+            with engine.begin() as connection:
+                ensure_all_tables(connection)
+                self.assertTrue(fee_tables.issubset(inspect(connection).get_table_names()))
+                connection.execute(text(
+                    "INSERT INTO login_user (id, first_name, email, mobile, password, role) "
+                    "VALUES (1, 'Test', 'fee@example.com', '98765', '', 'ADMIN')"
+                ))
+                for table in reversed(Base.metadata.sorted_tables):
+                    if table.name in fee_tables:
+                        table.drop(connection)
+                self.assertTrue(fee_tables.isdisjoint(inspect(connection).get_table_names()))
+                ensure_all_tables(connection)
+                ensure_all_tables(connection)
+                self.assertTrue(fee_tables.issubset(inspect(connection).get_table_names()))
+                columns = {col['name'] for col in inspect(connection).get_columns('fee_configuration_heads')}
+                self.assertTrue(set(MONTH_COLUMNS.values()).issubset(columns))
+                self.assertEqual(connection.execute(text('SELECT count(*) FROM login_user')).scalar_one(), 1)
+                # Recreate each table individually as well as the whole group.
+                for name in fee_tables:
+                    Base.metadata.tables[name].drop(connection)
+                    ensure_all_tables(connection)
+                    self.assertTrue(inspect(connection).has_table(name))
+        finally:
+            engine.dispose()

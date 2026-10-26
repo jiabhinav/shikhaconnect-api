@@ -27,6 +27,10 @@ from routers.class_sections import router as class_section_router
 from routers.subjects import router as subject_router
 from routers.streams import router as stream_router
 from routers.fee_categories import router as fee_category_router
+from routers.fee_heads import router as fee_head_router
+from routers.fee_structures import router as fee_structure_router
+from routers.fee_configurations import router as fee_configuration_router
+from routers.fee_assignments import router as fee_assignment_router
 from routers.caste_categories import router as caste_category_router
 from routers.houses import router as house_router
 from routers.generation_settings import router as generation_settings_router
@@ -43,6 +47,12 @@ router.include_router(class_section_router)
 router.include_router(subject_router)
 router.include_router(stream_router)
 router.include_router(fee_category_router)
+router.include_router(fee_head_router)
+router.include_router(fee_structure_router)
+router.include_router(fee_configuration_router, prefix="/{school_id}/sessions/{session_id}", include_in_schema=False)
+router.include_router(fee_configuration_router)
+router.include_router(fee_assignment_router)
+router.include_router(fee_configuration_router, prefix="/school/{school_id}/sessions/{session_id}", include_in_schema=False)
 router.include_router(caste_category_router)
 router.include_router(house_router)
 router.include_router(generation_settings_router)

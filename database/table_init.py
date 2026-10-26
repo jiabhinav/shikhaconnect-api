@@ -7,6 +7,9 @@ from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from database.database import Base
+from database.fee_configuration_table import ensure_fee_month_columns
+from database.fee_structure_table import remove_fee_structure_carry_forward
+from database.fee_assignment_table import remove_fee_assignment_admission_amount
 from database.student_table import migrate_optional_student_identity_fields, migrate_student_form_fields, migrate_student_dropdown_storage
 from database.student_table import migrate_student_status_choices
 from database.teacher_table import migrate_teacher_profile_image, migrate_optional_teacher_city, migrate_optional_teacher_identity, migrate_teacher_logins, migrate_teacher_employee_codes
@@ -85,6 +88,9 @@ def ensure_all_tables(connection):
     remove_legacy_session_year_index(connection)
     existing = set(inspect(connection).get_table_names())
     if set(Base.metadata.tables).issubset(existing):
+        ensure_fee_month_columns(connection)
+        remove_fee_structure_carry_forward(connection)
+        remove_fee_assignment_admission_amount(connection)
         migrate_optional_teacher_city(connection)
         migrate_optional_teacher_identity(connection)
         migrate_staff_profiles(connection)
@@ -111,6 +117,9 @@ def ensure_all_tables(connection):
         # Recheck within create_all after serializing concurrent initialization.
         connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
     Base.metadata.create_all(bind=connection, checkfirst=True)
+    ensure_fee_month_columns(connection)
+    remove_fee_structure_carry_forward(connection)
+    remove_fee_assignment_admission_amount(connection)
     migrate_optional_teacher_city(connection)
     migrate_optional_teacher_identity(connection)
     migrate_staff_profiles(connection)

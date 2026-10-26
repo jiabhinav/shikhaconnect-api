@@ -46,12 +46,14 @@ def save_fee_category(db, item, message):
 
 
 @router.post("/school/{school_id}/sessions/{session_id}/fee_categories", response_model=FeeCategoryResult, status_code=201, include_in_schema=False)
+@router.post("/{school_id}/sessions/{session_id}/fee_categories", response_model=FeeCategoryResult, status_code=201, include_in_schema=False)
 @router.post("/fee_categories", response_model=FeeCategoryResult, status_code=201)
 def create_fee_category(school_id: int, session_id: int, payload: FeeCategoryWrite, db: Session = Depends(fee_category_school)):
     return save_fee_category(db, FeeCategory(school_id=school_id, session_id=session_id, name=payload.name), "Fee category created successfully")
 
 
 @router.get("/school/{school_id}/sessions/{session_id}/fee_categories", response_model=FeeCategoryListResult, include_in_schema=False)
+@router.get("/{school_id}/sessions/{session_id}/fee_categories", response_model=FeeCategoryListResult, include_in_schema=False)
 @router.get("/fee_categories", response_model=FeeCategoryListResult)
 def list_fee_categories(school_id: int, session_id: int, db: Session = Depends(fee_category_school)):
     return {"message": "Fee categories fetched successfully", "data": db.query(FeeCategory).filter_by(
@@ -59,12 +61,14 @@ def list_fee_categories(school_id: int, session_id: int, db: Session = Depends(f
 
 
 @router.get("/school/{school_id}/sessions/{session_id}/fee_categories/{fee_category_id}", response_model=FeeCategoryResult, include_in_schema=False)
+@router.get("/{school_id}/sessions/{session_id}/fee_categories/{fee_category_id}", response_model=FeeCategoryResult, include_in_schema=False)
 @router.get("/fee_categories/{fee_category_id}", response_model=FeeCategoryResult)
 def get_fee_category(school_id: int, session_id: int, fee_category_id: int, db: Session = Depends(fee_category_school)):
     return {"message": "Fee category fetched successfully", "data": find_fee_category(db, school_id, session_id, fee_category_id)}
 
 
 @router.put("/school/{school_id}/sessions/{session_id}/fee_categories/{fee_category_id}", response_model=FeeCategoryResult, include_in_schema=False)
+@router.put("/{school_id}/sessions/{session_id}/fee_categories/{fee_category_id}", response_model=FeeCategoryResult, include_in_schema=False)
 @router.put("/fee_categories/{fee_category_id}", response_model=FeeCategoryResult)
 def update_fee_category(school_id: int, session_id: int, fee_category_id: int, payload: FeeCategoryWrite, db: Session = Depends(fee_category_school)):
     item = find_fee_category(db, school_id, session_id, fee_category_id)
@@ -73,6 +77,7 @@ def update_fee_category(school_id: int, session_id: int, fee_category_id: int, p
 
 
 @router.delete("/school/{school_id}/sessions/{session_id}/fee_categories/{fee_category_id}", include_in_schema=False)
+@router.delete("/{school_id}/sessions/{session_id}/fee_categories/{fee_category_id}", include_in_schema=False)
 @router.delete("/fee_categories/{fee_category_id}")
 def delete_fee_category(school_id: int, session_id: int, fee_category_id: int, db: Session = Depends(fee_category_school)):
     item = find_fee_category(db, school_id, session_id, fee_category_id)

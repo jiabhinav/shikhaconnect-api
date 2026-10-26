@@ -1112,3 +1112,340 @@ Responses contain `status`, `message`, and
 mobiles return 409, and invalid request bodies return 422.
 After either credential changes, existing tokens for that account expire;
 log in again with the updated credentials.
+
+### Configure Fees — fee heads
+
+Authenticated fee-head APIs store the screenshot's required `fee_head_name` and
+`student_type` fields. Student type accepts nonblank text up to 100 characters;
+fee-head names have the same limit. Values are trimmed. Each operation requires
+`school_id` and `session_id`, and the session must belong to that school.
+
+- `POST /schools/fee_heads?school_id=1&session_id=1` — create (201).
+- `GET /schools/fee_heads?school_id=1&session_id=1` — list (200).
+- `GET /schools/fee_heads/{fee_head_id}?school_id=1&session_id=1` — fetch (200).
+- `PUT /schools/fee_heads/{fee_head_id}?school_id=1&session_id=1` — update both fields (200).
+- `DELETE /schools/fee_heads/{fee_head_id}?school_id=1&session_id=1` — delete (200).
+
+Create and update body:
+
+```json
+{
+  "fee_head_name": "Tuition Fee",
+  "student_type": "New"
+}
+```
+
+Responses contain `status`, `message`, and `data`; each fee head includes `id`,
+`school_id`, `session_id`, `fee_head_name`, and `student_type`. List `data` is an
+array ordered by ID. Missing schools, mismatched sessions, and fee heads outside
+the requested scope return 404. Duplicate name/student-type pairs in the same
+school session return 409 (case-insensitive). Invalid bodies return 422.
+The same name may be configured for different student types or sessions.
+
+Equivalent nested routes are available at
+`/schools/school/{school_id}/sessions/{session_id}/fee_heads` and `/{fee_head_id}`.
+The `fee_heads` table and its unique index are created automatically through the
+existing startup/request database initialization. No manual SQL is required.
+These endpoints are listed under **Configure Fees** in `/docs`.
+
+### Configure Fees — fee structure names
+
+Fee structure names are managed separately from fee heads. Authenticated routes
+require `school_id` and `session_id`; the session must belong to the school.
+
+- `POST /schools/fee_structures?school_id=1&session_id=1` — create (201).
+- `GET /schools/fee_structures?school_id=1&session_id=1` — list by ID (200).
+- `GET /schools/fee_structures/{fee_structure_id}?school_id=1&session_id=1` — fetch (200).
+- `PUT /schools/fee_structures/{fee_structure_id}?school_id=1&session_id=1` — rename (200).
+- `DELETE /schools/fee_structures/{fee_structure_id}?school_id=1&session_id=1` — delete (200).
+
+Create/update body:
+
+```json
+{
+  "fee_structure_name": "Annual Fees"
+}
+```
+
+Names are required, trimmed, and limited to 100 characters. Duplicate names
+within a school session return 409, ignoring case. The same name can be used in
+another school or session. Missing resources or mismatched scopes return 404;
+invalid bodies return 422. Responses contain `status`, `message`, and `data`;
+records include `id`, `school_id`, `session_id`, and `fee_structure_name`.
+List `data` is an array.
+
+Equivalent nested routes are supported at
+`/schools/school/{school_id}/sessions/{session_id}/fee_structures` and
+`/{fee_structure_id}`. The `fee_structures` table and unique index are created
+when missing by the existing startup/request initialization. Routes appear under
+**Configure Fees** in `/docs`. These APIs manage names; fee amounts and student
+assignments are configured separately.
+
+### Configure Fees — structure configurations and amounts
+
+Authenticated configuration APIs require `school_id` and `session_id`:
+
+- `POST /schools/fee_configurations?school_id=1&session_id=1` — create (201).
+- `GET /schools/fee_configurations?school_id=1&session_id=1` — list (200), optionally filter by `fee_structure_id` and/or `fee_category_id`.
+- `GET /schools/fee_configurations/{configuration_id}?school_id=1&session_id=1` — fetch (200).
+- `PUT /schools/fee_configurations/{configuration_id}?school_id=1&session_id=1` — replace the complete configuration (200).
+- `DELETE /schools/fee_configurations/{configuration_id}?school_id=1&session_id=1` — delete with its fee-head rows (200).
+
+Create/update example:
+
+```json
+{
+  "fee_structure_id": 1,
+  "fee_category_id": 1,
+  "no_of_fee_heads": 2,
+  "fee_heads": [
+    {
+      "fee_head_id": 1,
+      "amount": "500.00"
+    },
+    {
+      "fee_head_id": 2,
+      "amount": "300.00",
+      "edit_months_wise": true,
+      "month_amounts": {
+        "2025-04": "250.00",
+        "2025-05": "0.00"
+      }
+    }
+  ]
+}
+```
+
+The selected structure, category, and every fee head must belong to the requested
+school and session (404 otherwise). Only one configuration is allowed per
+structure/category pair in that school session (409 on conflict). There must be
+1–100 distinct fee heads. `no_of_fee_heads` is optional, but when supplied must
+match the array length; responses always include the calculated count.
+
+Amounts use exact decimals, are nonnegative, have at most two decimal places,
+and are limited to 9,999,999,999.99. Decimal values are returned as JSON strings.
+By default `edit_months_wise` is false and `month_amounts` is empty. When enabled,
+supply at least one `YYYY-MM` override within the selected academic session.
+Unspecified months use the base `amount`; zero overrides are allowed. Invalid
+amounts, counts, repeated heads, or month data return 422. These APIs store
+configuration amounts and do not calculate bills or assign students.
+
+Responses contain `status`, `message`, and `data`. A configuration includes its
+IDs, calculated `no_of_fee_heads`, and `fee_heads` with row IDs, amounts, and month
+overrides. List `data` is an array ordered by configuration ID. PUT replaces all
+fee-head rows atomically, so row IDs can change. Deleting a referenced fee head,
+structure, or category returns 409 until its configurations are removed.
+
+Nested aliases are available under
+`/schools/school/{school_id}/sessions/{session_id}/fee_configurations`.
+The `fee_configurations` and `fee_configuration_heads` tables are automatically
+created when missing through startup/request initialization. APIs appear under
+**Configure Fees** in `/docs`.
+
+#### Month-wise amount inputs and checkboxes
+
+Each `month_amounts` value also accepts an object containing `amount` and the
+month's checkbox state, `enabled`. Use this format for the expanded month grid:
+
+```json
+{
+  "fee_head_id": 1,
+  "amount": "500.00",
+  "edit_months_wise": true,
+  "month_amounts": {
+    "2025-04": {"amount": "500.00", "enabled": true},
+    "2025-05": {"amount": "450.00", "enabled": true},
+    "2025-06": {"amount": "500.00", "enabled": false},
+    "2026-03": {"amount": "500.00", "enabled": true}
+  }
+}
+```
+
+Send this fee-head row inside the configuration's `fee_heads` array. Use actual
+years from the chosen session, including the following year for January–March
+in an April–March session. Save every displayed month to preserve the full grid.
+`enabled: false` marks the month as excluded from charging while retaining its
+entered amount. An enabled zero amount and an unchecked month remain distinct.
+All months may be unchecked. `enabled` must be a JSON boolean, and `amount` is
+required and validated even when unchecked. The API stores these settings for
+future billing; it does not issue charges.
+
+GET, list, and PUT responses preserve these month settings. Existing decimal-only
+month values remain supported and mean an enabled override. Omitted months
+continue to use the base amount, so explicitly send `enabled: false` for unchecked
+months. To disable month-wise editing, send `edit_months_wise: false` and
+`month_amounts: {}`. The existing JSON column stores both formats, so no database
+migration is required.
+
+#### Twelve monthly fee columns
+
+`fee_configuration_heads` now stores `april_fee`, `may_fee`, `june_fee`,
+`july_fee`, `august_fee`, `september_fee`, `october_fee`, `november_fee`,
+`december_fee`, `january_fee`, `february_fee`, and `march_fee` as `NUMERIC(12,2)`.
+These fields are also included in configuration API responses. They are calculated
+on create/update from the base amount and month settings: enabled overrides use
+the entered amount, unchecked months use zero, and omitted months use the base
+amount. Calendar months outside the academic session use zero. For sessions
+longer than twelve months, these columns describe the first occurrence of each
+month; the year-specific JSON settings remain available for the full session.
+
+Existing installations automatically add missing columns and backfill existing
+rows from the saved configuration on the next database initialization. Continue
+sending `amount` and `month_amounts` when writing configurations; the twelve
+columns are calculated response fields.
+
+#### Manage month-wise fees without replacing the configuration
+
+Use `GET /schools/fee_configurations/months?school_id=1&session_id=1&configuration_id={configuration_id}`
+to render the month grid. It returns every calendar month in session order with
+`month` (`YYYY-MM`), entered `amount`, `enabled`, `effective_amount`, and
+`is_override` for each fee head, plus fee-head names, per-head totals,
+`monthly_totals`, and an overall `total`. Disabled months have zero effective
+amount while keeping their entered value. The full year-qualified schedule also
+supports sessions longer than twelve months.
+
+Update one fee head with:
+
+`PATCH /schools/fee_configurations/fee_heads/months?school_id=1&session_id=1&configuration_id={configuration_id}&fee_head_id={fee_head_id}`
+
+```json
+{
+  "amount": "600.00",
+  "month_amounts": {
+    "2025-04": {"amount": "500.00", "enabled": true},
+    "2025-05": {"amount": "600.00", "enabled": false},
+    "2025-06": null
+  }
+}
+```
+
+`amount` is optional and changes the base amount for months without overrides.
+`month_amounts` changes only the supplied months. A `null` entry removes that
+month's override, restoring the current base amount and enabling it. To apply a
+value or checkbox state to several months, include each selected month in the
+same request. Other months, fee heads, and existing row IDs remain unchanged.
+The response contains the updated full schedule and totals; the twelve stored
+monthly fee columns are synchronized in the same transaction. PostgreSQL edits
+lock the configuration row to serialize simultaneous month updates.
+
+At least one change is required. Invalid amounts, null base amounts, or months
+outside the session return 422; missing configurations/heads or wrong scope
+return 404. These routes also have the existing school/session nested aliases.
+Totals describe configured fees and do not include payments or discounts.
+
+### Fee API quick reference
+
+All endpoints below require authentication and the query parameters
+`school_id` and `session_id`. Create/update request examples
+are documented in the Configure Fees sections above and in `/docs`.
+
+| Resource | Create | List | Get by ID | Edit | Delete |
+| --- | --- | --- | --- | --- | --- |
+| Fee category | `POST /schools/fee_categories?school_id={school_id}&session_id={session_id}` | `GET /schools/fee_categories?school_id={school_id}&session_id={session_id}` | `GET /schools/fee_categories/{fee_category_id}?school_id={school_id}&session_id={session_id}` | `PUT /schools/fee_categories/{fee_category_id}?school_id={school_id}&session_id={session_id}` | `DELETE /schools/fee_categories/{fee_category_id}?school_id={school_id}&session_id={session_id}` |
+| Fee head | `POST /schools/fee_heads?school_id={school_id}&session_id={session_id}` | `GET /schools/fee_heads?school_id={school_id}&session_id={session_id}` | `GET /schools/fee_heads/{fee_head_id}?school_id={school_id}&session_id={session_id}` | `PUT /schools/fee_heads/{fee_head_id}?school_id={school_id}&session_id={session_id}` | `DELETE /schools/fee_heads/{fee_head_id}?school_id={school_id}&session_id={session_id}` |
+| Structure name | `POST /schools/fee_structures?school_id={school_id}&session_id={session_id}` | `GET /schools/fee_structures?school_id={school_id}&session_id={session_id}` | `GET /schools/fee_structures/{fee_structure_id}?school_id={school_id}&session_id={session_id}` | `PUT /schools/fee_structures/{fee_structure_id}?school_id={school_id}&session_id={session_id}` | `DELETE /schools/fee_structures/{fee_structure_id}?school_id={school_id}&session_id={session_id}` |
+| Structure configuration | `POST /schools/fee_configurations?school_id={school_id}&session_id={session_id}` | `GET /schools/fee_configurations?school_id={school_id}&session_id={session_id}` | `GET /schools/fee_configurations/{configuration_id}?school_id={school_id}&session_id={session_id}` | `PUT /schools/fee_configurations/{configuration_id}?school_id={school_id}&session_id={session_id}` | `DELETE /schools/fee_configurations/{configuration_id}?school_id={school_id}&session_id={session_id}` |
+
+Configuration fee-head rows and their month columns are created, read, replaced,
+and deleted through their parent configuration. For targeted month edits, use
+`PATCH /schools/fee_configurations/fee_heads/months?school_id={school_id}&session_id={session_id}&configuration_id={configuration_id}&fee_head_id={fee_head_id}`;
+to retrieve the complete monthly schedule, use
+`GET /schools/fee_configurations/months?school_id={school_id}&session_id={session_id}&configuration_id={configuration_id}`.
+
+
+#### Fee URL format with school and session query parameters
+
+Use `school_id` and `session_id` as required query parameters, separated by `&`:
+
+```text
+POST   /schools/fee_structures?school_id=1&session_id=32
+GET    /schools/fee_structures?school_id=1&session_id=32
+GET    /schools/fee_structures/1?school_id=1&session_id=32
+PUT    /schools/fee_structures/1?school_id=1&session_id=32
+DELETE /schools/fee_structures/1?school_id=1&session_id=32
+```
+
+The same format applies to `fee_categories`, `fee_heads`, and `fee_configurations`.
+Month schedule and edit URLs:
+
+```text
+GET   /schools/fee_configurations/months?school_id=1&session_id=32&configuration_id=1
+PATCH /schools/fee_configurations/fee_heads/months?school_id=1&session_id=32&configuration_id=1&fee_head_id=1
+```
+
+`/docs` shows these query-scoped routes. Earlier school/session path routes
+remain supported as hidden compatibility aliases.
+
+#### Configuration ID as a query parameter
+
+Get, update, and delete a configuration using query IDs:
+
+```text
+GET    /schools/fee_configurations?school_id=323&session_id=32&configuration_id=21
+PUT    /schools/fee_configurations?school_id=323&session_id=32&configuration_id=21
+DELETE /schools/fee_configurations?school_id=323&session_id=32&configuration_id=21
+```
+
+GET without `configuration_id` lists configurations; GET with it returns one
+configuration object or 404. PUT and DELETE require `configuration_id`. POST
+creates a configuration and generates its ID. Previous ID-in-path routes remain
+hidden compatibility aliases. `/docs` shows the query-ID routes.
+
+#### Complete month values on configuration responses
+
+Configuration create, update, list, and get responses always include every month
+of the selected session in each fee head's `month_amounts`, in session order.
+When `edit_months_wise` is false, an empty request map is accepted and the response
+fills every month with the base `amount`. A supplied map in this mode is ignored
+and the base amount applies to all session months.
+
+When `edit_months_wise` is true, POST and PUT now require a value for **every**
+session month. Partial examples above must be expanded to cover the complete
+session before submitting a full configuration. Missing months return 422 with
+`missing_months`. Values may be decimal amounts or `{amount, enabled}` objects.
+PATCH month edits still accept selected months only. Existing saved partial
+configurations remain readable; their missing months are filled from the base
+amount in responses. Response expansion does not change the saved edit toggle.
+
+#### Blank amounts for unchecked months
+
+Configuration and month-schedule responses show unchecked month amounts as
+`{"amount": null, "enabled": false}`. Render `null` as an empty input.
+The effective charge and stored calendar-month fee column remain zero. The
+entered override is retained internally; response display does not delete it.
+Write requests still supply a nonnegative amount with the checkbox state; the
+blank display value is a response representation, not a replacement write body.
+
+### Assign fee structures to classes
+
+All assignment routes use required `school_id` and `session_id` query parameters:
+
+```text
+POST   /schools/fee_assignments?school_id=1&session_id=32
+GET    /schools/fee_assignments?school_id=1&session_id=32
+GET    /schools/fee_assignments?school_id=1&session_id=32&assignment_id=1
+PUT    /schools/fee_assignments?school_id=1&session_id=32&assignment_id=1
+DELETE /schools/fee_assignments?school_id=1&session_id=32&assignment_id=1
+```
+
+Create/update body (also shown in Swagger):
+
+```json
+{
+  "class_id": 1,
+  "fee_structure_id": 1
+}
+```
+
+The class and structure must belong to the selected school/session, otherwise
+404. One fee structure can be assigned to each class in a session; duplicate
+assignments return 409. Use PUT to replace an assignment.
+
+Responses include assignment ID, school/session IDs, class ID/name, fee structure
+ID/name. Lists include `total` and a `data` array ordered
+by assignment ID. Filter lists with `class_id`, `fee_structure_id`, or `search`
+(case-insensitive class/structure name search). GET with `assignment_id` returns
+one record. All routes require authentication. Referenced classes/structures
+cannot be deleted until assignments are removed. The `fee_assignments` table
+is automatically created when missing at startup or before database requests.
+These routes appear under **Configure Fees** in `/docs`.
