@@ -3,6 +3,8 @@ from typing import Annotated
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
+from schemas.fee_examples import FEE_CONFIGURATION_EXAMPLES, FEE_MONTH_PATCH_EXAMPLES
+
 Money = Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=2, allow_inf_nan=False)]
 Month = Annotated[str, Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")]
 
@@ -18,7 +20,11 @@ class FeeConfigurationHeadWrite(BaseModel):
     fee_head_id: int = Field(gt=0)
     amount: Money
     edit_months_wise: bool = False
-    month_amounts: dict[Month, Money | FeeMonthAmount] = Field(default_factory=dict)
+    month_amounts: dict[Month, Money | FeeMonthAmount] = Field(
+        default_factory=dict,
+        description="Use YYYY-MM keys matching the session. With edit_months_wise=true, provide every session month. With false, use {} to apply the base amount to all months. Unchecked months submit amount and enabled=false; response amounts display null.",
+        examples=[FEE_CONFIGURATION_EXAMPLES["month_wise"]["value"]["fee_heads"][0]["month_amounts"]],
+    )
 
     @model_validator(mode="after")
     def validate_months(self):
@@ -28,7 +34,9 @@ class FeeConfigurationHeadWrite(BaseModel):
 
 
 class FeeConfigurationWrite(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", json_schema_extra={
+        "examples": [example["value"] for example in FEE_CONFIGURATION_EXAMPLES.values()]
+    })
     fee_structure_id: int = Field(gt=0)
     fee_category_id: int = Field(gt=0)
     no_of_fee_heads: int | None = Field(default=None, ge=1, le=100)
@@ -94,7 +102,9 @@ class FeeConfigurationListResult(BaseModel):
 
 
 class FeeMonthPatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", json_schema_extra={
+        "examples": [example["value"] for example in FEE_MONTH_PATCH_EXAMPLES.values()]
+    })
     amount: Money | None = None
     # null resets a month to the base amount; omitted months remain unchanged.
     month_amounts: dict[Month, FeeMonthAmount | None] = Field(default_factory=dict)
