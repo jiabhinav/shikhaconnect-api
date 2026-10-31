@@ -2,6 +2,7 @@ from utils.dates import today as get_today
 from utils.school_sessions import current_session_ids
 from utils.school_deletion import delete_school_data
 
+import calendar
 import logging
 import re
 
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
 from database.module_names import get_module_names
-from database.session_table import ensure_session_table, update_school_session, validate_session_dates
+from database.session_table import ensure_session_table, sync_session_months, update_school_session, validate_session_dates
 from models.school import School, SchoolPermission
 from models.school_assets import SchoolAssets
 from models.user import User, UserRole
@@ -20,6 +21,7 @@ from schemas.school import SchoolCreate, SchoolUpdate
 from schemas.school_assets import SchoolAssetsResponse
 from schemas.session import SessionResponse
 from models.session import Session as SchoolSession
+from models.session_month import SessionMonth
 from models.student import Student
 from models.class_section import SchoolClass
 from schemas.session import SessionCreate, SessionResult, SessionListResult
@@ -87,6 +89,8 @@ def _save_session(db, session):
     try:
         validate_session_dates(db, session.school_id, session.start_date, session.end_date, session.id)
         db.add(session)
+        db.flush()
+        sync_session_months(db, session)
         db.commit()
         db.refresh(session)
     except IntegrityError as exc:
@@ -181,6 +185,58 @@ def list_sessions(
         SchoolSession.start_date.desc(), SchoolSession.id.desc()
     ).all()
     return {"message": "Sessions fetched successfully", "data": sessions}
+
+
+@router.get("/session_months")
+def list_session_months(
+    school_id: int,
+    session_id: int,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    """List payment month IDs for a school's academic session."""
+    _require_session_school(db, school_id, current_user)
+    session = db.query(SchoolSession.id).filter_by(id=session_id, school_id=school_id).first()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found for this school")
+    months = db.query(SessionMonth).filter_by(school_id=school_id, session_id=session_id).order_by(
+        SessionMonth.id
+    ).all()
+    return {"message": "Session months fetched successfully", "data": [
+        {"id": month.id, "school_id": month.school_id, "session_id": month.session_id,
+         "month": month.month,
+         "month_name": calendar.month_name[int(month.month.split("-")[1])]}
+        for month in months
+    ]}
+
+
+@router.post("/session_months", status_code=status.HTTP_201_CREATED)
+@router.post("/school/{school_id}/sessions/{session_id}/months", status_code=status.HTTP_201_CREATED, include_in_schema=False)
+def create_session_months(
+    school_id: int,
+    session_id: int,
+    db: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Create one payment month for every month in the session date range."""
+    _require_session_school(db, school_id, current_user)
+    session = db.query(SchoolSession).filter_by(id=session_id, school_id=school_id).first()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found for this school")
+    try:
+        sync_session_months(db, session)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    months = db.query(SessionMonth).filter_by(school_id=school_id, session_id=session_id).order_by(
+        SessionMonth.id
+    ).all()
+    return {"message": "Session months created successfully", "data": [
+        {"id": month.id, "school_id": month.school_id, "session_id": month.session_id,
+         "month": month.month}
+        for month in months
+    ]}
 
 def _role_value(user: User) -> str:
     return user.role.value if hasattr(user.role, "value") else str(user.role)
@@ -441,6 +497,9 @@ def create_school(
             start_date=school_info.session_start_date,
             end_date=school_info.session_end_date,
         ))
+        db.flush()
+        created_session = db.query(SchoolSession).filter_by(school_id=school.id).order_by(SchoolSession.id.desc()).first()
+        sync_session_months(db, created_session)
         db.commit()
         db.refresh(school)
     except IntegrityError as exc:
@@ -482,6 +541,8 @@ def update_school(
 
     try:
         update_school_session(db, school, school_info, payload.session_id)
+        session_record = db.query(SchoolSession).filter_by(id=payload.session_id, school_id=school.id).first()
+        sync_session_months(db, session_record)
         for field, value in payload.school_values().items():
             setattr(school, field, value)
 

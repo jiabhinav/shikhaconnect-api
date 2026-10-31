@@ -11,8 +11,10 @@ class FeeAssignment(Base):
     school_id = Column(Integer, ForeignKey('schools.id', ondelete='CASCADE'), nullable=False, index=True)
     session_id = Column(Integer, ForeignKey('sessions.id', ondelete='RESTRICT'), nullable=False, index=True)
     class_id = Column(Integer, ForeignKey('classes.id', ondelete='RESTRICT'), nullable=False, index=True)
+    section_id = Column(Integer, ForeignKey('sections.id', ondelete='RESTRICT'), nullable=True, index=True)
     fee_structure_id = Column(Integer, ForeignKey('fee_structures.id', ondelete='RESTRICT'), nullable=False, index=True)
     school_class = relationship('SchoolClass')
+    section = relationship('Section')
     fee_structure = relationship('FeeStructure')
     __table_args__ = (
         UniqueConstraint('school_id', 'session_id', 'class_id', name='uq_fee_assignment_class'),

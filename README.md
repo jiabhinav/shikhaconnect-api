@@ -9,6 +9,8 @@ Authenticated endpoints are grouped under **Schools** in `/docs`:
 - `POST /schools/school/{school_id}/sessions`: create a session (201).
 - `PUT /schools/school/{school_id}/sessions/{session_id}`: replace its name and dates (200).
 - `GET /schools/school/{school_id}/sessions`: list sessions, newest start date first (200).
+- `GET /schools/session_months?school_id={school_id}&session_id={session_id}`: list payment months and IDs.
+- `POST /schools/session_months?school_id={school_id}&session_id={session_id}`: create/reconcile payment months and return their IDs.
 
 Create and update accept:
 
@@ -29,6 +31,13 @@ Invalid dates or blank names return 422. The start-year/end-year pair must be un
 or updating a session, including through school APIs. Duplicates return 409 even
 when the month or day differs. Different schools may use the same years.
 Existing duplicate rows are preserved; API validation prevents new conflicts.
+When the create-session API succeeds, it also creates one month row for every
+calendar month from the session start month through its end month. Month labels
+use `YYYY-MM` (for example, `2026-04`); each row includes an ID, school ID, and session ID for student
+payment references. A month already used by another session in the same school
+returns 409, even if the sessions cover different days of that month. The
+session-month POST endpoint can be used by a client button to generate/retrieve
+the rows for an existing session; repeated calls reuse the existing IDs.
 
 Startup creates the `sessions` table with a school foreign key and date check.
 Startup and school/session requests automatically remove the legacy

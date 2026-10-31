@@ -1,4 +1,4 @@
-"""Remove the retired admission amount while preserving class assignments."""
+"""Fee assignment schema migrations."""
 from sqlalchemy import MetaData, inspect, text
 from sqlalchemy.schema import CreateTable
 
@@ -30,3 +30,20 @@ def remove_fee_assignment_admission_amount(connection):
             index.create(connection)
     else:
         connection.execute(text('ALTER TABLE fee_assignments DROP COLUMN admission_amount'))
+
+
+def ensure_fee_assignment_section_column(connection):
+    """Add an optional section reference to existing fee assignments."""
+    inspector = inspect(connection)
+    if not inspector.has_table('fee_assignments'):
+        return
+    if 'section_id' in {col['name'] for col in inspector.get_columns('fee_assignments')}:
+        return
+    connection.execute(text(
+        'ALTER TABLE fee_assignments ADD COLUMN section_id INTEGER '
+        'REFERENCES sections(id) ON DELETE RESTRICT'
+    ))
+    connection.execute(text(
+        'CREATE INDEX IF NOT EXISTS ix_fee_assignments_section_id '
+        'ON fee_assignments (section_id)'
+    ))

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from models.class_section import SchoolClass
+from models.class_section import ClassSectionMapping, SchoolClass
 from models.fee_assignment import FeeAssignment
 from models.fee_structure import FeeStructure
 from routers.fee_structures import fee_structure_school
@@ -22,8 +22,16 @@ def save_assignment(db, item, payload):
     for model, identity, label in ((SchoolClass, payload.class_id, 'Class'), (FeeStructure, payload.fee_structure_id, 'Fee structure')):
         if db.query(model.id).filter_by(id=identity, school_id=item.school_id, session_id=item.session_id).first() is None:
             raise HTTPException(404, f'{label} not found for this school session')
+    if db.query(ClassSectionMapping.id).filter_by(
+        school_id=item.school_id,
+        session_id=item.session_id,
+        class_id=payload.class_id,
+        section_id=payload.section_id,
+    ).first() is None:
+        raise HTTPException(404, 'Section is not mapped to this class for this school session')
     try:
         item.class_id = payload.class_id
+        item.section_id = payload.section_id
         item.fee_structure_id = payload.fee_structure_id
         db.add(item)
         db.commit()
@@ -44,13 +52,16 @@ def create_assignment(school_id: int, session_id: int, payload: FeeAssignmentWri
 
 @router.get('/fee_assignments', response_model=FeeAssignmentListResult | FeeAssignmentResult)
 def get_assignments(school_id: int, session_id: int, assignment_id: int | None = None,
-                    class_id: int | None = None, fee_structure_id: int | None = None,
+                    class_id: int | None = None, section_id: int | None = None,
+                    fee_structure_id: int | None = None,
                     search: str | None = None, db: Session = Depends(fee_structure_school)):
     if assignment_id is not None:
         return {'message': 'Fee assignment fetched successfully', 'data': find_assignment(db, school_id, session_id, assignment_id)}
     query = db.query(FeeAssignment).filter_by(school_id=school_id, session_id=session_id)
     if class_id is not None:
         query = query.filter_by(class_id=class_id)
+    if section_id is not None:
+        query = query.filter_by(section_id=section_id)
     if fee_structure_id is not None:
         query = query.filter_by(fee_structure_id=fee_structure_id)
     if search and search.strip():

@@ -2,6 +2,51 @@ from fastapi import HTTPException
 from sqlalchemy import text
 
 from models.session import Session as SchoolSession
+from models.session_month import SessionMonth
+
+
+def sync_session_months(db, session):
+    """Create or reconcile the YYYY-MM payment periods for a session."""
+    year, month = session.start_date.year, session.start_date.month
+    wanted = {}
+    while (year, month) <= (session.end_date.year, session.end_date.month):
+        label = f"{year:04d}-{month:02d}"
+        wanted[label] = label
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+
+    rows = db.query(SessionMonth).filter_by(session_id=session.id, school_id=session.school_id).all()
+    existing = {row.month: row for row in rows}
+    duplicates = db.query(SessionMonth).filter(
+        SessionMonth.school_id == session.school_id,
+        SessionMonth.month.in_(wanted),
+        SessionMonth.session_id != session.id,
+    ).all() if wanted else []
+    duplicate_months = {row.month for row in duplicates}
+    # Include older sessions created before session_months was introduced.
+    other_sessions = db.query(SchoolSession).filter(
+        SchoolSession.school_id == session.school_id,
+        SchoolSession.id != session.id,
+    ).all()
+    for other in other_sessions:
+        year, month = other.start_date.year, other.start_date.month
+        while (year, month) <= (other.end_date.year, other.end_date.month):
+            label = f"{year:04d}-{month:02d}"
+            if label in wanted:
+                duplicate_months.add(label)
+            year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    if duplicate_months:
+        duplicate_months = sorted(duplicate_months)
+        raise HTTPException(status_code=409, detail={
+            "message": "One or more months already belong to another session for this school",
+            "duplicate_months": duplicate_months,
+        })
+    for label in wanted:
+        row = existing.pop(label, None)
+        if row is None:
+            db.add(SessionMonth(school_id=session.school_id, session_id=session.id,
+                                month=label))
+    for obsolete in existing.values():
+        db.delete(obsolete)
 
 
 def remove_legacy_session_year_index(connection):

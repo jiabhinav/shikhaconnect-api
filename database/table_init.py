@@ -9,7 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from database.database import Base
 from database.fee_configuration_table import ensure_fee_month_columns
 from database.fee_structure_table import remove_fee_structure_carry_forward
-from database.fee_assignment_table import remove_fee_assignment_admission_amount
+from database.fee_assignment_table import ensure_fee_assignment_section_column, remove_fee_assignment_admission_amount
 from database.student_table import migrate_optional_student_identity_fields, migrate_student_form_fields, migrate_student_dropdown_storage
 from database.student_table import migrate_student_status_choices
 from database.teacher_table import migrate_teacher_profile_image, migrate_optional_teacher_city, migrate_optional_teacher_identity, migrate_teacher_logins, migrate_teacher_employee_codes
@@ -88,6 +88,9 @@ def ensure_all_tables(connection):
     remove_legacy_session_year_index(connection)
     existing = set(inspect(connection).get_table_names())
     if set(Base.metadata.tables).issubset(existing):
+        _drop_legacy_session_month_date(connection)
+        _normalize_session_month_format(connection)
+        ensure_fee_assignment_section_column(connection)
         ensure_fee_month_columns(connection)
         remove_fee_structure_carry_forward(connection)
         remove_fee_assignment_admission_amount(connection)
@@ -117,6 +120,9 @@ def ensure_all_tables(connection):
         # Recheck within create_all after serializing concurrent initialization.
         connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
     Base.metadata.create_all(bind=connection, checkfirst=True)
+    _drop_legacy_session_month_date(connection)
+    _normalize_session_month_format(connection)
+    ensure_fee_assignment_section_column(connection)
     ensure_fee_month_columns(connection)
     remove_fee_structure_carry_forward(connection)
     remove_fee_assignment_admission_amount(connection)
@@ -141,3 +147,27 @@ def ensure_all_tables(connection):
     migrate_teacher_logins(connection)
     migrate_teacher_employee_codes(connection)
     migrate_teacher_profile_image(connection)
+
+
+def _drop_legacy_session_month_date(connection):
+    """Keep the session-month table's period value in its month column only."""
+    inspector = inspect(connection)
+    if not inspector.has_table("session_months"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("session_months")}
+    if "month_date" in columns:
+        connection.execute(text("ALTER TABLE session_months DROP COLUMN month_date"))
+
+
+def _normalize_session_month_format(connection):
+    """Convert legacy MM-YYYY labels to the canonical YYYY-MM format."""
+    if not inspect(connection).has_table("session_months"):
+        return
+    rows = connection.execute(text("SELECT id, month FROM session_months")).all()
+    for row_id, value in rows:
+        if (len(value) == 7 and value[2] == "-" and value[:2].isdigit()
+                and value[3:].isdigit()):
+            normalized = f"{value[3:]}-{value[:2]}"
+            connection.execute(text(
+                "UPDATE session_months SET month = :month WHERE id = :id"
+            ), {"month": normalized, "id": row_id})
