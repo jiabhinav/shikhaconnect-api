@@ -3,6 +3,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from database.database import engine, sync_missing_columns, test_db_connection
 from routers.auth import router as auth_router
@@ -74,6 +75,13 @@ def home():
 
 @app.get("/health")
 def health_check():
-    return {
-        "database_connected": test_db_connection()
-    }
+    try:
+        with engine.begin() as connection:
+            ensure_all_tables(connection)
+    except Exception:
+        logger.exception("Database schema health check failed")
+        return JSONResponse(
+            status_code=503,
+            content={"database_connected": test_db_connection(), "schema_initialized": False},
+        )
+    return {"database_connected": True, "schema_initialized": True}

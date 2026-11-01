@@ -1288,12 +1288,13 @@ months. To disable month-wise editing, send `edit_months_wise: false` and
 #### Monthly fee storage
 
 `fee_configuration_heads` stores one row for each configured fee head and each
-month in the academic session. Rows contain the year-qualified `month`, monthly
-`amount`, `enabled` state, and the fee head's `base_amount`. This supports
-sessions of any length without adding a database column for each month. Existing
-installations convert their saved wide month columns and JSON settings into
-month rows automatically during database initialization. The API continues to
-accept and return the grouped fee-head format shown above.
+month in the academic session, using `configuration_id`, `fee_head_id`,
+`month` (`YYYY-MM`), and the monthly `amount` (plus the row's primary key).
+Base amounts and checkbox/editing metadata are kept with the configuration.
+This supports sessions of any length without adding a database column for each
+month. Existing installations convert their saved wide month columns and JSON
+settings into month rows automatically during database initialization. The API
+continues to accept and return the grouped fee-head format shown above.
 
 #### Manage month-wise fees without replacing the configuration
 

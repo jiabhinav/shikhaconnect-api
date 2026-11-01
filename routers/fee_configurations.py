@@ -61,18 +61,29 @@ def write_configuration(db, item, payload):
         db.add(item)
         db.flush()
         month_rows = []
+        head_settings = {}
         for head in payload.fee_heads:
             overrides = head.model_dump(mode="json")["month_amounts"]
+            month_settings = {}
             for month in session_months(session.start_date, session.end_date):
                 value = overrides.get(month, head.amount)
                 enabled = value.get("enabled", True) if isinstance(value, dict) else True
                 month_amount = value["amount"] if isinstance(value, dict) else value
+                month_settings[month] = {
+                    "enabled": enabled,
+                    "is_override": month in overrides,
+                    "has_checkbox": isinstance(value, dict),
+                }
                 month_rows.append(FeeConfigurationHead(
-                    fee_head_id=head.fee_head_id, base_amount=head.amount, month=month,
-                    amount=month_amount, enabled=enabled, is_override=month in overrides,
-                    has_checkbox=isinstance(value, dict),
+                    fee_head_id=head.fee_head_id, month=month, amount=month_amount,
                 ))
+            head_settings[str(head.fee_head_id)] = {
+                "base_amount": str(head.amount),
+                "edit_months_wise": head.edit_months_wise,
+                "months": month_settings,
+            }
         item.fee_heads = month_rows
+        item.fee_head_settings = head_settings
         db.commit()
         db.refresh(item)
     except IntegrityError as exc:
@@ -95,20 +106,28 @@ def configuration_response(item):
     heads = []
     for fee_head_id, rows in groups.items():
         by_month = {row.month: row for row in rows}
+        settings = (item.fee_head_settings or {}).get(str(fee_head_id), {})
+        month_settings = settings.get("months", {})
         months = {}
         for month, row in by_month.items():
-            if not row.enabled or row.has_checkbox:
-                months[month] = {"amount": row.amount if row.enabled else None, "enabled": row.enabled}
+            state = month_settings.get(month, {})
+            enabled = state.get("enabled", True)
+            if not enabled or state.get("has_checkbox", False):
+                months[month] = {"amount": row.amount if enabled else None, "enabled": enabled}
             else:
                 months[month] = row.amount
         legacy_months = {}
         for number, column in MONTH_COLUMNS.items():
             candidates = [row for row in rows if int(row.month[5:]) == number]
             row = min(candidates, key=lambda value: value.month) if candidates else None
-            legacy_months[column] = row.amount if row and row.enabled else Decimal("0.00")
+            enabled = month_settings.get(row.month, {}).get("enabled", True) if row else False
+            legacy_months[column] = row.amount if row and enabled else Decimal("0.00")
         heads.append({
-            "id": rows[0].id, "fee_head_id": fee_head_id, "amount": rows[0].base_amount,
-            "edit_months_wise": any(row.is_override for row in rows),
+            "id": rows[0].id, "fee_head_id": fee_head_id,
+            "amount": settings.get("base_amount", str(rows[0].amount)),
+            "edit_months_wise": settings.get("edit_months_wise", any(
+                state.get("is_override", False) for state in month_settings.values()
+            )),
             "month_amounts": months, **legacy_months,
         })
     return {"id": item.id, "school_id": item.school_id, "session_id": item.session_id,
@@ -181,8 +200,13 @@ def configuration_schedule(db, item):
     names = dict(db.query(FeeHead.id, FeeHead.fee_head_name).filter(FeeHead.id.in_(grouped)).all())
     heads = []
     for fee_head_id, rows in grouped.items():
-        base_amount = rows[0].base_amount
-        overrides = {row.month: {'amount': row.amount, 'enabled': row.enabled} for row in rows if row.is_override}
+        settings = (item.fee_head_settings or {}).get(str(fee_head_id), {})
+        base_amount = settings.get('base_amount', rows[0].amount)
+        month_settings = settings.get('months', {})
+        overrides = {
+            row.month: {'amount': row.amount, 'enabled': month_settings.get(row.month, {}).get('enabled', True)}
+            for row in rows if month_settings.get(row.month, {}).get('is_override', False)
+        }
         months = month_schedule(base_amount, overrides, session.start_date, session.end_date)
         for row in months:
             totals[row['month']] += row['effective_amount']
@@ -210,23 +234,30 @@ def patch_month_schedule(school_id: int, session_id: int, configuration_id: int,
         raise HTTPException(422, 'Month changes must fall within the selected session')
     try:
         by_month = {row.month: row for row in head_rows}
+        settings_by_head = dict(item.fee_head_settings or {})
+        head_settings = dict(settings_by_head.get(str(fee_head_id), {}))
+        month_settings = dict(head_settings.get('months', {}))
+        base_amount = head_settings.get('base_amount', str(head_rows[0].amount))
         if payload.amount is not None:
+            base_amount = str(payload.amount)
             for row in head_rows:
-                row.base_amount = payload.amount
-                if not row.is_override:
+                if not month_settings.get(row.month, {}).get('is_override', False):
                     row.amount = payload.amount
         for month, settings in payload.month_amounts.items():
             row = by_month[month]
             if settings is None:
-                row.amount = row.base_amount
-                row.enabled = True
-                row.is_override = False
-                row.has_checkbox = False
+                row.amount = base_amount
+                month_settings[month] = {"enabled": True, "is_override": False, "has_checkbox": False}
             else:
                 row.amount = settings.amount
-                row.enabled = settings.enabled
-                row.is_override = True
-                row.has_checkbox = True
+                month_settings[month] = {"enabled": settings.enabled, "is_override": True, "has_checkbox": True}
+        head_settings['base_amount'] = str(base_amount)
+        head_settings['months'] = month_settings
+        head_settings['edit_months_wise'] = any(
+            state.get('is_override', False) for state in month_settings.values()
+        )
+        settings_by_head[str(fee_head_id)] = head_settings
+        item.fee_head_settings = settings_by_head
         db.commit()
         db.refresh(item)
     except IntegrityError as exc:
