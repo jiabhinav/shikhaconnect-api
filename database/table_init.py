@@ -9,7 +9,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from database.database import Base
 from database.fee_configuration_table import migrate_fee_configuration_month_rows
 from database.fee_structure_table import remove_fee_structure_carry_forward
-from database.fee_assignment_table import ensure_fee_assignment_section_column, rename_fee_assignment_structure_column, remove_fee_assignment_admission_amount, migrate_fee_assignment_section_uniqueness
+from database.fee_assignment_table import (ensure_fee_assignment_section_column,
+                                           rename_fee_assignment_structure_column,
+                                           migrate_fee_assignment_configuration_reference,
+                                           remove_fee_assignment_admission_amount,
+                                           migrate_fee_assignment_section_uniqueness)
 from database.student_table import migrate_optional_student_identity_fields, migrate_student_form_fields, migrate_student_dropdown_storage
 from database.student_table import migrate_student_status_choices
 from database.teacher_table import migrate_teacher_profile_image, migrate_optional_teacher_city, migrate_optional_teacher_identity, migrate_teacher_logins, migrate_teacher_employee_codes
@@ -93,6 +97,7 @@ def ensure_all_tables(connection):
         ensure_fee_assignment_section_column(connection)
         rename_fee_assignment_structure_column(connection)
         migrate_fee_configuration_month_rows(connection)
+        migrate_fee_assignment_configuration_reference(connection)
         remove_fee_structure_carry_forward(connection)
         remove_fee_assignment_admission_amount(connection)
         migrate_fee_assignment_section_uniqueness(connection)
@@ -127,6 +132,7 @@ def ensure_all_tables(connection):
     ensure_fee_assignment_section_column(connection)
     rename_fee_assignment_structure_column(connection)
     migrate_fee_configuration_month_rows(connection)
+    migrate_fee_assignment_configuration_reference(connection)
     remove_fee_structure_carry_forward(connection)
     remove_fee_assignment_admission_amount(connection)
     migrate_fee_assignment_section_uniqueness(connection)

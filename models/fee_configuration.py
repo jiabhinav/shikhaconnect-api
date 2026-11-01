@@ -1,5 +1,6 @@
 from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, JSON, Numeric, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import relationship
 
 from database.database import Base
 
@@ -22,6 +23,8 @@ class FeeConfigurationHead(Base):
     monthly_config = Column(JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    fee_structure = relationship("FeeStructure")
 
     __table_args__ = (
         UniqueConstraint("configuration_id", "fee_head_id", name="uq_fee_configuration_head"),

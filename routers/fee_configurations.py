@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from models.fee_category import FeeCategory
+from models.fee_assignment import FeeAssignment
 from models.fee_configuration import FeeConfigurationHead
 from models.fee_head import FeeHead
 from models.fee_structure import FeeStructure
@@ -71,12 +72,12 @@ def write_configuration(db, existing_rows, school_id, session_id, payload):
     if conflicting.first() is not None:
         raise HTTPException(409, 'Configuration already exists for this structure and category')
     try:
-        if old:
-            db.query(FeeConfigurationHead).filter_by(
-                configuration_id=existing_group_id, school_id=school_id, session_id=session_id,
-            ).delete(synchronize_session=False)
+        anchor = next((row for row in old if row.id == existing_group_id), old[0] if old else None)
+        for row in old:
+            if row is not anchor:
+                db.delete(row)
         db.flush()
-        head_rows = []
+        row_values = []
         for head in payload.fee_heads:
             overrides = head.month_amounts if head.edit_months_wise else {}
             monthly_config = []
@@ -90,23 +91,34 @@ def write_configuration(db, existing_rows, school_id, session_id, payload):
                     "enabled": enabled,
                     "is_override": value.get("is_override", month in overrides) if isinstance(value, dict) else month in overrides,
                 })
-            head_rows.append(FeeConfigurationHead(
-                school_id=school_id,
-                session_id=session_id,
-                fee_structure_id=structure_id,
-                fee_category_id=category_id,
-                fee_head_id=head.fee_head_id,
-                base_amount=head.amount,
-                edit_months_wise=head.edit_months_wise,
-                monthly_config=monthly_config,
-            ))
-        db.add(head_rows[0])
-        db.flush()
-        group_id = existing_group_id or head_rows[0].id
-        head_rows[0].configuration_id = group_id
-        for row in head_rows[1:]:
+            row_values.append({
+                'school_id': school_id,
+                'session_id': session_id,
+                'fee_structure_id': structure_id,
+                'fee_category_id': category_id,
+                'fee_head_id': head.fee_head_id,
+                'base_amount': head.amount,
+                'edit_months_wise': head.edit_months_wise,
+                'monthly_config': monthly_config,
+            })
+
+        first_values, *remaining_values = row_values
+        if anchor is None:
+            anchor = FeeConfigurationHead(**first_values)
+            db.add(anchor)
+            db.flush()
+            group_id = anchor.id
+        else:
+            for name, value in first_values.items():
+                setattr(anchor, name, value)
+            group_id = existing_group_id
+        anchor.configuration_id = group_id
+        head_rows = [anchor]
+        for values in remaining_values:
+            row = FeeConfigurationHead(**values)
             row.configuration_id = group_id
             db.add(row)
+            head_rows.append(row)
         db.commit()
         for row in head_rows:
             db.refresh(row)
@@ -199,6 +211,10 @@ def update_configuration(school_id: int, session_id: int, configuration_id: int,
 @router.delete("/fee_configurations")
 def delete_configuration(school_id: int, session_id: int, configuration_id: int, db: Session = Depends(fee_structure_school)):
     rows = find_configuration(db, school_id, session_id, configuration_id)
+    if db.query(FeeAssignment.id).filter_by(
+            school_id=school_id, session_id=session_id, fee_configure_id=configuration_id,
+    ).first() is not None:
+        raise HTTPException(409, 'Fee configuration is assigned to a class/section and cannot be deleted')
     try:
         for row in rows:
             db.delete(row)

@@ -137,6 +137,25 @@ def migrate_fee_configuration_month_rows(connection):
 
     old.drop(connection)
     FeeConfigurationHead.__table__.create(connection)
+    next_id = max(configurations, default=0) + 1
+    next_id = max(next_id, 1)
+    ids_reserved = set(configurations)
     for row in converted:
-        connection.execute(FeeConfigurationHead.__table__.insert().values(**row))
+        group_id = row['configuration_id']
+        if group_id in ids_reserved:
+            row_id = group_id
+            ids_reserved.remove(group_id)
+        else:
+            while next_id in ids_reserved:
+                next_id += 1
+            row_id = next_id
+            next_id += 1
+        connection.execute(FeeConfigurationHead.__table__.insert().values(
+            id=row_id, **row,
+        ))
+    if connection.dialect.name == 'postgresql' and converted:
+        connection.execute(text(
+            "SELECT setval(pg_get_serial_sequence('fee_configuration_heads', 'id'), "
+            "(SELECT COALESCE(MAX(id), 1) FROM fee_configuration_heads))"
+        ))
     connection.execute(text('DROP TABLE fee_configurations'))

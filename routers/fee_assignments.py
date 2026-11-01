@@ -2,9 +2,8 @@ from decimal import Decimal
 from calendar import month_name
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import and_
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from models.class_section import ClassSectionMapping, SchoolClass, Section
 from models.fee_category import FeeCategory
@@ -30,10 +29,35 @@ def find_assignment(db, school_id, session_id, assignment_id):
     return item
 
 
+def resolve_fee_configuration_id(db, school_id, session_id, fee_configure_id, fee_structure_id):
+    if fee_configure_id is not None:
+        configuration = db.query(FeeConfigurationHead).filter_by(
+            id=fee_configure_id, configuration_id=fee_configure_id,
+            school_id=school_id, session_id=session_id,
+        ).first()
+        if configuration is None:
+            raise HTTPException(404, 'Fee configuration not found for this school session')
+        if fee_structure_id is not None and configuration.fee_structure_id != fee_structure_id:
+            raise HTTPException(422, 'fee_structure_id does not match fee_configure_id')
+        return configuration.configuration_id
+
+    configuration_ids = [row[0] for row in db.query(FeeConfigurationHead.configuration_id).filter_by(
+        school_id=school_id, session_id=session_id, fee_structure_id=fee_structure_id,
+    ).distinct().order_by(FeeConfigurationHead.configuration_id).all()]
+    if not configuration_ids:
+        raise HTTPException(404, 'Fee configuration not found for this fee structure and school session')
+    # The old API accepted a structure ID. Resolve it to the first configured
+    # group so existing clients do not accidentally store the structure ID.
+    return configuration_ids[0]
+
+
 def save_assignment(db, item, payload):
-    for model, identity, label in ((SchoolClass, payload.class_id, 'Class'), (FeeStructure, payload.fee_structure_id, 'Fee structure')):
-        if db.query(model.id).filter_by(id=identity, school_id=item.school_id, session_id=item.session_id).first() is None:
-            raise HTTPException(404, f'{label} not found for this school session')
+    if db.query(SchoolClass.id).filter_by(
+            id=payload.class_id, school_id=item.school_id, session_id=item.session_id).first() is None:
+        raise HTTPException(404, 'Class not found for this school session')
+    fee_configure_id = resolve_fee_configuration_id(
+        db, item.school_id, item.session_id, payload.fee_configure_id, payload.fee_structure_id,
+    )
     if db.query(ClassSectionMapping.id).filter_by(
         school_id=item.school_id,
         session_id=item.session_id,
@@ -44,7 +68,7 @@ def save_assignment(db, item, payload):
     try:
         item.class_id = payload.class_id
         item.section_id = payload.section_id
-        item.fee_configure_id = payload.fee_structure_id
+        item.fee_configure_id = fee_configure_id
         db.add(item)
         db.commit()
         db.refresh(item)
@@ -59,9 +83,12 @@ def save_assignment(db, item, payload):
 
 @router.post('/fee_assignments', response_model=FeeAssignmentListResult, status_code=201)
 def create_assignment(school_id: int, session_id: int, payload: FeeAssignmentBatchWrite, db: Session = Depends(fee_structure_school)):
-    for model, identity, label in ((SchoolClass, payload.class_id, 'Class'), (FeeStructure, payload.fee_structure_id, 'Fee structure')):
-        if db.query(model.id).filter_by(id=identity, school_id=school_id, session_id=session_id).first() is None:
-            raise HTTPException(404, f'{label} not found for this school session')
+    if db.query(SchoolClass.id).filter_by(
+            id=payload.class_id, school_id=school_id, session_id=session_id).first() is None:
+        raise HTTPException(404, 'Class not found for this school session')
+    fee_configure_id = resolve_fee_configuration_id(
+        db, school_id, session_id, payload.fee_configure_id, payload.fee_structure_id,
+    )
     section_ids = list(dict.fromkeys(payload.section_id))
     mapped = {row[0] for row in db.query(ClassSectionMapping.section_id).filter_by(
         school_id=school_id, session_id=session_id, class_id=payload.class_id,
@@ -70,7 +97,7 @@ def create_assignment(school_id: int, session_id: int, payload: FeeAssignmentBat
         raise HTTPException(404, {'message': 'One or more sections are not mapped to this class for this school session',
                                   'section_ids': sorted(set(section_ids) - mapped)})
     items = [FeeAssignment(school_id=school_id, session_id=session_id, class_id=payload.class_id,
-                           section_id=section_id, fee_configure_id=payload.fee_structure_id)
+                           section_id=section_id, fee_configure_id=fee_configure_id)
              for section_id in section_ids]
     try:
         db.add_all(items)
@@ -89,7 +116,7 @@ def create_assignment(school_id: int, session_id: int, payload: FeeAssignmentBat
 @router.get('/fee_assignments', response_model=FeeAssignmentListResult | FeeAssignmentResult)
 def get_assignments(school_id: int, session_id: int, assignment_id: int | None = None,
                     class_id: int | None = None, section_id: int | None = None,
-                    fee_structure_id: int | None = None,
+                    fee_structure_id: int | None = None, fee_configure_id: int | None = None,
                     search: str | None = None, db: Session = Depends(fee_structure_school)):
     if assignment_id is not None:
         return {'message': 'Fee assignment fetched successfully', 'data': find_assignment(db, school_id, session_id, assignment_id)}
@@ -98,11 +125,18 @@ def get_assignments(school_id: int, session_id: int, assignment_id: int | None =
         query = query.filter_by(class_id=class_id)
     if section_id is not None:
         query = query.filter_by(section_id=section_id)
+    has_search = bool(search and search.strip())
+    if fee_structure_id is not None or has_search:
+        query = query.join(FeeConfigurationHead, FeeConfigurationHead.id == FeeAssignment.fee_configure_id)
     if fee_structure_id is not None:
-        query = query.filter_by(fee_configure_id=fee_structure_id)
-    if search and search.strip():
+        query = query.filter(FeeConfigurationHead.fee_structure_id == fee_structure_id)
+    if fee_configure_id is not None:
+        query = query.filter_by(fee_configure_id=fee_configure_id)
+    if has_search:
         pattern = '%' + search.strip().replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
-        query = query.join(SchoolClass).join(FeeStructure).filter(
+        query = query.join(SchoolClass).join(
+            FeeStructure, FeeStructure.id == FeeConfigurationHead.fee_structure_id,
+        ).filter(
             SchoolClass.name.ilike(pattern, escape='\\') | FeeStructure.fee_structure_name.ilike(pattern, escape='\\'))
     items = query.order_by(FeeAssignment.id).all()
     return {'message': 'Fee assignments fetched successfully', 'total': len(items), 'data': items}
@@ -122,20 +156,21 @@ def get_assigned_fee_structure_monthly_details(
 
     months = list(session_months(session.start_date, session.end_date))
     grouped = {}
+    Anchor = aliased(FeeConfigurationHead)
+    ConfiguredHead = aliased(FeeConfigurationHead)
     rows_query = db.query(
-        FeeAssignment, FeeStructure, FeeConfigurationHead, FeeCategory, FeeHead,
+        FeeAssignment, FeeStructure, Anchor, ConfiguredHead, FeeCategory, FeeHead,
         SchoolClass, Section,
     ).join(
-        FeeStructure, FeeStructure.id == FeeAssignment.fee_configure_id,
+        Anchor, Anchor.id == FeeAssignment.fee_configure_id,
     ).outerjoin(
-        FeeConfigurationHead,
-        and_(FeeConfigurationHead.fee_structure_id == FeeStructure.id,
-             FeeConfigurationHead.school_id == school_id,
-             FeeConfigurationHead.session_id == session_id),
+        FeeStructure, FeeStructure.id == Anchor.fee_structure_id,
     ).outerjoin(
-        FeeCategory, FeeCategory.id == FeeConfigurationHead.fee_category_id,
+        ConfiguredHead, ConfiguredHead.configuration_id == Anchor.configuration_id,
     ).outerjoin(
-        FeeHead, FeeHead.id == FeeConfigurationHead.fee_head_id,
+        FeeCategory, FeeCategory.id == ConfiguredHead.fee_category_id,
+    ).outerjoin(
+        FeeHead, FeeHead.id == ConfiguredHead.fee_head_id,
     ).join(
         SchoolClass, SchoolClass.id == FeeAssignment.class_id,
     ).outerjoin(
@@ -151,7 +186,7 @@ def get_assigned_fee_structure_monthly_details(
         SchoolClass.name, Section.name,
     ).all()
 
-    for assignment, structure, head_month, category, head, school_class, section in rows:
+    for assignment, structure, anchor, head_month, category, head, school_class, section in rows:
         category_id = category.id if category is not None else None
         key = (structure.id, category_id)
         structure_group = grouped.setdefault(key, {

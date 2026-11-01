@@ -1,25 +1,39 @@
 from typing import Annotated
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class FeeAssignmentWrite(BaseModel):
     model_config = ConfigDict(extra='forbid', json_schema_extra={'examples': [
-        {'class_id': 1, 'section_id': 1, 'fee_structure_id': 1}
+        {'class_id': 1, 'section_id': 1, 'fee_configure_id': 1}
     ]})
     class_id: int = Field(gt=0)
     section_id: int = Field(gt=0)
-    fee_structure_id: int = Field(gt=0)
+    fee_configure_id: int | None = Field(default=None, gt=0)
+    fee_structure_id: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode='after')
+    def require_structure_or_configuration(self):
+        if self.fee_configure_id is None and self.fee_structure_id is None:
+            raise ValueError('Provide fee_configure_id or fee_structure_id')
+        return self
 
 
 class FeeAssignmentBatchWrite(BaseModel):
     model_config = ConfigDict(extra='forbid', json_schema_extra={'examples': [
-        {'class_id': 1, 'section_id': [1, 2], 'fee_structure_id': 1}
+        {'class_id': 1, 'section_id': [1, 2], 'fee_configure_id': 1}
     ]})
     class_id: int = Field(gt=0)
     section_id: list[Annotated[int, Field(gt=0)]] = Field(min_length=1)
-    fee_structure_id: int = Field(gt=0)
+    fee_configure_id: int | None = Field(default=None, gt=0)
+    fee_structure_id: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode='after')
+    def require_structure_or_configuration(self):
+        if self.fee_configure_id is None and self.fee_structure_id is None:
+            raise ValueError('Provide fee_configure_id or fee_structure_id')
+        return self
 
 
 class FeeAssignmentResponse(FeeAssignmentWrite):
@@ -28,9 +42,10 @@ class FeeAssignmentResponse(FeeAssignmentWrite):
     id: int
     school_id: int
     session_id: int
+    fee_structure_id: int | None = None
     class_name: str
     section_name: str | None = None
-    fee_structure_name: str
+    fee_structure_name: str | None = None
 
 
 class FeeAssignmentResult(BaseModel):
