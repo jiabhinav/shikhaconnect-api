@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -52,7 +52,7 @@ def create_assignment(school_id: int, session_id: int, payload: FeeAssignmentWri
 
 @router.get('/fee_assignments', response_model=FeeAssignmentListResult | FeeAssignmentResult)
 def get_assignments(school_id: int, session_id: int, assignment_id: int | None = None,
-                    class_id: int | None = None, section_id: int | None = None,
+                    class_id: int | None = None, section_id: list[int] | None = Query(None),
                     fee_structure_id: int | None = None,
                     search: str | None = None, db: Session = Depends(fee_structure_school)):
     if assignment_id is not None:
@@ -60,8 +60,8 @@ def get_assignments(school_id: int, session_id: int, assignment_id: int | None =
     query = db.query(FeeAssignment).filter_by(school_id=school_id, session_id=session_id)
     if class_id is not None:
         query = query.filter_by(class_id=class_id)
-    if section_id is not None:
-        query = query.filter_by(section_id=section_id)
+    if section_id:
+        query = query.filter(FeeAssignment.section_id.in_(section_id))
     if fee_structure_id is not None:
         query = query.filter_by(fee_structure_id=fee_structure_id)
     if search and search.strip():
