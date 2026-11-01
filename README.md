@@ -1426,6 +1426,7 @@ All assignment routes use required `school_id` and `session_id` query parameters
 POST   /schools/fee_assignments?school_id=1&session_id=32
 GET    /schools/fee_assignments?school_id=1&session_id=32
 GET    /schools/fee_assignments?school_id=1&session_id=32&assignment_id=1
+GET    /schools/fee_assignments/monthly-details?school_id=1&session_id=32
 PUT    /schools/fee_assignments?school_id=1&session_id=32&assignment_id=1
 DELETE /schools/fee_assignments?school_id=1&session_id=32&assignment_id=1
 ```
@@ -1446,11 +1447,20 @@ The request creates one assignment per section. Duplicate class/section
 assignments return 409. Use PUT with a single `section_id` to replace an
 assignment.
 
-Responses include assignment ID, school/session IDs, class ID/name, fee structure
-ID/name. Lists include `total` and a `data` array ordered
+Responses include assignment ID, school/session IDs, class ID/name, section
+ID/name, and fee structure ID/name. Lists include `total` and a `data` array ordered
 by assignment ID. Filter lists with `class_id`, `section_id`, `fee_structure_id`,
 or `search` (case-insensitive class/structure name search). GET with `assignment_id` returns
 one record. All routes require authentication. Referenced classes/structures
 cannot be deleted until assignments are removed. The `fee_assignments` table
 is automatically created when missing at startup or before database requests.
 These routes appear under **Configure Fees** in `/docs`.
+
+`GET /schools/fee_assignments/monthly-details` returns one result per assigned
+fee structure/category. Each result includes the session and structure names,
+assigned classes/sections, total session fee, and a `months` array in session
+order. Every month includes its fee heads and a month total. Disabled month
+amounts return `amount: "0.00"`, with the entered value retained in
+`entered_amount` and `enabled: false`. Pass `assignment_id` with `school_id`
+and `session_id` to return details for one assigned class/section (for example,
+when opening that assignment's eye/details action).

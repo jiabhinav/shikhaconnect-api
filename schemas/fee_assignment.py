@@ -1,4 +1,5 @@
 from typing import Annotated
+from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -28,6 +29,7 @@ class FeeAssignmentResponse(FeeAssignmentWrite):
     school_id: int
     session_id: int
     class_name: str
+    section_name: str | None = None
     fee_structure_name: str
 
 
@@ -42,3 +44,46 @@ class FeeAssignmentListResult(BaseModel):
     message: str
     total: int
     data: list[FeeAssignmentResponse]
+
+
+class AssignedFeeHeadDetail(BaseModel):
+    fee_head_id: int
+    fee_head_name: str
+    amount: Decimal
+    entered_amount: Decimal
+    enabled: bool
+
+
+class AssignedClassSection(BaseModel):
+    assignment_id: int
+    class_id: int
+    class_name: str
+    section_id: int | None
+    section_name: str | None
+
+
+class AssignedFeeStructureDetail(BaseModel):
+    session_name: str
+    fee_structure_id: int
+    fee_structure_name: str
+    fee_category_id: int | None
+    fee_category_name: str | None
+    assignments: list[AssignedClassSection]
+    months: list['AssignedFeeMonth']
+    total_session_fee: Decimal
+
+
+class AssignedFeeMonth(BaseModel):
+    month: str
+    month_name: str
+    fee_heads: list[AssignedFeeHeadDetail]
+    total: Decimal
+
+
+class AssignedFeeStructureDetailsResult(BaseModel):
+    status: str = 'success'
+    message: str
+    school_id: int
+    session_id: int
+    total_structures: int
+    data: list[AssignedFeeStructureDetail]

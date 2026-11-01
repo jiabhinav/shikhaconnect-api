@@ -1,10 +1,21 @@
 """Swagger request examples; example months follow an April–March session."""
 
-MONTH_VALUES = {
-    f'{year}-{month:02}': {'amount': '500.00', 'enabled': month != 6}
-    for year, months in ((2026, range(4, 13)), (2027, range(1, 4)))
-    for month in months
-}
+SESSION_MONTHS = (
+    [(2026, month) for month in range(4, 13)]
+    + [(2027, month) for month in range(1, 4)]
+)
+
+
+def month_array(amount, disabled_months=()):
+    return [
+        {
+            'month_key': f'{year:04}-{month:02}',
+            'amount': amount,
+            'enabled': month not in disabled_months,
+            'is_override': True,
+        }
+        for year, month in SESSION_MONTHS
+    ]
 
 FEE_CONFIGURATION_EXAMPLES = {
     'month_wise': {
@@ -13,8 +24,8 @@ FEE_CONFIGURATION_EXAMPLES = {
         'value': {
             'fee_structure_id': 1, 'fee_category_id': 1, 'no_of_fee_heads': 1,
             'fee_heads': [{
-                'fee_head_id': 1, 'amount': '500.00', 'edit_months_wise': True,
-                'month_amounts': MONTH_VALUES,
+                'fee_head_id': 1, 'base_amount': '500.00', 'edit_months_wise': True,
+                'months': month_array('500.00', disabled_months=(6,)),
             }],
         },
     },
@@ -24,9 +35,50 @@ FEE_CONFIGURATION_EXAMPLES = {
         'value': {
             'fee_structure_id': 1, 'fee_category_id': 1, 'no_of_fee_heads': 1,
             'fee_heads': [{
-                'fee_head_id': 1, 'amount': '500.00', 'edit_months_wise': False,
-                'month_amounts': {},
+                'fee_head_id': 1, 'base_amount': '500.00', 'edit_months_wise': True,
+                'months': month_array('500.00'),
             }],
+        },
+    },
+}
+
+FEE_CONFIGURATION_UPDATE_EXAMPLES = {
+    'month_array': {
+        'summary': 'Update with month_key array format',
+        'description': 'configuration_id, school_id, and session_id identify the existing configuration; only fee_heads is needed in the request body.',
+        'value': {
+            'fee_heads': [
+                {
+                    'fee_head_id': 3,
+                    'base_amount': '3500.00',
+                    'edit_months_wise': True,
+                    'months': [
+                        {'month_key': f'{year:04}-{month:02}', 'amount': '3500.00',
+                         'enabled': month == 4, 'is_override': True}
+                        for year, month in SESSION_MONTHS
+                    ],
+                },
+                {
+                    'fee_head_id': 4,
+                    'base_amount': '2500.00',
+                    'edit_months_wise': True,
+                    'months': [
+                        {'month_key': f'{year:04}-{month:02}', 'amount': '2500.00',
+                         'enabled': True, 'is_override': True}
+                        for year, month in SESSION_MONTHS
+                    ],
+                },
+                {
+                    'fee_head_id': 6,
+                    'base_amount': '500.00',
+                    'edit_months_wise': True,
+                    'months': [
+                        {'month_key': f'{year:04}-{month:02}', 'amount': '500.00',
+                         'enabled': month in (7, 2), 'is_override': True}
+                        for year, month in SESSION_MONTHS
+                    ],
+                },
+            ],
         },
     },
 }

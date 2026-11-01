@@ -1,7 +1,9 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException
-from schemas.fee_examples import FEE_CONFIGURATION_EXAMPLES, FEE_MONTH_PATCH_EXAMPLES
+from schemas.fee_examples import (FEE_CONFIGURATION_EXAMPLES,
+                                  FEE_CONFIGURATION_UPDATE_EXAMPLES,
+                                  FEE_MONTH_PATCH_EXAMPLES)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -11,8 +13,9 @@ from models.fee_head import FeeHead
 from models.fee_structure import FeeStructure
 from models.session import Session as SchoolSession
 from routers.fee_structures import fee_structure_school
-from schemas.fee_configuration import (FeeConfigurationWrite, FeeConfigurationResult,
-                                       FeeConfigurationListResult, FeeMonthPatch, FeeScheduleResult)
+from schemas.fee_configuration import (FeeConfigurationWrite, FeeConfigurationUpdate,
+                                       FeeConfigurationResult, FeeConfigurationListResult,
+                                       FeeMonthPatch, FeeScheduleResult)
 
 from utils.fee_months import MONTH_COLUMNS, month_schedule, session_months
 
@@ -31,6 +34,8 @@ def validate_references(db, school_id, session_id, payload):
         (FeeStructure, payload.fee_structure_id, "Fee structure"),
         (FeeCategory, payload.fee_category_id, "Fee category"),
     ):
+        if identity is None:
+            continue
         if db.query(model.id).filter_by(id=identity, school_id=school_id, session_id=session_id).first() is None:
             raise HTTPException(404, f"{label} not found for this school session")
     ids = [head.fee_head_id for head in payload.fee_heads]
@@ -46,16 +51,16 @@ def validate_references(db, school_id, session_id, payload):
             raise HTTPException(422, {"message": "Provide values for every session month when edit_months_wise is true",
                                       "fee_head_id": head.fee_head_id,
                                       "missing_months": sorted(required - set(head.month_amounts))})
-        if not head.edit_months_wise:
-            head.month_amounts = {}
 
 
 
 def write_configuration(db, item, payload):
     session = db.query(SchoolSession).filter_by(id=item.session_id, school_id=item.school_id).one()
     try:
-        item.fee_structure_id = payload.fee_structure_id
-        item.fee_category_id = payload.fee_category_id
+        if payload.fee_structure_id is not None:
+            item.fee_structure_id = payload.fee_structure_id
+        if payload.fee_category_id is not None:
+            item.fee_category_id = payload.fee_category_id
         # Remove old rows before inserting replacements with the same head IDs.
         item.fee_heads.clear()
         db.add(item)
@@ -63,7 +68,7 @@ def write_configuration(db, item, payload):
         month_rows = []
         head_settings = {}
         for head in payload.fee_heads:
-            overrides = head.model_dump(mode="json")["month_amounts"]
+            overrides = head.month_amounts if head.edit_months_wise else {}
             month_settings = {}
             for month in session_months(session.start_date, session.end_date):
                 value = overrides.get(month, head.amount)
@@ -71,7 +76,7 @@ def write_configuration(db, item, payload):
                 month_amount = value["amount"] if isinstance(value, dict) else value
                 month_settings[month] = {
                     "enabled": enabled,
-                    "is_override": month in overrides,
+                    "is_override": value.get("is_override", month in overrides) if isinstance(value, dict) else month in overrides,
                     "has_checkbox": isinstance(value, dict),
                 }
                 month_rows.append(FeeConfigurationHead(
@@ -167,7 +172,7 @@ def get_configuration(school_id: int, session_id: int, configuration_id: int, db
 
 @router.put("/fee_configurations/{configuration_id}", response_model=FeeConfigurationResult, include_in_schema=False)
 @router.put("/fee_configurations", response_model=FeeConfigurationResult)
-def update_configuration(school_id: int, session_id: int, configuration_id: int, payload: Annotated[FeeConfigurationWrite, Body(openapi_examples=FEE_CONFIGURATION_EXAMPLES)], db: Session = Depends(fee_structure_school)):
+def update_configuration(school_id: int, session_id: int, configuration_id: int, payload: Annotated[FeeConfigurationUpdate, Body(openapi_examples=FEE_CONFIGURATION_UPDATE_EXAMPLES)], db: Session = Depends(fee_structure_school)):
     item = find_configuration(db, school_id, session_id, configuration_id)
     validate_references(db, school_id, session_id, payload)
     return write_configuration(db, item, payload)
@@ -206,6 +211,7 @@ def configuration_schedule(db, item):
         overrides = {
             row.month: {'amount': row.amount, 'enabled': month_settings.get(row.month, {}).get('enabled', True)}
             for row in rows if month_settings.get(row.month, {}).get('is_override', False)
+            or not month_settings.get(row.month, {}).get('enabled', True)
         }
         months = month_schedule(base_amount, overrides, session.start_date, session.end_date)
         for row in months:

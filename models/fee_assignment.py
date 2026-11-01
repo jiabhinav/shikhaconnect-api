@@ -29,3 +29,7 @@ class FeeAssignment(Base):
     @property
     def fee_structure_name(self):
         return self.fee_structure.fee_structure_name
+
+    @property
+    def section_name(self):
+        return self.section.name if self.section is not None else None
