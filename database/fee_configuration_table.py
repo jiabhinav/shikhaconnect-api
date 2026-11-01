@@ -1,11 +1,14 @@
-"""Migrate fee configuration heads to one minimal row per session month."""
+"""Migrate fee configuration storage to one JSONB row per configured head."""
 from sqlalchemy import MetaData, Table, inspect, select, text
 
 from utils.fee_months import MONTH_COLUMNS, session_months
 
-MONTH_ROW_COLUMNS = {'configuration_id', 'fee_head_id', 'month', 'amount'}
-STATE_COLUMNS = {'base_amount', 'enabled', 'is_override', 'has_checkbox'}
-LEGACY_MONTH_COLUMNS = set(MONTH_COLUMNS.values()) | {'month_amounts'}
+
+TARGET_COLUMNS = {
+    'configuration_id', 'school_id', 'session_id', 'fee_structure_id', 'fee_category_id',
+    'fee_head_id', 'base_amount',
+    'edit_months_wise', 'monthly_config', 'created_at', 'updated_at',
+}
 
 
 def migrate_fee_configuration_month_rows(connection):
@@ -14,160 +17,126 @@ def migrate_fee_configuration_month_rows(connection):
     if not inspector.has_table(table_name):
         return
 
-    from models.fee_configuration import FeeConfiguration, FeeConfigurationHead
-    from models.session import Session as SchoolSession
-
-    config = FeeConfiguration.__table__
-    config_columns = {column['name'] for column in inspect(connection).get_columns('fee_configurations')}
-    if 'fee_head_settings' not in config_columns:
-        default = "'{}'" if connection.dialect.name == 'sqlite' else "'{}'"
-        connection.execute(text(
-            f'ALTER TABLE fee_configurations ADD COLUMN fee_head_settings JSON NOT NULL DEFAULT {default}'
-        ))
-        config = Table('fee_configurations', MetaData(), autoload_with=connection)
-
-    columns = {column['name'] for column in inspect(connection).get_columns(table_name)}
-    if MONTH_ROW_COLUMNS.issubset(columns) and not (STATE_COLUMNS | LEGACY_MONTH_COLUMNS).intersection(columns):
-        return
-
     if connection.dialect.name == 'postgresql':
         connection.execute(text('SELECT pg_advisory_xact_lock(731904218)'))
-        # Recheck after waiting in case a different worker completed the migration.
-        columns = {column['name'] for column in inspect(connection).get_columns(table_name)}
+
+    from models.fee_configuration import FeeConfigurationHead
+
+    has_parent_table = inspect(connection).has_table('fee_configurations')
+    if has_parent_table:
         config_columns = {column['name'] for column in inspect(connection).get_columns('fee_configurations')}
-        if MONTH_ROW_COLUMNS.issubset(columns) and not (STATE_COLUMNS | LEGACY_MONTH_COLUMNS).intersection(columns) and 'fee_head_settings' in config_columns:
-            return
+        if 'fee_head_settings' not in config_columns:
+            connection.execute(text(
+                "ALTER TABLE fee_configurations ADD COLUMN fee_head_settings JSON NOT NULL DEFAULT '{}'"
+            ))
 
-    old = Table(table_name, MetaData(), autoload_with=connection)
-    settings_by_config = {
-        row['id']: dict(row['fee_head_settings'] or {})
-        for row in connection.execute(select(config.c.id, config.c.fee_head_settings)).mappings()
-    }
-    converted = []
-
-    if 'month' in columns:
-        source_rows = connection.execute(select(old).order_by(old.c.id)).mappings().all()
-        grouped_state = {}
-        for row in source_rows:
-            configuration_id, fee_head_id = row['configuration_id'], row['fee_head_id']
-            key = (configuration_id, fee_head_id)
-            head_state = grouped_state.setdefault(key, {
-                'base_amount': row.get('base_amount', row['amount']),
-                'edit_months_wise': False,
-                'months': {},
-            })
-            enabled = row.get('enabled', True)
-            is_override = row.get('is_override', False)
-            has_checkbox = row.get('has_checkbox', False)
-            head_state['edit_months_wise'] = head_state['edit_months_wise'] or is_override
-            head_state['months'][row['month']] = {
-                'enabled': enabled, 'is_override': is_override, 'has_checkbox': has_checkbox,
-            }
-            converted.append({
-                'id': row['id'], 'configuration_id': configuration_id,
-                'fee_head_id': fee_head_id, 'month': row['month'], 'amount': row['amount'],
-            })
-        for (configuration_id, fee_head_id), state in grouped_state.items():
-            settings_by_config.setdefault(configuration_id, {})[str(fee_head_id)] = {
-                'base_amount': str(state['base_amount']),
-                'edit_months_wise': state['edit_months_wise'],
-                'months': state['months'],
-            }
-    else:
-        session = SchoolSession.__table__
-        legacy_rows = connection.execute(select(
-            old, session.c.start_date, session.c.end_date,
-        ).select_from(old.join(config, old.c.configuration_id == config.c.id).join(
-            session, config.c.session_id == session.c.id
-        )).order_by(old.c.id)).mappings().all()
-        for row in legacy_rows:
-            overrides = row.get('month_amounts') or {}
-            month_settings = {}
-            months = list(session_months(row['start_date'], row['end_date']))
-            for index, month in enumerate(months):
-                value = overrides.get(month, row['amount'])
-                enabled = value.get('enabled', True) if isinstance(value, dict) else True
-                monthly_amount = value['amount'] if isinstance(value, dict) else value
-                month_settings[month] = {
-                    'enabled': enabled, 'is_override': month in overrides,
-                    'has_checkbox': isinstance(value, dict),
-                }
-                converted.append({
-                    'id': row['id'] if index == 0 else None,
-                    'source_id': row['id'],
-                    'legacy_values': {column.name: row[column.name] for column in old.columns},
-                    'configuration_id': row['configuration_id'],
-                    'fee_head_id': row['fee_head_id'],
-                    'month': month, 'amount': monthly_amount,
-                })
-            settings_by_config.setdefault(row['configuration_id'], {})[str(row['fee_head_id'])] = {
-                'base_amount': str(row['amount']),
-                'edit_months_wise': bool(overrides), 'months': month_settings,
-            }
-
-    # Save base amounts and checkbox/override state outside the minimal month table.
-    for configuration_id, settings in settings_by_config.items():
-        connection.execute(config.update().where(config.c.id == configuration_id).values(fee_head_settings=settings))
-
-    if connection.dialect.name == 'postgresql':
-        _migrate_postgresql_rows(connection, old, columns, converted)
+    columns = {column['name'] for column in inspect(connection).get_columns(table_name)}
+    if TARGET_COLUMNS.issubset(columns):
+        current = Table(table_name, MetaData(), autoload_with=connection)
+        for row in connection.execute(select(current.c.id, current.c.monthly_config)).mappings():
+            monthly_config = row['monthly_config'] or []
+            normalized = []
+            changed = False
+            for month in monthly_config:
+                value = dict(month)
+                if isinstance(value.get('amount'), str):
+                    value['amount'] = float(value['amount'])
+                    changed = True
+                normalized.append(value)
+            if changed:
+                connection.execute(current.update().where(current.c.id == row['id']).values(
+                    monthly_config=normalized))
+        if has_parent_table:
+            connection.execute(text('DROP TABLE fee_configurations'))
         return
 
-    # SQLite needs a table rebuild to remove the old per-head unique constraint.
+    old = Table(table_name, MetaData(), autoload_with=connection)
+    if not has_parent_table:
+        raise RuntimeError('Cannot migrate fee configuration heads without the legacy fee_configurations table')
+    config = Table('fee_configurations', MetaData(), autoload_with=connection)
+    config_rows = connection.execute(select(config)).mappings().all()
+    configurations = {row['id']: row for row in config_rows}
+    source_rows = connection.execute(select(old).order_by(old.c.id)).mappings().all()
+
+    converted = []
+    if 'month' in columns:
+        grouped = {}
+        for row in source_rows:
+            key = (row['configuration_id'], row['fee_head_id'])
+            group = grouped.setdefault(key, {'rows': [], 'ids': []})
+            group['rows'].append(row)
+            group['ids'].append(row['id'])
+
+        for (configuration_id, fee_head_id), group in grouped.items():
+            config_row = configurations[configuration_id]
+            head_state = (config_row.get('fee_head_settings') or {}).get(str(fee_head_id), {})
+            sorted_rows = sorted(group['rows'], key=lambda row: row['month'])
+            monthly_config = []
+            for row in sorted_rows:
+                month_state = head_state.get('months', {}).get(row['month'], {})
+                enabled = row.get('enabled', month_state.get('enabled', True))
+                is_override = row.get('is_override', month_state.get('is_override', False))
+                monthly_config.append({
+                    'month_key': row['month'],
+                    'amount': float(row['amount']),
+                    'enabled': bool(enabled),
+                    'is_override': bool(is_override),
+                })
+            first_row = sorted_rows[0]
+            converted.append({
+                'configuration_id': configuration_id,
+                'school_id': config_row['school_id'],
+                'session_id': config_row['session_id'],
+                'fee_structure_id': config_row['fee_structure_id'],
+                'fee_category_id': config_row['fee_category_id'],
+                'fee_head_id': fee_head_id,
+                'base_amount': head_state.get('base_amount', str(first_row.get('base_amount', first_row['amount']))),
+                'edit_months_wise': bool(head_state.get(
+                    'edit_months_wise', any(item['is_override'] for item in monthly_config))),
+                'monthly_config': monthly_config,
+            })
+    else:
+        # Older installations held one row/head with wide month columns and/or
+        # a month_amounts JSON object. Expand that information into JSON entries.
+        sessions = Table('sessions', MetaData(), autoload_with=connection)
+        session_rows = {row['id']: row for row in connection.execute(select(sessions)).mappings()}
+        for row in source_rows:
+            config_row = configurations[row['configuration_id']]
+            session = session_rows[config_row['session_id']]
+            months = list(session_months(session['start_date'], session['end_date']))
+            overrides = row.get('month_amounts') or {}
+            month_values = []
+            for month in months:
+                value = overrides.get(month)
+                if isinstance(value, dict):
+                    amount = value.get('amount', row.get('amount', 0))
+                    enabled = value.get('enabled', True)
+                    is_override = value.get('is_override', True)
+                elif value is not None:
+                    amount, enabled, is_override = value, True, True
+                else:
+                    legacy_column = MONTH_COLUMNS.get(int(month[5:]))
+                    amount = row.get(legacy_column, row.get('amount', 0))
+                    enabled, is_override = True, False
+                month_values.append({
+                    'month_key': month, 'amount': float(amount),
+                    'enabled': bool(enabled), 'is_override': bool(is_override),
+                })
+            config_settings = (config_row.get('fee_head_settings') or {}).get(str(row['fee_head_id']), {})
+            converted.append({
+                'configuration_id': row['configuration_id'],
+                'school_id': config_row['school_id'],
+                'session_id': config_row['session_id'],
+                'fee_structure_id': config_row['fee_structure_id'],
+                'fee_category_id': config_row['fee_category_id'],
+                'fee_head_id': row['fee_head_id'],
+                'base_amount': str(config_settings.get('base_amount', row.get('amount', 0))),
+                'edit_months_wise': bool(config_settings.get('edit_months_wise', bool(overrides))),
+                'monthly_config': month_values,
+            })
+
     old.drop(connection)
     FeeConfigurationHead.__table__.create(connection)
     for row in converted:
-        insert_values = {key: value for key, value in row.items() if key in MONTH_ROW_COLUMNS}
-        if row.get('id') is not None:
-            insert_values['id'] = row['id']
-        connection.execute(FeeConfigurationHead.__table__.insert().values(**insert_values))
-
-
-def _migrate_postgresql_rows(connection, old, columns, converted):
-    table_name = 'fee_configuration_heads'
-    quote = connection.dialect.identifier_preparer.quote
-
-    # The original key allowed one row per fee head; drop it before adding months.
-    for constraint in inspect(connection).get_unique_constraints(table_name):
-        if constraint.get('name') == 'uq_fee_configuration_head':
-            connection.execute(text(
-                f'ALTER TABLE {table_name} DROP CONSTRAINT {quote(constraint["name"])}'
-            ))
-
-    if 'month' not in columns:
-        connection.execute(text(f'ALTER TABLE {table_name} ADD COLUMN {quote("month")} VARCHAR(7)'))
-        target = Table(table_name, MetaData(), autoload_with=connection)
-        for row in converted:
-            source_id = row['source_id']
-            if row['id'] is not None:
-                connection.execute(target.update().where(target.c.id == source_id).values(
-                    month=row['month'], amount=row['amount']))
-            else:
-                # Copy legacy NOT NULL columns, then override the monthly amount.
-                legacy_values = {key: value for key, value in row['legacy_values'].items()
-                                 if key != 'id'}
-                legacy_values.update(configuration_id=row['configuration_id'],
-                                     fee_head_id=row['fee_head_id'], month=row['month'], amount=row['amount'])
-                connection.execute(target.insert().values(**legacy_values))
-
-    # Intermediate month-row schema had these state columns; move them to the
-    # configuration JSON above and keep only the requested table fields.
-    constraint_names = {item.get('name') for item in inspect(connection).get_check_constraints(table_name)}
-    if 'ck_fee_configuration_base_amount' in constraint_names:
-        connection.execute(text(
-            f'ALTER TABLE {table_name} DROP CONSTRAINT {quote("ck_fee_configuration_base_amount")}'
-        ))
-    current_columns = {column['name'] for column in inspect(connection).get_columns(table_name)}
-    for name in STATE_COLUMNS | LEGACY_MONTH_COLUMNS:
-        if name in current_columns:
-            connection.execute(text(f'ALTER TABLE {table_name} DROP COLUMN {quote(name)}'))
-
-    current_columns = {column['name'] for column in inspect(connection).get_columns(table_name)}
-    if 'month' in current_columns:
-        connection.execute(text(f'ALTER TABLE {table_name} ALTER COLUMN {quote("month")} SET NOT NULL'))
-    unique_names = {item.get('name') for item in inspect(connection).get_unique_constraints(table_name)}
-    if 'uq_fee_configuration_head_month' not in unique_names:
-        connection.execute(text(
-            f'ALTER TABLE {table_name} ADD CONSTRAINT uq_fee_configuration_head_month '
-            'UNIQUE (configuration_id, fee_head_id, month)'
-        ))
+        connection.execute(FeeConfigurationHead.__table__.insert().values(**row))
+    connection.execute(text('DROP TABLE fee_configurations'))

@@ -1210,16 +1210,16 @@ Create/update example:
   "fee_heads": [
     {
       "fee_head_id": 1,
-      "amount": "500.00"
+      "base_amount": "500.00"
     },
     {
       "fee_head_id": 2,
-      "amount": "300.00",
+      "base_amount": "300.00",
       "edit_months_wise": true,
-      "month_amounts": {
-        "2025-04": "250.00",
-        "2025-05": "0.00"
-      }
+      "months": [
+        {"month_key": "2025-04", "amount": "250.00", "enabled": true, "is_override": true},
+        {"month_key": "2025-05", "amount": "0.00", "enabled": true, "is_override": true}
+      ]
     }
   ]
 }
@@ -1233,9 +1233,9 @@ match the array length; responses always include the calculated count.
 
 Amounts use exact decimals, are nonnegative, have at most two decimal places,
 and are limited to 9,999,999,999.99. Decimal values are returned as JSON strings.
-By default `edit_months_wise` is false and `month_amounts` is empty. When enabled,
-supply at least one `YYYY-MM` override within the selected academic session.
-Unspecified months use the base `amount`; zero overrides are allowed. Invalid
+By default `edit_months_wise` is false and months use the `base_amount`. When
+enabled, provide a `months` entry for every month in the selected academic
+session, each with a `month_key`, `amount`, `enabled`, and `is_override`. Invalid
 amounts, counts, repeated heads, or month data return 422. These APIs store
 configuration amounts and do not calculate bills or assign students.
 
@@ -1247,30 +1247,31 @@ structure, or category returns 409 until its configurations are removed.
 
 Nested aliases are available under
 `/schools/school/{school_id}/sessions/{session_id}/fee_configurations`.
-The `fee_configurations` and `fee_configuration_heads` tables are automatically
-created when missing through startup/request initialization. APIs appear under
+The `fee_configuration_heads` table is automatically created when missing
+through startup/request initialization. Configuration metadata and fee-head
+month data are stored together in this table. APIs appear under
 **Configure Fees** in `/docs`.
 
 #### Month-wise amount inputs and checkboxes
 
-Each `month_amounts` value also accepts an object containing `amount` and the
-month's checkbox state, `enabled`. Use this format for the expanded month grid:
+Use a `months` array with each month's key, amount, checkbox state, and override
+flag for the expanded month grid:
 
 ```json
 {
   "fee_head_id": 1,
-  "amount": "500.00",
+  "base_amount": "500.00",
   "edit_months_wise": true,
-  "month_amounts": {
-    "2025-04": {"amount": "500.00", "enabled": true},
-    "2025-05": {"amount": "450.00", "enabled": true},
-    "2025-06": {"amount": "500.00", "enabled": false},
-    "2026-03": {"amount": "500.00", "enabled": true}
-  }
+  "months": [
+    {"month_key": "2025-04", "amount": "500.00", "enabled": true, "is_override": true},
+    {"month_key": "2025-05", "amount": "450.00", "enabled": true, "is_override": true},
+    {"month_key": "2025-06", "amount": "500.00", "enabled": false, "is_override": true},
+    {"month_key": "2026-03", "amount": "500.00", "enabled": true, "is_override": true}
+  ]
 }
 ```
 
-Send this fee-head row inside the configuration's `fee_heads` array. Use actual
+Send every session month in the `months` array inside the configuration's `fee_heads` array. Use actual
 years from the chosen session, including the following year for January–March
 in an April–March session. Save every displayed month to preserve the full grid.
 `enabled: false` marks the month as excluded from charging while retaining its
@@ -1279,22 +1280,22 @@ All months may be unchecked. `enabled` must be a JSON boolean, and `amount` is
 required and validated even when unchecked. The API stores these settings for
 future billing; it does not issue charges.
 
-GET, list, and PUT responses preserve these month settings. Existing decimal-only
-month values remain supported and mean an enabled override. Omitted months
-continue to use the base amount, so explicitly send `enabled: false` for unchecked
-months. To disable month-wise editing, send `edit_months_wise: false` and
-`month_amounts: {}`.
+GET, list, and PUT responses preserve these month settings. The previous
+`month_amounts` object format remains accepted for compatibility. To disable
+month-wise editing, send `edit_months_wise: false`; all session months use the
+base amount.
 
 #### Monthly fee storage
 
-`fee_configuration_heads` stores one row for each configured fee head and each
-month in the academic session, using `configuration_id`, `fee_head_id`,
-`month` (`YYYY-MM`), and the monthly `amount` (plus the row's primary key).
-Base amounts and checkbox/editing metadata are kept with the configuration.
-This supports sessions of any length without adding a database column for each
-month. Existing installations convert their saved wide month columns and JSON
-settings into month rows automatically during database initialization. The API
-continues to accept and return the grouped fee-head format shown above.
+`fee_configuration_heads` is the single configuration table and stores one row
+per configured fee head. Rows include `configuration_id` as a shared group ID
+to preserve fee-category scope, `school_id`, `session_id`, `fee_category_id`, `fee_structure_id`,
+`fee_head_id`, `base_amount`, `edit_months_wise`, and `monthly_config` JSONB.
+`monthly_config` stores the session's month entries (`month_key`, `amount`,
+`enabled`, and `is_override`). Creation and update requests write one row per
+fee head instead of one database row per month. Existing installations migrate
+their month rows and saved settings into this JSONB format during database
+initialization.
 
 #### Manage month-wise fees without replacing the configuration
 
@@ -1326,9 +1327,9 @@ Update one fee head with:
 month's override, restoring the current base amount and enabling it. To apply a
 value or checkbox state to several months, include each selected month in the
 same request. Other months, fee heads, and existing row IDs remain unchanged.
-The response contains the updated full schedule and totals; the twelve stored
-monthly fee columns are synchronized in the same transaction. PostgreSQL edits
-lock the configuration row to serialize simultaneous month updates.
+The response contains the updated full schedule and totals; the JSONB monthly
+configuration is updated in the same transaction. PostgreSQL edits lock the
+configuration row to serialize simultaneous month updates.
 
 At least one change is required. Invalid amounts, null base amounts, or months
 outside the session return 422; missing configurations/heads or wrong scope

@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from models.fee_category import FeeCategory
-from models.fee_configuration import FeeConfiguration, FeeConfigurationHead
+from models.fee_configuration import FeeConfigurationHead
 from models.fee_head import FeeHead
 from models.fee_structure import FeeStructure
 from models.session import Session as SchoolSession
@@ -23,10 +23,12 @@ router = APIRouter(tags=["Configure Fees"])
 
 
 def find_configuration(db, school_id, session_id, configuration_id):
-    item = db.query(FeeConfiguration).filter_by(id=configuration_id, school_id=school_id, session_id=session_id).first()
-    if item is None:
+    rows = db.query(FeeConfigurationHead).filter_by(
+        configuration_id=configuration_id, school_id=school_id, session_id=session_id,
+    ).order_by(FeeConfigurationHead.id).all()
+    if not rows:
         raise HTTPException(404, "Fee configuration not found")
-    return item
+    return rows
 
 
 def validate_references(db, school_id, session_id, payload):
@@ -54,115 +56,130 @@ def validate_references(db, school_id, session_id, payload):
 
 
 
-def write_configuration(db, item, payload):
-    session = db.query(SchoolSession).filter_by(id=item.session_id, school_id=item.school_id).one()
+def write_configuration(db, existing_rows, school_id, session_id, payload):
+    session = db.query(SchoolSession).filter_by(id=session_id, school_id=school_id).one()
+    old = existing_rows or []
+    structure_id = payload.fee_structure_id or (old[0].fee_structure_id if old else None)
+    category_id = payload.fee_category_id or (old[0].fee_category_id if old else None)
+    existing_group_id = old[0].configuration_id if old else None
+    conflicting = db.query(FeeConfigurationHead.id).filter_by(
+        school_id=school_id, session_id=session_id,
+        fee_structure_id=structure_id, fee_category_id=category_id,
+    )
+    if existing_group_id is not None:
+        conflicting = conflicting.filter(FeeConfigurationHead.configuration_id != existing_group_id)
+    if conflicting.first() is not None:
+        raise HTTPException(409, 'Configuration already exists for this structure and category')
     try:
-        if payload.fee_structure_id is not None:
-            item.fee_structure_id = payload.fee_structure_id
-        if payload.fee_category_id is not None:
-            item.fee_category_id = payload.fee_category_id
-        # Remove old rows before inserting replacements with the same head IDs.
-        item.fee_heads.clear()
-        db.add(item)
+        if old:
+            db.query(FeeConfigurationHead).filter_by(
+                configuration_id=existing_group_id, school_id=school_id, session_id=session_id,
+            ).delete(synchronize_session=False)
         db.flush()
-        month_rows = []
-        head_settings = {}
+        head_rows = []
         for head in payload.fee_heads:
             overrides = head.month_amounts if head.edit_months_wise else {}
-            month_settings = {}
+            monthly_config = []
             for month in session_months(session.start_date, session.end_date):
                 value = overrides.get(month, head.amount)
                 enabled = value.get("enabled", True) if isinstance(value, dict) else True
                 month_amount = value["amount"] if isinstance(value, dict) else value
-                month_settings[month] = {
+                monthly_config.append({
+                    "month_key": month,
+                    "amount": float(month_amount),
                     "enabled": enabled,
                     "is_override": value.get("is_override", month in overrides) if isinstance(value, dict) else month in overrides,
-                    "has_checkbox": isinstance(value, dict),
-                }
-                month_rows.append(FeeConfigurationHead(
-                    fee_head_id=head.fee_head_id, month=month, amount=month_amount,
-                ))
-            head_settings[str(head.fee_head_id)] = {
-                "base_amount": str(head.amount),
-                "edit_months_wise": head.edit_months_wise,
-                "months": month_settings,
-            }
-        item.fee_heads = month_rows
-        item.fee_head_settings = head_settings
+                })
+            head_rows.append(FeeConfigurationHead(
+                school_id=school_id,
+                session_id=session_id,
+                fee_structure_id=structure_id,
+                fee_category_id=category_id,
+                fee_head_id=head.fee_head_id,
+                base_amount=head.amount,
+                edit_months_wise=head.edit_months_wise,
+                monthly_config=monthly_config,
+            ))
+        db.add(head_rows[0])
+        db.flush()
+        group_id = existing_group_id or head_rows[0].id
+        head_rows[0].configuration_id = group_id
+        for row in head_rows[1:]:
+            row.configuration_id = group_id
+            db.add(row)
         db.commit()
-        db.refresh(item)
+        for row in head_rows:
+            db.refresh(row)
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(409, "Configuration already exists for this structure and category or conflicts with database constraints") from exc
     except Exception:
         db.rollback()
         raise
-    return {"message": "Fee configuration saved successfully", "data": configuration_response(item)}
+    return {"message": "Fee configuration saved successfully", "data": configuration_response(head_rows)}
 
 
-def configuration_response(item):
-    """Collapse normalized month rows into the established fee-head API shape."""
-    from collections import OrderedDict
+def configuration_response(rows):
+    """Serialize one JSON monthly configuration row per fee head."""
     from decimal import Decimal
 
-    groups = OrderedDict()
-    for row in item.fee_heads:
-        groups.setdefault(row.fee_head_id, []).append(row)
     heads = []
-    for fee_head_id, rows in groups.items():
-        by_month = {row.month: row for row in rows}
-        settings = (item.fee_head_settings or {}).get(str(fee_head_id), {})
-        month_settings = settings.get("months", {})
+    for row in rows:
+        by_month = {month["month_key"]: month for month in row.monthly_config or []}
         months = {}
-        for month, row in by_month.items():
-            state = month_settings.get(month, {})
-            enabled = state.get("enabled", True)
-            if not enabled or state.get("has_checkbox", False):
-                months[month] = {"amount": row.amount if enabled else None, "enabled": enabled}
+        for month, value in by_month.items():
+            if not value.get("enabled", True):
+                months[month] = {"amount": None, "enabled": False}
+            elif value.get("is_override", False):
+                months[month] = {"amount": value["amount"], "enabled": True}
             else:
-                months[month] = row.amount
+                months[month] = value["amount"]
         legacy_months = {}
         for number, column in MONTH_COLUMNS.items():
-            candidates = [row for row in rows if int(row.month[5:]) == number]
-            row = min(candidates, key=lambda value: value.month) if candidates else None
-            enabled = month_settings.get(row.month, {}).get("enabled", True) if row else False
-            legacy_months[column] = row.amount if row and enabled else Decimal("0.00")
+            candidates = [month for month in by_month.values()
+                          if int(month["month_key"][5:]) == number]
+            value = min(candidates, key=lambda month: month["month_key"]) if candidates else None
+            legacy_months[column] = (value["amount"] if value and value.get("enabled", True)
+                                     else Decimal("0.00"))
         heads.append({
-            "id": rows[0].id, "fee_head_id": fee_head_id,
-            "amount": settings.get("base_amount", str(rows[0].amount)),
-            "edit_months_wise": settings.get("edit_months_wise", any(
-                state.get("is_override", False) for state in month_settings.values()
-            )),
+            "id": row.id, "fee_head_id": row.fee_head_id,
+            "amount": row.base_amount,
+            "edit_months_wise": row.edit_months_wise,
             "month_amounts": months, **legacy_months,
         })
-    return {"id": item.id, "school_id": item.school_id, "session_id": item.session_id,
-            "fee_structure_id": item.fee_structure_id, "fee_category_id": item.fee_category_id,
+    first_row = rows[0]
+    return {"id": first_row.configuration_id, "school_id": first_row.school_id, "session_id": first_row.session_id,
+            "fee_structure_id": first_row.fee_structure_id, "fee_category_id": first_row.fee_category_id,
             "no_of_fee_heads": len(heads), "fee_heads": heads}
 
 
 @router.post("/fee_configurations", response_model=FeeConfigurationResult, status_code=201)
 def create_configuration(school_id: int, session_id: int, payload: Annotated[FeeConfigurationWrite, Body(openapi_examples=FEE_CONFIGURATION_EXAMPLES)], db: Session = Depends(fee_structure_school)):
     validate_references(db, school_id, session_id, payload)
-    return write_configuration(db, FeeConfiguration(school_id=school_id, session_id=session_id), payload)
+    return write_configuration(db, None, school_id, session_id, payload)
 
 
 @router.get("/fee_configurations", response_model=FeeConfigurationListResult | FeeConfigurationResult)
 def list_configurations(school_id: int, session_id: int, fee_structure_id: int | None = None, fee_category_id: int | None = None, configuration_id: int | None = None, db: Session = Depends(fee_structure_school)):
     if configuration_id is not None:
         return {"message": "Fee configuration fetched successfully", "data": configuration_response(find_configuration(db, school_id, session_id, configuration_id))}
-    query = db.query(FeeConfiguration).filter_by(school_id=school_id, session_id=session_id)
+    query = db.query(FeeConfigurationHead).filter_by(school_id=school_id, session_id=session_id)
     if fee_structure_id is not None:
         query = query.filter_by(fee_structure_id=fee_structure_id)
     if fee_category_id is not None:
         query = query.filter_by(fee_category_id=fee_category_id)
-    return {"message": "Fee configurations fetched successfully", "data": [configuration_response(item) for item in query.order_by(FeeConfiguration.id).all()]}
+    rows = query.order_by(FeeConfigurationHead.configuration_id, FeeConfigurationHead.id).all()
+    grouped = {}
+    for row in rows:
+        grouped.setdefault(row.configuration_id, []).append(row)
+    return {"message": "Fee configurations fetched successfully", "data": [configuration_response(group) for group in grouped.values()]}
 
 
 @router.get('/fee_configurations/{configuration_id}/months', response_model=FeeScheduleResult, include_in_schema=False)
 @router.get('/fee_configurations/months', response_model=FeeScheduleResult)
 def get_month_schedule(school_id: int, session_id: int, configuration_id: int, db: Session = Depends(fee_structure_school)):
-    item = find_configuration(db, school_id, session_id, configuration_id)
-    return {'message': 'Monthly fee schedule fetched successfully', 'data': configuration_schedule(db, item)}
+    rows = find_configuration(db, school_id, session_id, configuration_id)
+    return {'message': 'Monthly fee schedule fetched successfully', 'data': configuration_schedule(db, rows)}
 
 
 @router.get("/fee_configurations/{configuration_id}", response_model=FeeConfigurationResult, include_in_schema=False)
@@ -173,17 +190,18 @@ def get_configuration(school_id: int, session_id: int, configuration_id: int, db
 @router.put("/fee_configurations/{configuration_id}", response_model=FeeConfigurationResult, include_in_schema=False)
 @router.put("/fee_configurations", response_model=FeeConfigurationResult)
 def update_configuration(school_id: int, session_id: int, configuration_id: int, payload: Annotated[FeeConfigurationUpdate, Body(openapi_examples=FEE_CONFIGURATION_UPDATE_EXAMPLES)], db: Session = Depends(fee_structure_school)):
-    item = find_configuration(db, school_id, session_id, configuration_id)
+    rows = find_configuration(db, school_id, session_id, configuration_id)
     validate_references(db, school_id, session_id, payload)
-    return write_configuration(db, item, payload)
+    return write_configuration(db, rows, school_id, session_id, payload)
 
 
 @router.delete("/fee_configurations/{configuration_id}", include_in_schema=False)
 @router.delete("/fee_configurations")
 def delete_configuration(school_id: int, session_id: int, configuration_id: int, db: Session = Depends(fee_structure_school)):
-    item = find_configuration(db, school_id, session_id, configuration_id)
+    rows = find_configuration(db, school_id, session_id, configuration_id)
     try:
-        db.delete(item)
+        for row in rows:
+            db.delete(row)
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -194,32 +212,31 @@ def delete_configuration(school_id: int, session_id: int, configuration_id: int,
     return {"status": "success", "message": "Fee configuration deleted successfully", "data": {"id": configuration_id}}
 
 
-def configuration_schedule(db, item):
+def configuration_schedule(db, rows):
     from decimal import Decimal
 
-    session = db.query(SchoolSession).filter_by(id=item.session_id, school_id=item.school_id).one()
+    first_row = rows[0]
+    session = db.query(SchoolSession).filter_by(id=first_row.session_id, school_id=first_row.school_id).one()
     totals = {month: Decimal('0.00') for month in session_months(session.start_date, session.end_date)}
-    grouped = {}
-    for row in item.fee_heads:
-        grouped.setdefault(row.fee_head_id, []).append(row)
-    names = dict(db.query(FeeHead.id, FeeHead.fee_head_name).filter(FeeHead.id.in_(grouped)).all())
+    names = dict(db.query(FeeHead.id, FeeHead.fee_head_name).filter(
+        FeeHead.id.in_([row.fee_head_id for row in rows])).all())
     heads = []
-    for fee_head_id, rows in grouped.items():
-        settings = (item.fee_head_settings or {}).get(str(fee_head_id), {})
-        base_amount = settings.get('base_amount', rows[0].amount)
-        month_settings = settings.get('months', {})
+    for row in rows:
+        fee_head_id = row.fee_head_id
         overrides = {
-            row.month: {'amount': row.amount, 'enabled': month_settings.get(row.month, {}).get('enabled', True)}
-            for row in rows if month_settings.get(row.month, {}).get('is_override', False)
-            or not month_settings.get(row.month, {}).get('enabled', True)
+            month['month_key']: {'amount': month['amount'], 'enabled': month.get('enabled', True)}
+            for month in row.monthly_config or []
+            if month.get('is_override', False) or not month.get('enabled', True)
         }
+        base_amount = row.base_amount
         months = month_schedule(base_amount, overrides, session.start_date, session.end_date)
         for row in months:
             totals[row['month']] += row['effective_amount']
         heads.append({'fee_head_id': fee_head_id, 'fee_head_name': names[fee_head_id],
                       'amount': base_amount, 'months': months,
                       'total': sum((row['effective_amount'] for row in months), Decimal('0.00'))})
-    return {'configuration_id': item.id, 'school_id': item.school_id, 'session_id': item.session_id,
+    return {'configuration_id': first_row.configuration_id, 'school_id': first_row.school_id,
+            'session_id': first_row.session_id,
             'fee_heads': heads, 'monthly_totals': totals, 'total': sum(totals.values(), Decimal('0.00'))}
 
 
@@ -228,48 +245,53 @@ def configuration_schedule(db, item):
 def patch_month_schedule(school_id: int, session_id: int, configuration_id: int, fee_head_id: int,
                          payload: Annotated[FeeMonthPatch, Body(openapi_examples=FEE_MONTH_PATCH_EXAMPLES)], db: Session = Depends(fee_structure_school)):
     # Serialize edits of a configuration so concurrent month changes are merged.
-    item = db.query(FeeConfiguration).filter_by(id=configuration_id, school_id=school_id, session_id=session_id).with_for_update().first()
-    if item is None:
+    rows = db.query(FeeConfigurationHead).filter_by(
+        configuration_id=configuration_id, school_id=school_id, session_id=session_id,
+    ).order_by(FeeConfigurationHead.id).with_for_update().all()
+    if not rows:
         raise HTTPException(404, 'Fee configuration not found')
-    head_rows = [row for row in item.fee_heads if row.fee_head_id == fee_head_id]
-    if not head_rows:
+    head_row = next((row for row in rows if row.fee_head_id == fee_head_id), None)
+    if head_row is None:
         raise HTTPException(404, 'Fee head not found in configuration')
     session = db.query(SchoolSession).filter_by(id=session_id, school_id=school_id).one()
     first, last = session.start_date.strftime('%Y-%m'), session.end_date.strftime('%Y-%m')
     if any(not first <= month <= last for month in payload.month_amounts):
         raise HTTPException(422, 'Month changes must fall within the selected session')
     try:
-        by_month = {row.month: row for row in head_rows}
-        settings_by_head = dict(item.fee_head_settings or {})
-        head_settings = dict(settings_by_head.get(str(fee_head_id), {}))
-        month_settings = dict(head_settings.get('months', {}))
-        base_amount = head_settings.get('base_amount', str(head_rows[0].amount))
+        monthly_config = {
+            month['month_key']: dict(month)
+            for month in (head_row.monthly_config or [])
+        }
+        base_amount = head_row.base_amount
         if payload.amount is not None:
-            base_amount = str(payload.amount)
-            for row in head_rows:
-                if not month_settings.get(row.month, {}).get('is_override', False):
-                    row.amount = payload.amount
+            base_amount = payload.amount
+            for month in monthly_config.values():
+                if not month.get('is_override', False):
+                    month['amount'] = float(base_amount)
         for month, settings in payload.month_amounts.items():
-            row = by_month[month]
             if settings is None:
-                row.amount = base_amount
-                month_settings[month] = {"enabled": True, "is_override": False, "has_checkbox": False}
+                monthly_config[month] = {
+                    'month_key': month, 'amount': float(base_amount),
+                    'enabled': True, 'is_override': False,
+                }
             else:
-                row.amount = settings.amount
-                month_settings[month] = {"enabled": settings.enabled, "is_override": True, "has_checkbox": True}
-        head_settings['base_amount'] = str(base_amount)
-        head_settings['months'] = month_settings
-        head_settings['edit_months_wise'] = any(
-            state.get('is_override', False) for state in month_settings.values()
+                monthly_config[month] = {
+                    'month_key': month, 'amount': float(settings.amount),
+                    'enabled': settings.enabled, 'is_override': True,
+                }
+        head_row.base_amount = base_amount
+        head_row.monthly_config = [monthly_config[month]
+                                   for month in session_months(session.start_date, session.end_date)]
+        head_row.edit_months_wise = any(
+            month.get('is_override', False) for month in head_row.monthly_config
         )
-        settings_by_head[str(fee_head_id)] = head_settings
-        item.fee_head_settings = settings_by_head
         db.commit()
-        db.refresh(item)
+        for row in rows:
+            db.refresh(row)
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(409, 'Monthly fee update conflicts with database constraints') from exc
     except Exception:
         db.rollback()
         raise
-    return {'message': 'Monthly fees updated successfully', 'data': configuration_schedule(db, item)}
+    return {'message': 'Monthly fees updated successfully', 'data': configuration_schedule(db, rows)}

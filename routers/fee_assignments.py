@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from models.class_section import ClassSectionMapping, SchoolClass, Section
 from models.fee_category import FeeCategory
 from models.fee_assignment import FeeAssignment
-from models.fee_configuration import FeeConfiguration, FeeConfigurationHead
+from models.fee_configuration import FeeConfigurationHead
 from models.fee_head import FeeHead
 from models.fee_structure import FeeStructure
 from models.session import Session as SchoolSession
@@ -123,19 +123,17 @@ def get_assigned_fee_structure_monthly_details(
     months = list(session_months(session.start_date, session.end_date))
     grouped = {}
     rows_query = db.query(
-        FeeAssignment, FeeStructure, FeeConfiguration, FeeCategory, FeeConfigurationHead,
-        FeeHead, SchoolClass, Section,
+        FeeAssignment, FeeStructure, FeeConfigurationHead, FeeCategory, FeeHead,
+        SchoolClass, Section,
     ).join(
         FeeStructure, FeeStructure.id == FeeAssignment.fee_configure_id,
     ).outerjoin(
-        FeeConfiguration,
-        and_(FeeConfiguration.fee_structure_id == FeeStructure.id,
-             FeeConfiguration.school_id == school_id,
-             FeeConfiguration.session_id == session_id),
+        FeeConfigurationHead,
+        and_(FeeConfigurationHead.fee_structure_id == FeeStructure.id,
+             FeeConfigurationHead.school_id == school_id,
+             FeeConfigurationHead.session_id == session_id),
     ).outerjoin(
-        FeeCategory, FeeCategory.id == FeeConfiguration.fee_category_id,
-    ).outerjoin(
-        FeeConfigurationHead, FeeConfigurationHead.configuration_id == FeeConfiguration.id,
+        FeeCategory, FeeCategory.id == FeeConfigurationHead.fee_category_id,
     ).outerjoin(
         FeeHead, FeeHead.id == FeeConfigurationHead.fee_head_id,
     ).join(
@@ -153,7 +151,7 @@ def get_assigned_fee_structure_monthly_details(
         SchoolClass.name, Section.name,
     ).all()
 
-    for assignment, structure, configuration, category, head_month, head, school_class, section in rows:
+    for assignment, structure, head_month, category, head, school_class, section in rows:
         category_id = category.id if category is not None else None
         key = (structure.id, category_id)
         structure_group = grouped.setdefault(key, {
@@ -172,18 +170,20 @@ def get_assigned_fee_structure_monthly_details(
             'section_id': assignment.section_id,
             'section_name': section.name if section is not None else None,
         }
-        if head_month is not None and head is not None and configuration is not None and head_month.month in structure_group['months']:
-            month = head_month.month
-            settings = (configuration.fee_head_settings or {}).get(str(head.id), {})
-            month_settings = settings.get('months', {}).get(month, {})
-            enabled = month_settings.get('enabled', True)
-            structure_group['months'][month][head.id] = {
-                'fee_head_id': head.id,
-                'fee_head_name': head.fee_head_name,
-                'amount': head_month.amount if enabled else Decimal('0.00'),
-                'entered_amount': head_month.amount,
-                'enabled': enabled,
-            }
+        if head_month is not None and head is not None:
+            for month_settings in head_month.monthly_config or []:
+                month = month_settings.get('month_key')
+                if month not in structure_group['months']:
+                    continue
+                enabled = month_settings.get('enabled', True)
+                entered_amount = Decimal(str(month_settings.get('amount', head_month.base_amount)))
+                structure_group['months'][month][head.id] = {
+                    'fee_head_id': head.id,
+                    'fee_head_name': head.fee_head_name,
+                    'amount': entered_amount if enabled else Decimal('0.00'),
+                    'entered_amount': entered_amount,
+                    'enabled': enabled,
+                }
 
     data = []
     for _, value in sorted(grouped.items(), key=lambda pair: (
