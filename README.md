@@ -1466,5 +1466,6 @@ assigned classes/sections, total session fee, and a `months` array in session
 order. Every month includes its fee heads and a month total. Disabled month
 amounts return `amount: "0.00"`, with the entered value retained in
 `entered_amount` and `enabled: false`. Pass `assignment_id` with `school_id`
-and `session_id` to return details for one assigned class/section (for example,
-when opening that assignment's eye/details action).
+and `session_id` to return details for the selected assignment's class and fee
+configuration, including all sections assigned to that same class/configuration
+(for example, when opening the eye/details action).

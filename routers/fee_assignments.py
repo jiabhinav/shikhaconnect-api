@@ -150,9 +150,9 @@ def get_assigned_fee_structure_monthly_details(
     if session is None:
         raise HTTPException(404, 'School session not found')
 
-    if assignment_id is not None and db.query(FeeAssignment.id).filter_by(
-            id=assignment_id, school_id=school_id, session_id=session_id).first() is None:
-        raise HTTPException(404, 'Fee assignment not found')
+    selected_assignment = None
+    if assignment_id is not None:
+        selected_assignment = find_assignment(db, school_id, session_id, assignment_id)
 
     months = list(session_months(session.start_date, session.end_date))
     grouped = {}
@@ -179,8 +179,11 @@ def get_assigned_fee_structure_monthly_details(
         FeeAssignment.school_id == school_id,
         FeeAssignment.session_id == session_id,
     )
-    if assignment_id is not None:
-        rows_query = rows_query.filter(FeeAssignment.id == assignment_id)
+    if selected_assignment is not None:
+        rows_query = rows_query.filter(
+            FeeAssignment.class_id == selected_assignment.class_id,
+            FeeAssignment.fee_configure_id == selected_assignment.fee_configure_id,
+        )
     rows = rows_query.order_by(
         FeeStructure.fee_structure_name, FeeCategory.name, FeeHead.fee_head_name,
         SchoolClass.name, Section.name,
