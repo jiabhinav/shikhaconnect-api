@@ -1283,25 +1283,17 @@ GET, list, and PUT responses preserve these month settings. Existing decimal-onl
 month values remain supported and mean an enabled override. Omitted months
 continue to use the base amount, so explicitly send `enabled: false` for unchecked
 months. To disable month-wise editing, send `edit_months_wise: false` and
-`month_amounts: {}`. The existing JSON column stores both formats, so no database
-migration is required.
+`month_amounts: {}`.
 
-#### Twelve monthly fee columns
+#### Monthly fee storage
 
-`fee_configuration_heads` now stores `april_fee`, `may_fee`, `june_fee`,
-`july_fee`, `august_fee`, `september_fee`, `october_fee`, `november_fee`,
-`december_fee`, `january_fee`, `february_fee`, and `march_fee` as `NUMERIC(12,2)`.
-These fields are also included in configuration API responses. They are calculated
-on create/update from the base amount and month settings: enabled overrides use
-the entered amount, unchecked months use zero, and omitted months use the base
-amount. Calendar months outside the academic session use zero. For sessions
-longer than twelve months, these columns describe the first occurrence of each
-month; the year-specific JSON settings remain available for the full session.
-
-Existing installations automatically add missing columns and backfill existing
-rows from the saved configuration on the next database initialization. Continue
-sending `amount` and `month_amounts` when writing configurations; the twelve
-columns are calculated response fields.
+`fee_configuration_heads` stores one row for each configured fee head and each
+month in the academic session. Rows contain the year-qualified `month`, monthly
+`amount`, `enabled` state, and the fee head's `base_amount`. This supports
+sessions of any length without adding a database column for each month. Existing
+installations convert their saved wide month columns and JSON settings into
+month rows automatically during database initialization. The API continues to
+accept and return the grouped fee-head format shown above.
 
 #### Manage month-wise fees without replacing the configuration
 

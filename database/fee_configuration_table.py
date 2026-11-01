@@ -1,30 +1,65 @@
-"""Add and backfill the twelve fee columns on existing installations."""
-from sqlalchemy import inspect, select, text
+"""Migrate fee configuration heads from wide month columns to month rows."""
+from sqlalchemy import MetaData, Table, inspect, select, text
 
-from utils.fee_months import MONTH_COLUMNS, monthly_fees
+from utils.fee_months import session_months
 
 
-def ensure_fee_month_columns(connection):
+def migrate_fee_configuration_month_rows(connection):
     table_name = 'fee_configuration_heads'
-    if not inspect(connection).has_table(table_name):
+    inspector = inspect(connection)
+    if not inspector.has_table(table_name):
         return
-    columns = {col['name'] for col in inspect(connection).get_columns(table_name)}
-    if set(MONTH_COLUMNS.values()).issubset(columns):
+    columns = {column['name'] for column in inspector.get_columns(table_name)}
+    if {'month', 'base_amount', 'enabled', 'is_override', 'has_checkbox'}.issubset(columns):
         return
+
     if connection.dialect.name == 'postgresql':
         connection.execute(text('SELECT pg_advisory_xact_lock(731904218)'))
-        columns = {col['name'] for col in inspect(connection).get_columns(table_name)}
-    missing = [name for name in MONTH_COLUMNS.values() if name not in columns]
-    if not missing:
-        return
-    for name in missing:
-        connection.execute(text(f'ALTER TABLE {table_name} ADD COLUMN {name} NUMERIC(12, 2) NOT NULL DEFAULT 0'))
-    from models.fee_configuration import FeeConfiguration, FeeConfigurationHead
+
+    from models.fee_configuration import FeeConfigurationHead
     from models.session import Session as SchoolSession
-    head, config, session = FeeConfigurationHead.__table__, FeeConfiguration.__table__, SchoolSession.__table__
-    rows = connection.execute(select(head.c.id, head.c.amount, head.c.month_amounts, session.c.start_date, session.c.end_date).select_from(
-        head.join(config, head.c.configuration_id == config.c.id).join(session, config.c.session_id == session.c.id)
-    )).mappings().all()
-    for row in rows:
-        values = monthly_fees(row['amount'], row['month_amounts'] or {}, row['start_date'], row['end_date'])
-        connection.execute(head.update().where(head.c.id == row['id']).values(**{name: values[name] for name in missing}))
+    from models.fee_configuration import FeeConfiguration
+
+    old = Table(table_name, MetaData(), autoload_with=connection)
+    config = FeeConfiguration.__table__
+    session = SchoolSession.__table__
+    legacy_rows = connection.execute(select(
+        old.c.id, old.c.configuration_id, old.c.fee_head_id, old.c.amount,
+        old.c.month_amounts, session.c.start_date, session.c.end_date,
+    ).select_from(old.join(config, old.c.configuration_id == config.c.id).join(
+        session, config.c.session_id == session.c.id
+    )).order_by(old.c.id)).mappings().all()
+
+    converted = []
+    for old_row in legacy_rows:
+        overrides = old_row['month_amounts'] or {}
+        months = session_months(old_row['start_date'], old_row['end_date'])
+        for index, month in enumerate(months):
+            value = overrides.get(month, old_row['amount'])
+            enabled = value.get('enabled', True) if isinstance(value, dict) else True
+            month_amount = value['amount'] if isinstance(value, dict) else value
+            converted.append({
+                **({'id': old_row['id']} if index == 0 else {}),
+                'configuration_id': old_row['configuration_id'],
+                'fee_head_id': old_row['fee_head_id'],
+                'base_amount': old_row['amount'],
+                'month': month,
+                'amount': month_amount,
+                'enabled': enabled,
+                'is_override': month in overrides,
+                'has_checkbox': isinstance(value, dict),
+            })
+
+    # There are no tables referencing fee_configuration_heads IDs. Keep the
+    # first row ID for each old head; new months receive fresh IDs.
+    old.drop(connection)
+    FeeConfigurationHead.__table__.create(connection)
+    for row in converted:
+        connection.execute(FeeConfigurationHead.__table__.insert().values(**row))
+
+    if connection.dialect.name == 'postgresql':
+        connection.execute(text(
+            "SELECT setval(pg_get_serial_sequence('fee_configuration_heads', 'id'), "
+            "COALESCE((SELECT MAX(id) FROM fee_configuration_heads), 1), "
+            "EXISTS (SELECT 1 FROM fee_configuration_heads))"
+        ))
