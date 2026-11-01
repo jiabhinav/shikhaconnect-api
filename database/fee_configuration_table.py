@@ -15,6 +15,11 @@ def migrate_fee_configuration_month_rows(connection):
 
     if connection.dialect.name == 'postgresql':
         connection.execute(text('SELECT pg_advisory_xact_lock(731904218)'))
+        # Another worker may have completed the conversion while this one
+        # waited on the transaction lock. Re-read the schema before converting.
+        columns = {column['name'] for column in inspect(connection).get_columns(table_name)}
+        if {'month', 'base_amount', 'enabled', 'is_override', 'has_checkbox'}.issubset(columns):
+            return
 
     from models.fee_configuration import FeeConfigurationHead
     from models.session import Session as SchoolSession
