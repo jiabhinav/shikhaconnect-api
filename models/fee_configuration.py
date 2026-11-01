@@ -1,5 +1,5 @@
 from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, JSON, Numeric, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import JSONB
+fixedfrom sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from database.database import Base
