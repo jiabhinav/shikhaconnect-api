@@ -49,6 +49,18 @@ def ensure_fee_assignment_section_column(connection):
     ))
 
 
+def rename_fee_assignment_structure_column(connection):
+    """Rename the persisted fee structure reference without losing assignments."""
+    inspector = inspect(connection)
+    if not inspector.has_table('fee_assignments'):
+        return
+    columns = {column['name'] for column in inspector.get_columns('fee_assignments')}
+    if 'fee_structure_id' in columns and 'fee_configure_id' not in columns:
+        connection.execute(text(
+            'ALTER TABLE fee_assignments RENAME COLUMN fee_structure_id TO fee_configure_id'
+        ))
+
+
 def migrate_fee_assignment_section_uniqueness(connection):
     """Allow one assignment per class section instead of one per class."""
     inspector = inspect(connection)

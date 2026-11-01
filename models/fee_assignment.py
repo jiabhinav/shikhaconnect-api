@@ -1,5 +1,5 @@
 from sqlalchemy import Column, ForeignKey, Integer, UniqueConstraint
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, synonym
 
 from database.database import Base
 
@@ -12,7 +12,9 @@ class FeeAssignment(Base):
     session_id = Column(Integer, ForeignKey('sessions.id', ondelete='RESTRICT'), nullable=False, index=True)
     class_id = Column(Integer, ForeignKey('classes.id', ondelete='RESTRICT'), nullable=False, index=True)
     section_id = Column(Integer, ForeignKey('sections.id', ondelete='RESTRICT'), nullable=True, index=True)
-    fee_structure_id = Column(Integer, ForeignKey('fee_structures.id', ondelete='RESTRICT'), nullable=False, index=True)
+    fee_configure_id = Column(Integer, ForeignKey('fee_structures.id', ondelete='RESTRICT'), nullable=False, index=True)
+    # Keep the established API field name while the database column uses fee_configure_id.
+    fee_structure_id = synonym('fee_configure_id')
     school_class = relationship('SchoolClass')
     section = relationship('Section')
     fee_structure = relationship('FeeStructure')

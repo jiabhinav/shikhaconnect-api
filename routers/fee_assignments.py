@@ -32,7 +32,7 @@ def save_assignment(db, item, payload):
     try:
         item.class_id = payload.class_id
         item.section_id = payload.section_id
-        item.fee_structure_id = payload.fee_structure_id
+        item.fee_configure_id = payload.fee_structure_id
         db.add(item)
         db.commit()
         db.refresh(item)
@@ -58,7 +58,7 @@ def create_assignment(school_id: int, session_id: int, payload: FeeAssignmentBat
         raise HTTPException(404, {'message': 'One or more sections are not mapped to this class for this school session',
                                   'section_ids': sorted(set(section_ids) - mapped)})
     items = [FeeAssignment(school_id=school_id, session_id=session_id, class_id=payload.class_id,
-                           section_id=section_id, fee_structure_id=payload.fee_structure_id)
+                           section_id=section_id, fee_configure_id=payload.fee_structure_id)
              for section_id in section_ids]
     try:
         db.add_all(items)
@@ -87,7 +87,7 @@ def get_assignments(school_id: int, session_id: int, assignment_id: int | None =
     if section_id is not None:
         query = query.filter_by(section_id=section_id)
     if fee_structure_id is not None:
-        query = query.filter_by(fee_structure_id=fee_structure_id)
+        query = query.filter_by(fee_configure_id=fee_structure_id)
     if search and search.strip():
         pattern = '%' + search.strip().replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
         query = query.join(SchoolClass).join(FeeStructure).filter(
