@@ -1437,25 +1437,26 @@ PUT    /schools/fee_assignments?school_id=1&session_id=32&assignment_id=1
 DELETE /schools/fee_assignments?school_id=1&session_id=32&assignment_id=1
 ```
 
-Create/update body (also shown in Swagger):
+Create body (also shown in Swagger) accepts one or more mapped section IDs:
 
 ```json
 {
   "class_id": 1,
+  "section_id": [2, 3],
   "fee_structure_id": 1
 }
 ```
 
-The class and structure must belong to the selected school/session, otherwise
-404. One fee structure can be assigned to each class in a session; duplicate
-assignments return 409. Use PUT to replace an assignment.
+The class, structure, and every section must belong to the selected
+school/session, and each section must be mapped to the class, otherwise 404.
+The request creates one assignment per section. Duplicate class/section
+assignments return 409. Use PUT with a single `section_id` to replace an
+assignment.
 
 Responses include assignment ID, school/session IDs, class ID/name, fee structure
 ID/name. Lists include `total` and a `data` array ordered
-by assignment ID. Filter lists with `class_id`, `fee_structure_id`, or `search`
-(case-insensitive class/structure name search). Supply `section_id` multiple
-times to filter by several sections alongside `class_id`, for example
-`&class_id=1&section_id=2&section_id=3`. GET with `assignment_id` returns
+by assignment ID. Filter lists with `class_id`, `section_id`, `fee_structure_id`,
+or `search` (case-insensitive class/structure name search). GET with `assignment_id` returns
 one record. All routes require authentication. Referenced classes/structures
 cannot be deleted until assignments are removed. The `fee_assignments` table
 is automatically created when missing at startup or before database requests.

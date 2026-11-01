@@ -47,3 +47,33 @@ def ensure_fee_assignment_section_column(connection):
         'CREATE INDEX IF NOT EXISTS ix_fee_assignments_section_id '
         'ON fee_assignments (section_id)'
     ))
+
+
+def migrate_fee_assignment_section_uniqueness(connection):
+    """Allow one assignment per class section instead of one per class."""
+    inspector = inspect(connection)
+    if not inspector.has_table('fee_assignments'):
+        return
+    unique_constraints = inspector.get_unique_constraints('fee_assignments')
+    if any(c.get('name') == 'uq_fee_assignment_class_section' for c in unique_constraints):
+        return
+    if connection.dialect.name == 'postgresql':
+        connection.execute(text('ALTER TABLE fee_assignments DROP CONSTRAINT IF EXISTS uq_fee_assignment_class'))
+        connection.execute(text(
+            'ALTER TABLE fee_assignments ADD CONSTRAINT uq_fee_assignment_class_section '
+            'UNIQUE (school_id, session_id, class_id, section_id)'
+        ))
+        return
+    if connection.dialect.name == 'sqlite':
+        from models.fee_assignment import FeeAssignment
+        metadata = MetaData()
+        replacement = FeeAssignment.__table__.to_metadata(metadata, name='fee_assignments_rebuilt')
+        connection.execute(CreateTable(replacement))
+        columns = ', '.join(column.name for column in FeeAssignment.__table__.columns)
+        connection.execute(text(f'INSERT INTO fee_assignments_rebuilt ({columns}) SELECT {columns} FROM fee_assignments'))
+        connection.execute(text('DROP TABLE fee_assignments'))
+        connection.execute(text('ALTER TABLE fee_assignments_rebuilt RENAME TO fee_assignments'))
+        for index in FeeAssignment.__table__.indexes:
+            index.create(connection)
+        return
+    raise RuntimeError(f'Unsupported database for fee assignment uniqueness migration: {connection.dialect.name}')

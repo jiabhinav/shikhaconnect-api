@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -7,6 +9,15 @@ class FeeAssignmentWrite(BaseModel):
     ]})
     class_id: int = Field(gt=0)
     section_id: int = Field(gt=0)
+    fee_structure_id: int = Field(gt=0)
+
+
+class FeeAssignmentBatchWrite(BaseModel):
+    model_config = ConfigDict(extra='forbid', json_schema_extra={'examples': [
+        {'class_id': 1, 'section_id': [1, 2], 'fee_structure_id': 1}
+    ]})
+    class_id: int = Field(gt=0)
+    section_id: list[Annotated[int, Field(gt=0)]] = Field(min_length=1)
     fee_structure_id: int = Field(gt=0)
 
 

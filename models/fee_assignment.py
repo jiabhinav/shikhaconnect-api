@@ -17,7 +17,7 @@ class FeeAssignment(Base):
     section = relationship('Section')
     fee_structure = relationship('FeeStructure')
     __table_args__ = (
-        UniqueConstraint('school_id', 'session_id', 'class_id', name='uq_fee_assignment_class'),
+        UniqueConstraint('school_id', 'session_id', 'class_id', 'section_id', name='uq_fee_assignment_class_section'),
     )
 
     @property
