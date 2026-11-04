@@ -1,4 +1,5 @@
 """Move school assignments from user profiles to shared login accounts."""
+from database.advisory_lock import acquire_transaction_lock
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -13,7 +14,7 @@ def migrate_school_mapping_accounts(connection):
         return
     if connection.dialect.name != "postgresql":
         raise SQLAlchemyError("Legacy school mapping migration requires PostgreSQL")
-    connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    acquire_transaction_lock(connection, 731904218)
     connection.execute(text("LOCK TABLE school_mapping IN ACCESS EXCLUSIVE MODE"))
     owners = [fk for fk in inspect(connection).get_foreign_keys("school_mapping")
               if fk["constrained_columns"] == ["user_id"]]

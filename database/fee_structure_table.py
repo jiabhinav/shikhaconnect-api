@@ -1,4 +1,5 @@
 """Remove the retired carry-forward setting from existing fee structures."""
+from database.advisory_lock import acquire_transaction_lock
 from sqlalchemy import inspect, text
 
 
@@ -8,7 +9,7 @@ def remove_fee_structure_carry_forward(connection):
     if 'carry_forward' not in {column['name'] for column in inspect(connection).get_columns('fee_structures')}:
         return
     if connection.dialect.name == 'postgresql':
-        connection.execute(text('SELECT pg_advisory_xact_lock(731904218)'))
+        acquire_transaction_lock(connection, 731904218)
         if 'carry_forward' not in {column['name'] for column in inspect(connection).get_columns('fee_structures')}:
             return
     connection.execute(text('ALTER TABLE fee_structures DROP COLUMN carry_forward'))

@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
 from database.module_names import get_module_names
-from database.session_table import ensure_session_table, sync_session_months, update_school_session, validate_session_dates
+from database.session_table import ensure_session_table, replace_session_months, update_school_session, validate_session_dates
 from models.school import School, SchoolPermission
 from models.school_assets import SchoolAssets
 from models.session import Session as SchoolSession
@@ -315,7 +315,7 @@ def create_school(
         created_session = db.query(SchoolSession).filter_by(school_id=school.id).order_by(
             SchoolSession.id.desc()
         ).first()
-        sync_session_months(db, created_session)
+        replace_session_months(db, created_session)
         db.commit()
         db.refresh(school)
     except IntegrityError as exc:
@@ -358,7 +358,7 @@ def update_school(
     try:
         update_school_session(db, school, school_info, payload.session_id)
         session_record = db.query(SchoolSession).filter_by(id=payload.session_id, school_id=school.id).first()
-        sync_session_months(db, session_record)
+        replace_session_months(db, session_record)
         for field, value in payload.school_values().items():
             setattr(school, field, value)
 

@@ -1,4 +1,5 @@
 """Add student section storage without inventing sections for existing students."""
+from database.advisory_lock import acquire_transaction_lock
 from sqlalchemy import inspect, text
 
 
@@ -7,7 +8,7 @@ def migrate_student_status_choices(connection):
     if not inspect(connection).has_table("students"):
         return
     if connection.dialect.name == "postgresql":
-        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+        acquire_transaction_lock(connection, 731904218)
     checks = {check['name']: check['sqltext']
               for check in inspect(connection).get_check_constraints("students")}
     existing = checks.get("ck_student_status", "")
@@ -36,7 +37,7 @@ def migrate_optional_student_identity_fields(connection):
     if connection.dialect.name != "postgresql":
         from sqlalchemy.exc import SQLAlchemyError
         raise SQLAlchemyError("Existing student identity-field migration requires PostgreSQL")
-    connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    acquire_transaction_lock(connection, 731904218)
     for field in fields:
         connection.execute(text(f"ALTER TABLE students ALTER COLUMN {field} DROP NOT NULL"))
 
@@ -45,7 +46,7 @@ def migrate_student_section(connection):
     if not inspect(connection).has_table("students"):
         return
     if connection.dialect.name == "postgresql":
-        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+        acquire_transaction_lock(connection, 731904218)
     if "section_id" in {column["name"] for column in inspect(connection).get_columns("students")}:
         return
     connection.execute(text(
@@ -65,7 +66,7 @@ def migrate_optional_father_fields(connection):
     if connection.dialect.name != "postgresql":
         from sqlalchemy.exc import SQLAlchemyError
         raise SQLAlchemyError("Existing student father-field migration requires PostgreSQL")
-    connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    acquire_transaction_lock(connection, 731904218)
     for field in fields:
         if field in columns and not columns[field]["nullable"]:
             connection.execute(text(f"ALTER TABLE students ALTER COLUMN {field} DROP NOT NULL"))
@@ -83,7 +84,7 @@ def migrate_optional_student_pin_codes(connection):
         if connection.dialect.name != "postgresql":
             from sqlalchemy.exc import SQLAlchemyError
             raise SQLAlchemyError("Existing student PIN-code migration requires PostgreSQL")
-        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+        acquire_transaction_lock(connection, 731904218)
         connection.execute(text(f"ALTER TABLE {table} ALTER COLUMN pin_code DROP NOT NULL"))
 
 
@@ -92,7 +93,7 @@ def migrate_student_roll_number(connection):
     if not inspect(connection).has_table("students"):
         return
     if connection.dialect.name == "postgresql":
-        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+        acquire_transaction_lock(connection, 731904218)
     if "roll_number" in {column["name"] for column in inspect(connection).get_columns("students")}:
         return
     connection.execute(text("ALTER TABLE students ADD COLUMN roll_number VARCHAR(50)"))
@@ -112,7 +113,7 @@ def migrate_student_admission_storage(connection):
         return
     if connection.dialect.name != "postgresql":
         raise SQLAlchemyError("Existing student admission storage migration requires PostgreSQL")
-    connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    acquire_transaction_lock(connection, 731904218)
     connection.execute(text("LOCK TABLE students, student_login IN ACCESS EXCLUSIVE MODE"))
     columns = {c["name"] for c in inspect(connection).get_columns("students")}
     login_columns = {c["name"] for c in inspect(connection).get_columns("student_login")}
@@ -168,7 +169,7 @@ def migrate_shared_student_logins(connection):
     if connection.dialect.name != "postgresql":
         from sqlalchemy.exc import SQLAlchemyError
         raise SQLAlchemyError("Existing shared student login migration requires PostgreSQL")
-    connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    acquire_transaction_lock(connection, 731904218)
     connection.execute(text("LOCK TABLE students, student_login IN ACCESS EXCLUSIVE MODE"))
     inspector = inspect(connection)
     if "apar_id" not in {c["name"] for c in inspector.get_columns("students")}:
@@ -198,7 +199,7 @@ def migrate_shared_student_logins(connection):
 def migrate_student_form_fields(connection):
     """Add optional form columns while preserving existing records."""
     if connection.dialect.name == "postgresql":
-        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+        acquire_transaction_lock(connection, 731904218)
     additions = {"students": {'profile_img': 'VARCHAR(500)', 'admission_date': 'DATE', 'student_type': 'VARCHAR(100)', 'admission_type': 'VARCHAR(100)', 'first_admission_class': 'VARCHAR(255)', 'abha_number': 'VARCHAR(100)', 'mode_of_transport': 'VARCHAR(100)', 'weight_kg': 'FLOAT', 'height_cm': 'FLOAT', 'father_dob': 'DATE', 'mother_dob': 'DATE'}, "student_addresses": {"landline_number": "VARCHAR(20)"}}
     for table, fields in additions.items():
         if not inspect(connection).has_table(table):
@@ -214,7 +215,7 @@ def migrate_student_dropdown_names(connection):
     if not inspect(connection).has_table("students"):
         return
     if connection.dialect.name == "postgresql":
-        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+        acquire_transaction_lock(connection, 731904218)
     columns = {column["name"] for column in inspect(connection).get_columns("students")}
     for field, table in (("caste_category", "caste_categories"),
                          ("fee_category", "fee_categories"), ("house", "houses")):
@@ -270,7 +271,7 @@ def migrate_student_session_admissions(connection):
     if connection.dialect.name != "postgresql":
         from sqlalchemy.exc import SQLAlchemyError
         raise SQLAlchemyError("Existing student session admission migration requires PostgreSQL")
-    connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    acquire_transaction_lock(connection, 731904218)
     connection.execute(text("LOCK TABLE students IN ACCESS EXCLUSIVE MODE"))
     connection.execute(text("ALTER TABLE students DROP CONSTRAINT IF EXISTS uq_student_admission"))
     connection.execute(text("ALTER TABLE students ADD CONSTRAINT uq_student_admission "

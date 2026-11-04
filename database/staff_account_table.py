@@ -2,6 +2,7 @@
 
 Run inside the initialization transaction, preserving linked users and staff IDs.
 """
+from database.advisory_lock import acquire_transaction_lock
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 from utils.passwords import hash_password
@@ -31,7 +32,7 @@ def columns(connection, table):
 def lock(connection):
     if connection.dialect.name != 'postgresql':
         raise SQLAlchemyError('Legacy staff storage migration requires PostgreSQL')
-    connection.execute(text('SELECT pg_advisory_xact_lock(731904218)'))
+    acquire_transaction_lock(connection, 731904218)
 
 
 def ensure_unique(connection, table, fields):

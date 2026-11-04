@@ -1,4 +1,5 @@
 """Register application models and create missing tables in dependency order."""
+from database.advisory_lock import acquire_transaction_lock
 from importlib import import_module
 from pkgutil import walk_packages
 from pathlib import Path
@@ -47,7 +48,7 @@ def migrate_legacy_users(connection):
         raise SQLAlchemyError("Automatic legacy user migration requires PostgreSQL")
 
     # Serialize startup workers, then inspect again in case another migrated.
-    connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    acquire_transaction_lock(connection, 731904218)
     connection.execute(text("LOCK TABLE users IN ACCESS EXCLUSIVE MODE"))
     inspector = inspect(connection)
     if "login_user_id" in {col["name"] for col in inspector.get_columns("users")}:
@@ -75,7 +76,7 @@ def remove_user_school_name(connection):
     if "school_name" not in {column["name"] for column in inspector.get_columns("users")}:
         return
     if connection.dialect.name == "postgresql":
-        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+        acquire_transaction_lock(connection, 731904218)
         if "school_name" not in {column["name"] for column in inspect(connection).get_columns("users")}:
             return
     connection.execute(text("ALTER TABLE users DROP COLUMN school_name"))
@@ -125,7 +126,7 @@ def ensure_all_tables(connection):
         return
     if connection.dialect.name == "postgresql":
         # Recheck within create_all after serializing concurrent initialization.
-        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+        acquire_transaction_lock(connection, 731904218)
     Base.metadata.create_all(bind=connection, checkfirst=True)
     _drop_legacy_session_month_date(connection)
     _normalize_session_month_format(connection)

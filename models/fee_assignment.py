@@ -45,5 +45,16 @@ class FeeAssignment(Base):
         return configuration.fee_structure_id if configuration is not None else None
 
     @property
+    def fee_category_id(self):
+        configuration = self.fee_configuration
+        return configuration.fee_category_id if configuration is not None else None
+
+    @property
+    def fee_category_name(self):
+        configuration = self.fee_configuration
+        category = configuration.fee_category if configuration is not None else None
+        return category.name if category is not None else None
+
+    @property
     def section_name(self):
         return self.section.name if self.section is not None else None

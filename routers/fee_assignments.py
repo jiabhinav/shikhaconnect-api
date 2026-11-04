@@ -3,7 +3,7 @@ from calendar import month_name
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session, aliased, joinedload
 
 from models.class_section import ClassSectionMapping, SchoolClass, Section
 from models.fee_category import FeeCategory
@@ -120,7 +120,12 @@ def get_assignments(school_id: int, session_id: int, assignment_id: int | None =
                     search: str | None = None, db: Session = Depends(fee_structure_school)):
     if assignment_id is not None:
         return {'message': 'Fee assignment fetched successfully', 'data': find_assignment(db, school_id, session_id, assignment_id)}
-    query = db.query(FeeAssignment).filter_by(school_id=school_id, session_id=session_id)
+    query = db.query(FeeAssignment).options(
+        joinedload(FeeAssignment.school_class),
+        joinedload(FeeAssignment.section),
+        joinedload(FeeAssignment.fee_configuration).joinedload(FeeConfigurationHead.fee_structure),
+        joinedload(FeeAssignment.fee_configuration).joinedload(FeeConfigurationHead.fee_category),
+    ).filter_by(school_id=school_id, session_id=session_id)
     if class_id is not None:
         query = query.filter_by(class_id=class_id)
     if section_id is not None:

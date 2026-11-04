@@ -1,4 +1,5 @@
 """Migrate fee configuration storage to one JSONB row per configured head."""
+from database.advisory_lock import acquire_transaction_lock
 from sqlalchemy import MetaData, Table, inspect, select, text
 
 from utils.fee_months import MONTH_COLUMNS, session_months
@@ -18,7 +19,7 @@ def migrate_fee_configuration_month_rows(connection):
         return
 
     if connection.dialect.name == 'postgresql':
-        connection.execute(text('SELECT pg_advisory_xact_lock(731904218)'))
+        acquire_transaction_lock(connection, 731904218)
 
     from models.fee_configuration import FeeConfigurationHead
 

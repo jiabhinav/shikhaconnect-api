@@ -25,6 +25,7 @@ class FeeConfigurationHead(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     fee_structure = relationship("FeeStructure")
+    fee_category = relationship("FeeCategory")
 
     __table_args__ = (
         UniqueConstraint("configuration_id", "fee_head_id", name="uq_fee_configuration_head"),

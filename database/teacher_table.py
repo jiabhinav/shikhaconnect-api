@@ -1,4 +1,5 @@
 """Allow the optional city field on previously created teacher addresses."""
+from database.advisory_lock import acquire_transaction_lock
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -7,7 +8,7 @@ def migrate_teacher_employee_codes(connection):
     if not inspect(connection).has_table("teachers"):
         return
     if connection.dialect.name == "postgresql":
-        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+        acquire_transaction_lock(connection, 731904218)
     columns = {c["name"] for c in inspect(connection).get_columns("teachers")}
     for name, definition in (("employee_code", "VARCHAR(150)"), ("employee_sequence", "INTEGER")):
         if name not in columns:
@@ -28,7 +29,7 @@ def migrate_optional_teacher_city(connection):
         return
     if connection.dialect.name != "postgresql":
         raise SQLAlchemyError("Existing teacher address city migration requires PostgreSQL")
-    connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    acquire_transaction_lock(connection, 731904218)
     connection.execute(text("ALTER TABLE teacher_addresses ALTER COLUMN city DROP NOT NULL"))
 
 
@@ -41,7 +42,7 @@ def migrate_optional_teacher_identity(connection):
             continue
         if connection.dialect.name != "postgresql":
             raise SQLAlchemyError("Existing teacher identity migration requires PostgreSQL")
-        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+        acquire_transaction_lock(connection, 731904218)
         connection.execute(text(f"ALTER TABLE {table} ALTER COLUMN {field} DROP NOT NULL"))
 
 
@@ -54,7 +55,7 @@ def migrate_teacher_logins(connection):
         return
     if connection.dialect.name != "postgresql":
         raise SQLAlchemyError("Existing teacher login migration requires PostgreSQL")
-    connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    acquire_transaction_lock(connection, 731904218)
     connection.execute(text("LOCK TABLE teachers, teacher_login, login_user IN ACCESS EXCLUSIVE MODE"))
     columns = {c["name"] for c in inspect(connection).get_columns("teachers")}
     if "login_user_id" not in columns:
@@ -96,6 +97,6 @@ def migrate_teacher_profile_image(connection):
     if not inspect(connection).has_table("teachers"):
         return
     if connection.dialect.name == "postgresql":
-        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+        acquire_transaction_lock(connection, 731904218)
     if "profile_img" not in {c["name"] for c in inspect(connection).get_columns("teachers")}:
         connection.execute(text("ALTER TABLE teachers ADD COLUMN profile_img VARCHAR(500)"))

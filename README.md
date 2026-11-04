@@ -10,7 +10,7 @@ Authenticated endpoints are grouped under **Schools** in `/docs`:
 - `PUT /schools/school/{school_id}/sessions/{session_id}`: replace its name and dates (200).
 - `GET /schools/school/{school_id}/sessions`: list sessions, newest start date first (200).
 - `GET /schools/session_months?school_id={school_id}&session_id={session_id}`: list payment months and IDs.
-- `POST /schools/session_months?school_id={school_id}&session_id={session_id}`: create/reconcile payment months and return their IDs.
+- `POST /schools/session_months?school_id={school_id}&session_id={session_id}`: replace payment months and return their IDs.
 
 Create and update accept:
 

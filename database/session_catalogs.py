@@ -1,4 +1,5 @@
 """Add session ownership to existing school catalog records."""
+from database.advisory_lock import acquire_transaction_lock
 from sqlalchemy import column, inspect, select, table, text, update
 from sqlalchemy.exc import SQLAlchemyError
 from utils.dates import today
@@ -19,7 +20,7 @@ def migrate_session_catalogs(connection):
     if connection.dialect.name not in ('postgresql', 'sqlite'):
         raise SQLAlchemyError('Session catalog migration requires PostgreSQL or SQLite')
     if connection.dialect.name == 'postgresql':
-        connection.execute(text('SELECT pg_advisory_xact_lock(731904218)'))
+        acquire_transaction_lock(connection, 731904218)
     for name in pending:
         if connection.dialect.name == 'postgresql':
             connection.execute(text(f'LOCK TABLE {name} IN ACCESS EXCLUSIVE MODE'))

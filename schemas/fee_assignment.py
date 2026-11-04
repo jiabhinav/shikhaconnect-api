@@ -46,6 +46,8 @@ class FeeAssignmentResponse(FeeAssignmentWrite):
     class_name: str
     section_name: str | None = None
     fee_structure_name: str | None = None
+    fee_category_id: int | None = None
+    fee_category_name: str | None = None
 
 
 class FeeAssignmentResult(BaseModel):

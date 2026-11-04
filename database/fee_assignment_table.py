@@ -1,4 +1,5 @@
 """Fee assignment schema migrations."""
+from database.advisory_lock import acquire_transaction_lock
 from sqlalchemy import BigInteger, MetaData, Table, inspect, select, text
 from sqlalchemy.schema import CreateTable
 
@@ -9,7 +10,7 @@ def remove_fee_assignment_admission_amount(connection):
     if 'admission_amount' not in {col['name'] for col in inspect(connection).get_columns('fee_assignments')}:
         return
     if connection.dialect.name == 'postgresql':
-        connection.execute(text('SELECT pg_advisory_xact_lock(731904218)'))
+        acquire_transaction_lock(connection, 731904218)
         if 'admission_amount' not in {col['name'] for col in inspect(connection).get_columns('fee_assignments')}:
             return
         connection.execute(text('ALTER TABLE fee_assignments DROP COLUMN admission_amount'))
@@ -86,7 +87,7 @@ def migrate_fee_assignment_configuration_reference(connection):
         return
 
     if connection.dialect.name == 'postgresql':
-        connection.execute(text('SELECT pg_advisory_xact_lock(731904218)'))
+        acquire_transaction_lock(connection, 731904218)
         for constraint in inspect(connection).get_foreign_keys('fee_assignments'):
             if constraint.get('constrained_columns') == ['fee_configure_id'] and constraint.get('referred_table') in {
                     'fee_structures', 'fee_configuration_heads'}:

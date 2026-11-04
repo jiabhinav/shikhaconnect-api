@@ -1,4 +1,5 @@
 """Consolidate legacy addresses and permissions under login accounts."""
+from database.advisory_lock import acquire_transaction_lock
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -59,7 +60,7 @@ def migrate_user_addresses(connection):
         return
     if connection.dialect.name != "postgresql":
         raise SQLAlchemyError("Legacy address migration requires PostgreSQL")
-    connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+    acquire_transaction_lock(connection, 731904218)
     inspector = inspect(connection)
     tables = set(inspector.get_table_names())
     StaffAddress.__table__.create(connection, checkfirst=True)

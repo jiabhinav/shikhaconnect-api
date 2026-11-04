@@ -1,4 +1,5 @@
 """Preserve existing staff permissions when renaming their module reference."""
+from database.advisory_lock import acquire_transaction_lock
 from sqlalchemy import inspect, text
 
 
@@ -7,7 +8,7 @@ def add_staff_permission_actions(connection):
     if not inspect(connection).has_table("staff_permission"):
         return
     if connection.dialect.name == "postgresql":
-        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+        acquire_transaction_lock(connection, 731904218)
     columns = {column["name"] for column in inspect(connection).get_columns("staff_permission")}
     for name in ("read", "delete", "update", "create"):
         if name not in columns:
@@ -27,7 +28,7 @@ def rename_staff_module_id(connection):
     if "module_id" not in columns or "staff_module_id" in columns:
         return
     if connection.dialect.name == "postgresql":
-        connection.execute(text("SELECT pg_advisory_xact_lock(731904218)"))
+        acquire_transaction_lock(connection, 731904218)
         columns = {column["name"] for column in inspect(connection).get_columns("staff_permission")}
         if "staff_module_id" in columns:
             return
