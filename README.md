@@ -1449,9 +1449,10 @@ For compatibility, sending `fee_structure_id` resolves to its configuration
 group when exactly one exists. If the structure has multiple groups (for
 example, separate categories such as General and OBC), send the selected
 `fee_configure_id`; otherwise the API cannot determine which category to assign.
-The request creates one assignment per section. Duplicate class/section
-assignments return 409. Use PUT with a single `section_id` to replace an
-assignment.
+The request creates one assignment per class/configuration pair. A repeated
+POST for the same pair returns the existing assignment. `section_id` is
+optional and ignored; the configuration applies to the whole class. Use PUT
+to update an assignment.
 
 Responses include assignment ID, school/session IDs, class ID/name, section
 ID/name, and fee structure ID/name. Lists include `total` and a `data` array ordered

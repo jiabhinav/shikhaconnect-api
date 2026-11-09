@@ -9,7 +9,7 @@ class FeeAssignmentWrite(BaseModel):
         {'class_id': 1, 'section_id': 1, 'fee_configure_id': 1}
     ]})
     class_id: int = Field(gt=0)
-    section_id: int = Field(gt=0)
+    section_id: int | None = Field(default=None, gt=0)
     fee_configure_id: int | None = Field(default=None, gt=0)
     fee_structure_id: int | None = Field(default=None, gt=0)
 
@@ -22,10 +22,11 @@ class FeeAssignmentWrite(BaseModel):
 
 class FeeAssignmentBatchWrite(BaseModel):
     model_config = ConfigDict(extra='forbid', json_schema_extra={'examples': [
-        {'class_id': 1, 'section_id': [1, 2], 'fee_configure_id': 1}
+        {'class_id': 1, 'fee_configure_id': 1}
     ]})
     class_id: int = Field(gt=0)
-    section_id: list[Annotated[int, Field(gt=0)]] = Field(min_length=1)
+    # Accepted for compatibility; assignments now apply to the whole class.
+    section_id: list[Annotated[int, Field(gt=0)]] | None = None
     fee_configure_id: int | None = Field(default=None, gt=0)
     fee_structure_id: int | None = Field(default=None, gt=0)
 

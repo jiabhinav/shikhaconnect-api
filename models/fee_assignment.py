@@ -27,7 +27,10 @@ class FeeAssignment(Base):
         uselist=False,
     )
     __table_args__ = (
-        UniqueConstraint('school_id', 'session_id', 'class_id', 'section_id', name='uq_fee_assignment_class_section'),
+        UniqueConstraint(
+            'school_id', 'session_id', 'class_id', 'fee_configure_id',
+            name='uq_fee_assignment_class_configuration',
+        ),
     )
 
     @property

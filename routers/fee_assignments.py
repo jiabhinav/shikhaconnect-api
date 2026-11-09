@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased, joinedload
 
-from models.class_section import ClassSectionMapping, SchoolClass, Section
+from models.class_section import SchoolClass, Section
 from models.fee_category import FeeCategory
 from models.fee_assignment import FeeAssignment
 from models.fee_configuration import FeeConfigurationHead
@@ -62,16 +62,9 @@ def save_assignment(db, item, payload):
     fee_configure_id = resolve_fee_configuration_id(
         db, item.school_id, item.session_id, payload.fee_configure_id, payload.fee_structure_id,
     )
-    if db.query(ClassSectionMapping.id).filter_by(
-        school_id=item.school_id,
-        session_id=item.session_id,
-        class_id=payload.class_id,
-        section_id=payload.section_id,
-    ).first() is None:
-        raise HTTPException(404, 'Section is not mapped to this class for this school session')
     try:
         item.class_id = payload.class_id
-        item.section_id = payload.section_id
+        item.section_id = None
         item.fee_configure_id = fee_configure_id
         db.add(item)
         db.commit()
@@ -93,28 +86,28 @@ def create_assignment(school_id: int, session_id: int, payload: FeeAssignmentBat
     fee_configure_id = resolve_fee_configuration_id(
         db, school_id, session_id, payload.fee_configure_id, payload.fee_structure_id,
     )
-    section_ids = list(dict.fromkeys(payload.section_id))
-    mapped = {row[0] for row in db.query(ClassSectionMapping.section_id).filter_by(
-        school_id=school_id, session_id=session_id, class_id=payload.class_id,
-    ).filter(ClassSectionMapping.section_id.in_(section_ids)).all()}
-    if mapped != set(section_ids):
-        raise HTTPException(404, {'message': 'One or more sections are not mapped to this class for this school session',
-                                  'section_ids': sorted(set(section_ids) - mapped)})
-    items = [FeeAssignment(school_id=school_id, session_id=session_id, class_id=payload.class_id,
-                           section_id=section_id, fee_configure_id=fee_configure_id)
-             for section_id in section_ids]
+    item = db.query(FeeAssignment).filter(
+        FeeAssignment.school_id == school_id,
+        FeeAssignment.session_id == session_id,
+        FeeAssignment.class_id == payload.class_id,
+        FeeAssignment.fee_configure_id == fee_configure_id,
+    ).first()
+    if item is None:
+        item = FeeAssignment(
+            school_id=school_id, session_id=session_id, class_id=payload.class_id,
+            section_id=None, fee_configure_id=fee_configure_id,
+        )
     try:
-        db.add_all(items)
+        db.add(item)
         db.commit()
-        for item in items:
-            db.refresh(item)
+        db.refresh(item)
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(409, 'One or more sections already have a fee structure assigned or conflict with database constraints') from exc
+        raise HTTPException(409, 'Fee assignment conflicts with a database constraint') from exc
     except Exception:
         db.rollback()
         raise
-    return {'message': 'Fee structure assignments saved successfully', 'total': len(items), 'data': items}
+    return {'message': 'Fee structure assignment saved successfully', 'total': 1, 'data': [item]}
 
 
 @router.get('/fee_assignments', response_model=FeeAssignmentListResult | FeeAssignmentResult)

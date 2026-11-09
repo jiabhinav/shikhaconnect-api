@@ -184,19 +184,27 @@ def _rebuild_fee_assignments(connection, include_configuration_foreign_key):
         index.create(connection)
 
 
-def migrate_fee_assignment_section_uniqueness(connection):
-    """Allow one assignment per class section instead of one per class."""
+def migrate_fee_assignment_class_configuration_uniqueness(connection):
+    """Store one class assignment per fee configuration, independent of section."""
     inspector = inspect(connection)
     if not inspector.has_table('fee_assignments'):
         return
+    assignments = Table('fee_assignments', MetaData(), autoload_with=connection)
+    connection.execute(text(
+        'DELETE FROM fee_assignments WHERE id NOT IN ('
+        'SELECT MIN(id) FROM fee_assignments '
+        'GROUP BY school_id, session_id, class_id, fee_configure_id)'
+    ))
+    connection.execute(assignments.update().values(section_id=None))
     unique_constraints = inspector.get_unique_constraints('fee_assignments')
-    if any(c.get('name') == 'uq_fee_assignment_class_section' for c in unique_constraints):
+    if any(c.get('name') == 'uq_fee_assignment_class_configuration' for c in unique_constraints):
         return
     if connection.dialect.name == 'postgresql':
+        connection.execute(text('ALTER TABLE fee_assignments DROP CONSTRAINT IF EXISTS uq_fee_assignment_class_section'))
         connection.execute(text('ALTER TABLE fee_assignments DROP CONSTRAINT IF EXISTS uq_fee_assignment_class'))
         connection.execute(text(
-            'ALTER TABLE fee_assignments ADD CONSTRAINT uq_fee_assignment_class_section '
-            'UNIQUE (school_id, session_id, class_id, section_id)'
+            'ALTER TABLE fee_assignments ADD CONSTRAINT uq_fee_assignment_class_configuration '
+            'UNIQUE (school_id, session_id, class_id, fee_configure_id)'
         ))
         return
     if connection.dialect.name == 'sqlite':
