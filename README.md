@@ -1445,8 +1445,10 @@ Create body (also shown in Swagger) accepts one or more mapped section IDs:
 `fee_configure_id` is the generated ID returned by Add/Configure Fee Structure.
 The class, configuration, and every section must belong to the selected
 school/session, and each section must be mapped to the class, otherwise 404.
-For compatibility, sending `fee_structure_id` resolves to the first matching
-configuration group and stores its `configuration_id` in `fee_configure_id`.
+For compatibility, sending `fee_structure_id` resolves to its configuration
+group when exactly one exists. If the structure has multiple groups (for
+example, separate categories such as General and OBC), send the selected
+`fee_configure_id`; otherwise the API cannot determine which category to assign.
 The request creates one assignment per section. Duplicate class/section
 assignments return 409. Use PUT with a single `section_id` to replace an
 assignment.

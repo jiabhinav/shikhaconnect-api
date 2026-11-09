@@ -46,8 +46,12 @@ def resolve_fee_configuration_id(db, school_id, session_id, fee_configure_id, fe
     ).distinct().order_by(FeeConfigurationHead.configuration_id).all()]
     if not configuration_ids:
         raise HTTPException(404, 'Fee configuration not found for this fee structure and school session')
-    # The old API accepted a structure ID. Resolve it to the first configured
-    # group so existing clients do not accidentally store the structure ID.
+    if len(configuration_ids) > 1:
+        raise HTTPException(
+            422,
+            'Multiple fee configurations exist for this fee structure; provide fee_configure_id to select the category',
+        )
+    # A structure ID is safe to resolve only when it has one configured group.
     return configuration_ids[0]
 
 
