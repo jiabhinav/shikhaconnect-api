@@ -134,6 +134,7 @@ class StudentInfoResponse(StudentInfo):
     nationality: str | None = None
     caste_category_name: str | None = None
     fee_category_name: str | None = None
+    fee_category_id: int | None = None
     house_name: str | None = None
     status: Literal["active", "inactive", "completed", "promoted"] | None = None
     admission_number: str | None = None

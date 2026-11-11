@@ -96,11 +96,35 @@ def find_student(db, school_id, student_id):
     return item
 
 
+def attach_student_fee_category_ids(db, students):
+    students = list(students) if isinstance(students, (list, tuple)) else [students]
+    names = {item.fee_category_name for item in students if item.fee_category_name}
+    if not names:
+        for item in students:
+            item.fee_category_id = None
+        return
+    from models.fee_category import FeeCategory
+    categories = db.query(FeeCategory.id, FeeCategory.session_id, FeeCategory.name).filter(
+        FeeCategory.school_id == students[0].school_id,
+        FeeCategory.name.in_(names),
+        or_(FeeCategory.session_id.in_({item.session_id for item in students}), FeeCategory.session_id.is_(None)),
+    ).order_by(FeeCategory.session_id.is_(None), FeeCategory.id).all()
+    category_ids = {}
+    for category_id, category_session_id, name in categories:
+        category_ids.setdefault((category_session_id, name), category_id)
+    for item in students:
+        item.fee_category_id = category_ids.get(
+            (item.session_id, item.fee_category_name),
+            category_ids.get((None, item.fee_category_name)),
+        )
+
+
 def save_student(db, item, message):
     try:
         db.add(item)
         db.commit()
         db.refresh(item)
+        attach_student_fee_category_ids(db, item)
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(409, "Student references conflict with database constraints") from exc
@@ -211,9 +235,11 @@ def list_students(school_id: int, session_id: int | None = Query(None, gt=0),
         func.lower(func.coalesce(Student.middle_name, "")),
         func.lower(func.coalesce(Student.last_name, "")), Student.id,
     )
+    students = query.order_by(*ordering).offset(offset).limit(limit).all()
+    attach_student_fee_category_ids(db, students)
     return {"message": "Students fetched successfully",
             "total_records": total_records,
-            "data": query.order_by(*ordering).offset(offset).limit(limit).all()}
+            "data": students}
 
 
 @router.get("/{school_id}/students/search", response_model=StudentListResult, include_in_schema=False)
@@ -251,7 +277,9 @@ def student_dropdowns(school_id: int, session_id: int | None = Query(None, gt=0)
 
 @router.get("/{school_id}/students/{student_id}", response_model=StudentResult)
 def get_student(school_id: int, student_id: int, db: Session = Depends(student_school)):
-    return {"message": "Student fetched successfully", "data": find_student(db, school_id, student_id)}
+    item = find_student(db, school_id, student_id)
+    attach_student_fee_category_ids(db, item)
+    return {"message": "Student fetched successfully", "data": item}
 
 
 @router.put("/{school_id}/students/{student_id}", response_model=StudentResult, include_in_schema=False)
