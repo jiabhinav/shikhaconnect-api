@@ -8,6 +8,12 @@ from sqlalchemy.orm import Session
 from dependencies.auth import get_current_user
 from dependencies.db import get_db_session
 from models.school import School
+from models.class_section import ClassSectionMapping, SchoolClass, Section
+from models.session import Session as SchoolSession
+from models.fee_category import FeeCategory
+from models.fee_assignment import FeeAssignment
+from schemas.fee_assignment import AssignedFeeStructureDetailsResult
+from routers.fee_assignments import get_assigned_fee_structure_monthly_details, section_id_array
 from models.student import Student, StudentLogin, StudentAddressRecord, PreviousSchool
 from models.user import User, UserRole
 from schemas.student import StudentWrite, StudentResult, StudentListResult, StudentAdmissionUpdate, StudentDropdownResult, StudentStatusUpdate
@@ -23,6 +29,64 @@ def student_school(school_id: int, db: Session = Depends(get_db_session),
     if query.first() is None:
         raise HTTPException(404, "School not found")
     return db
+
+
+@router.get("/students/fee-heads/monthly-details", response_model=AssignedFeeStructureDetailsResult)
+def get_student_fee_heads_monthly_details(
+        school_id: int, session_id: int, class_id: int, section_id: int | None = None,
+        fee_category_id: int | None = Query(None, gt=0),
+        student_fee_category_id: int | None = Query(None, gt=0),
+        db: Session = Depends(student_school)):
+    """Return the assigned monthly fee heads for a student's class and section."""
+    if fee_category_id is not None and student_fee_category_id is not None and fee_category_id != student_fee_category_id:
+        raise HTTPException(422, "fee_category_id and student_fee_category_id must match when both are provided")
+    selected_fee_category_id = student_fee_category_id or fee_category_id
+    if db.query(SchoolSession.id).filter_by(id=session_id, school_id=school_id).first() is None:
+        raise HTTPException(404, "School session not found")
+    if db.query(SchoolClass.id).filter_by(
+            id=class_id, school_id=school_id, session_id=session_id).first() is None:
+        raise HTTPException(404, "Class not found for this school session")
+    if section_id is not None and db.query(ClassSectionMapping.id).filter_by(
+            section_id=section_id, school_id=school_id, session_id=session_id, class_id=class_id).first() is None:
+        raise HTTPException(404, "Section not found for this class and school session")
+    if selected_fee_category_id is not None and db.query(FeeCategory.id).filter(
+            FeeCategory.id == selected_fee_category_id, FeeCategory.school_id == school_id,
+            or_(FeeCategory.session_id == session_id, FeeCategory.session_id.is_(None)),
+    ).first() is None:
+        raise HTTPException(404, "Fee category not found for this school session")
+
+    result = get_assigned_fee_structure_monthly_details(
+        school_id=school_id, session_id=session_id, assignment_id=None, db=db,
+    )
+    assignments = db.query(FeeAssignment).filter_by(
+        school_id=school_id, session_id=session_id, class_id=class_id,
+    ).all()
+    assignment_sections = {row.id: section_id_array(row.section_id) for row in assignments}
+    data = []
+    for structure in result["data"]:
+        if selected_fee_category_id is not None and structure["fee_category_id"] != selected_fee_category_id:
+            continue
+        matching_assignments = []
+        for item in structure["assignments"]:
+            assigned_sections = assignment_sections.get(item["assignment_id"])
+            if assigned_sections is None:
+                continue
+            if section_id is not None and assigned_sections and section_id not in assigned_sections:
+                continue
+            if section_id is not None:
+                item = dict(item)
+                item["section_id"] = [section_id]
+                section_name = db.query(Section.name).filter_by(
+                    id=section_id, school_id=school_id,
+                ).scalar()
+                item["section_name"] = [section_name] if section_name is not None else []
+            matching_assignments.append(item)
+        if matching_assignments:
+            structure["assignments"] = matching_assignments
+            data.append(structure)
+    result["data"] = data
+    result["total_structures"] = len(result["data"])
+    return result
 
 
 def find_student(db, school_id, student_id):

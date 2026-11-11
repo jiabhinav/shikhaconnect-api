@@ -1,5 +1,5 @@
-from sqlalchemy import BigInteger, Column, ForeignKey, Integer, UniqueConstraint
-from sqlalchemy.orm import foreign, relationship
+from sqlalchemy import BigInteger, Column, ForeignKey, Integer, JSON, UniqueConstraint
+from sqlalchemy.orm import relationship
 
 from database.database import Base
 
@@ -11,7 +11,7 @@ class FeeAssignment(Base):
     school_id = Column(Integer, ForeignKey('schools.id', ondelete='CASCADE'), nullable=False, index=True)
     session_id = Column(Integer, ForeignKey('sessions.id', ondelete='RESTRICT'), nullable=False, index=True)
     class_id = Column(Integer, ForeignKey('classes.id', ondelete='RESTRICT'), nullable=False, index=True)
-    section_id = Column(Integer, ForeignKey('sections.id', ondelete='RESTRICT'), nullable=True, index=True)
+    section_id = Column(JSON, nullable=False, default=list)
     fee_configure_id = Column(
         BigInteger,
         ForeignKey('fee_configuration_heads.id', ondelete='RESTRICT', name='fk_fee_assignments_fee_configure_id'),
@@ -19,7 +19,6 @@ class FeeAssignment(Base):
         index=True,
     )
     school_class = relationship('SchoolClass')
-    section = relationship('Section')
     fee_configuration = relationship(
         'FeeConfigurationHead',
         primaryjoin='foreign(FeeAssignment.fee_configure_id) == FeeConfigurationHead.id',
@@ -57,7 +56,3 @@ class FeeAssignment(Base):
         configuration = self.fee_configuration
         category = configuration.fee_category if configuration is not None else None
         return category.name if category is not None else None
-
-    @property
-    def section_name(self):
-        return self.section.name if self.section is not None else None

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased, joinedload
 
-from models.class_section import SchoolClass, Section
+from models.class_section import ClassSectionMapping, SchoolClass, Section
 from models.fee_category import FeeCategory
 from models.fee_assignment import FeeAssignment
 from models.fee_configuration import FeeConfigurationHead
@@ -55,6 +55,76 @@ def resolve_fee_configuration_id(db, school_id, session_id, fee_configure_id, fe
     return configuration_ids[0]
 
 
+def validate_assignment_sections(db, school_id, session_id, class_id, section_ids):
+    section_ids = list(dict.fromkeys(section_ids or []))
+    if not section_ids:
+        return []
+    valid_ids = {row[0] for row in db.query(Section.id).filter(
+        Section.id.in_(section_ids), Section.school_id == school_id,
+        Section.session_id == session_id,
+    ).all()}
+    missing_ids = [section_id for section_id in section_ids if section_id not in valid_ids]
+    if missing_ids:
+        raise HTTPException(404, f'Section(s) not found for this school session: {missing_ids}')
+
+    mapped_ids = {row[0] for row in db.query(ClassSectionMapping.section_id).filter(
+        ClassSectionMapping.section_id.in_(section_ids),
+        ClassSectionMapping.school_id == school_id,
+        ClassSectionMapping.session_id == session_id,
+        ClassSectionMapping.class_id == class_id,
+    ).all()}
+    for section_id in section_ids:
+        if section_id not in mapped_ids:
+            db.add(ClassSectionMapping(
+                school_id=school_id, session_id=session_id,
+                class_id=class_id, section_id=section_id,
+            ))
+    return section_ids
+
+
+def section_id_array(value):
+    """Normalize legacy scalar JSON values before returning or filtering assignments."""
+    if value is None:
+        return []
+    values = value if isinstance(value, (list, tuple)) else [value]
+    normalized = []
+    for section_id in values:
+        try:
+            section_id = int(section_id)
+        except (TypeError, ValueError):
+            continue
+        if section_id > 0 and section_id not in normalized:
+            normalized.append(section_id)
+    return normalized
+
+
+def assignment_response(db, item):
+    section_ids = section_id_array(item.section_id)
+    if section_ids:
+        section_names_by_id = dict(db.query(Section.id, Section.name).filter(
+            Section.id.in_(section_ids), Section.school_id == item.school_id,
+        ).all())
+    else:
+        section_names_by_id = dict(db.query(Section.id, Section.name).join(
+            ClassSectionMapping, ClassSectionMapping.section_id == Section.id,
+        ).filter(
+            ClassSectionMapping.school_id == item.school_id,
+            ClassSectionMapping.session_id == item.session_id,
+            ClassSectionMapping.class_id == item.class_id,
+        ).order_by(Section.id).all())
+        section_ids = list(section_names_by_id)
+    section_names = [section_names_by_id[section_id] for section_id in section_ids
+                     if section_id in section_names_by_id]
+    return {
+        'id': item.id, 'school_id': item.school_id, 'session_id': item.session_id,
+        'class_id': item.class_id, 'class_name': item.class_name,
+        'section_id': section_ids, 'section_name': section_names,
+        'fee_configure_id': item.fee_configure_id, 'fee_structure_id': item.fee_structure_id,
+        'fee_structure_name': item.fee_structure_name,
+        'fee_category_id': item.fee_category_id, 'fee_category_name': item.fee_category_name,
+    }
+
+
 def save_assignment(db, item, payload):
     if db.query(SchoolClass.id).filter_by(
             id=payload.class_id, school_id=item.school_id, session_id=item.session_id).first() is None:
@@ -63,19 +133,29 @@ def save_assignment(db, item, payload):
         db, item.school_id, item.session_id, payload.fee_configure_id, payload.fee_structure_id,
     )
     try:
-        item.class_id = payload.class_id
-        item.section_id = None
-        item.fee_configure_id = fee_configure_id
-        db.add(item)
+        section_ids = validate_assignment_sections(
+            db, item.school_id, item.session_id, payload.class_id, payload.section_id,
+        )
+        sibling = db.query(FeeAssignment).filter_by(
+            school_id=item.school_id, session_id=item.session_id,
+            class_id=payload.class_id, fee_configure_id=fee_configure_id,
+        ).first()
+        target = sibling or item
+        target.class_id = payload.class_id
+        target.section_id = section_ids
+        target.fee_configure_id = fee_configure_id
+        db.add(target)
+        if target is not item:
+            db.delete(item)
         db.commit()
-        db.refresh(item)
+        db.refresh(target)
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(409, 'Class already has a fee structure assigned or conflicts with database constraints') from exc
     except Exception:
         db.rollback()
         raise
-    return {'message': 'Fee structure assignment saved successfully', 'data': item}
+    return {'message': 'Fee structure assignment updated successfully', 'data': assignment_response(db, target)}
 
 
 @router.post('/fee_assignments', response_model=FeeAssignmentListResult, status_code=201)
@@ -86,28 +166,35 @@ def create_assignment(school_id: int, session_id: int, payload: FeeAssignmentBat
     fee_configure_id = resolve_fee_configuration_id(
         db, school_id, session_id, payload.fee_configure_id, payload.fee_structure_id,
     )
-    item = db.query(FeeAssignment).filter(
-        FeeAssignment.school_id == school_id,
-        FeeAssignment.session_id == session_id,
-        FeeAssignment.class_id == payload.class_id,
-        FeeAssignment.fee_configure_id == fee_configure_id,
-    ).first()
-    if item is None:
-        item = FeeAssignment(
-            school_id=school_id, session_id=session_id, class_id=payload.class_id,
-            section_id=None, fee_configure_id=fee_configure_id,
-        )
+    items = []
     try:
+        section_ids = validate_assignment_sections(
+            db, school_id, session_id, payload.class_id, payload.section_id,
+        )
+        item = db.query(FeeAssignment).filter_by(
+            school_id=school_id, session_id=session_id, class_id=payload.class_id,
+            fee_configure_id=fee_configure_id,
+        ).first()
+        if item is None:
+            item = FeeAssignment(
+                school_id=school_id, session_id=session_id, class_id=payload.class_id,
+                section_id=section_ids, fee_configure_id=fee_configure_id,
+            )
+        else:
+            item.section_id = section_ids
         db.add(item)
+        items.append(item)
         db.commit()
-        db.refresh(item)
+        for item in items:
+            db.refresh(item)
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(409, 'Fee assignment conflicts with a database constraint') from exc
     except Exception:
         db.rollback()
         raise
-    return {'message': 'Fee structure assignment saved successfully', 'total': 1, 'data': [item]}
+    return {'message': 'Fee structure assignment saved successfully', 'total': len(items),
+            'data': [assignment_response(db, item) for item in items]}
 
 
 @router.get('/fee_assignments', response_model=FeeAssignmentListResult | FeeAssignmentResult)
@@ -116,17 +203,15 @@ def get_assignments(school_id: int, session_id: int, assignment_id: int | None =
                     fee_structure_id: int | None = None, fee_configure_id: int | None = None,
                     search: str | None = None, db: Session = Depends(fee_structure_school)):
     if assignment_id is not None:
-        return {'message': 'Fee assignment fetched successfully', 'data': find_assignment(db, school_id, session_id, assignment_id)}
+        item = find_assignment(db, school_id, session_id, assignment_id)
+        return {'message': 'Fee assignment fetched successfully', 'data': assignment_response(db, item)}
     query = db.query(FeeAssignment).options(
         joinedload(FeeAssignment.school_class),
-        joinedload(FeeAssignment.section),
         joinedload(FeeAssignment.fee_configuration).joinedload(FeeConfigurationHead.fee_structure),
         joinedload(FeeAssignment.fee_configuration).joinedload(FeeConfigurationHead.fee_category),
     ).filter_by(school_id=school_id, session_id=session_id)
     if class_id is not None:
         query = query.filter_by(class_id=class_id)
-    if section_id is not None:
-        query = query.filter_by(section_id=section_id)
     has_search = bool(search and search.strip())
     if fee_structure_id is not None or has_search:
         query = query.join(FeeConfigurationHead, FeeConfigurationHead.id == FeeAssignment.fee_configure_id)
@@ -141,7 +226,11 @@ def get_assignments(school_id: int, session_id: int, assignment_id: int | None =
         ).filter(
             SchoolClass.name.ilike(pattern, escape='\\') | FeeStructure.fee_structure_name.ilike(pattern, escape='\\'))
     items = query.order_by(FeeAssignment.id).all()
-    return {'message': 'Fee assignments fetched successfully', 'total': len(items), 'data': items}
+    if section_id is not None:
+        items = [item for item in items if not section_id_array(item.section_id) or
+                 section_id in section_id_array(item.section_id)]
+    return {'message': 'Fee assignments fetched successfully', 'total': len(items),
+            'data': [assignment_response(db, item) for item in items]}
 
 
 @router.get('/fee_assignments/monthly-details', response_model=AssignedFeeStructureDetailsResult)
@@ -162,7 +251,7 @@ def get_assigned_fee_structure_monthly_details(
     ConfiguredHead = aliased(FeeConfigurationHead)
     rows_query = db.query(
         FeeAssignment, FeeStructure, Anchor, ConfiguredHead, FeeCategory, FeeHead,
-        SchoolClass, Section,
+        SchoolClass,
     ).join(
         Anchor, Anchor.id == FeeAssignment.fee_configure_id,
     ).outerjoin(
@@ -175,8 +264,6 @@ def get_assigned_fee_structure_monthly_details(
         FeeHead, FeeHead.id == ConfiguredHead.fee_head_id,
     ).join(
         SchoolClass, SchoolClass.id == FeeAssignment.class_id,
-    ).outerjoin(
-        Section, Section.id == FeeAssignment.section_id,
     ).filter(
         FeeAssignment.school_id == school_id,
         FeeAssignment.session_id == session_id,
@@ -188,10 +275,10 @@ def get_assigned_fee_structure_monthly_details(
         )
     rows = rows_query.order_by(
         FeeStructure.fee_structure_name, FeeCategory.name, FeeHead.fee_head_name,
-        SchoolClass.name, Section.name,
+        SchoolClass.name,
     ).all()
 
-    for assignment, structure, anchor, head_month, category, head, school_class, section in rows:
+    for assignment, structure, anchor, head_month, category, head, school_class in rows:
         category_id = category.id if category is not None else None
         key = (structure.id, category_id)
         structure_group = grouped.setdefault(key, {
@@ -203,12 +290,13 @@ def get_assigned_fee_structure_monthly_details(
             'assignments': {},
             'months': {month: {} for month in months},
         })
+        assignment_data = assignment_response(db, assignment)
         structure_group['assignments'][assignment.id] = {
             'assignment_id': assignment.id,
             'class_id': assignment.class_id,
             'class_name': school_class.name,
-            'section_id': assignment.section_id,
-            'section_name': section.name if section is not None else None,
+            'section_id': assignment_data['section_id'],
+            'section_name': assignment_data['section_name'],
         }
         if head_month is not None and head is not None:
             for month_settings in head_month.monthly_config or []:
@@ -260,7 +348,7 @@ def get_assigned_fee_structure_monthly_details(
 
 
 @router.put('/fee_assignments', response_model=FeeAssignmentResult)
-def update_assignment(school_id: int, session_id: int, assignment_id: int, payload: FeeAssignmentWrite, db: Session = Depends(fee_structure_school)):
+def update_assignment(school_id: int, session_id: int, assignment_id: int, payload: FeeAssignmentBatchWrite, db: Session = Depends(fee_structure_school)):
     return save_assignment(db, find_assignment(db, school_id, session_id, assignment_id), payload)
 
 

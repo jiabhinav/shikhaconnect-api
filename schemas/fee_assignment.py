@@ -6,10 +6,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class FeeAssignmentWrite(BaseModel):
     model_config = ConfigDict(extra='forbid', json_schema_extra={'examples': [
-        {'class_id': 1, 'section_id': 1, 'fee_configure_id': 1}
+        {'class_id': 1, 'section_id': [1, 2], 'fee_configure_id': 1}
     ]})
     class_id: int = Field(gt=0)
-    section_id: int | None = Field(default=None, gt=0)
+    section_id: list[Annotated[int, Field(gt=0)]] = Field(default_factory=list)
     fee_configure_id: int | None = Field(default=None, gt=0)
     fee_structure_id: int | None = Field(default=None, gt=0)
 
@@ -22,10 +22,10 @@ class FeeAssignmentWrite(BaseModel):
 
 class FeeAssignmentBatchWrite(BaseModel):
     model_config = ConfigDict(extra='forbid', json_schema_extra={'examples': [
-        {'class_id': 1, 'fee_configure_id': 1}
+        {'class_id': 1, 'section_id': [1, 2], 'fee_configure_id': 1}
     ]})
     class_id: int = Field(gt=0)
-    # Accepted for compatibility; assignments now apply to the whole class.
+    # Selected sections are stored together on the class assignment.
     section_id: list[Annotated[int, Field(gt=0)]] | None = None
     fee_configure_id: int | None = Field(default=None, gt=0)
     fee_structure_id: int | None = Field(default=None, gt=0)
@@ -39,13 +39,13 @@ class FeeAssignmentBatchWrite(BaseModel):
 
 class FeeAssignmentResponse(FeeAssignmentWrite):
     model_config = ConfigDict(from_attributes=True)
-    section_id: int | None = None
+    section_id: list[int] = Field(default_factory=list)
     id: int
     school_id: int
     session_id: int
     fee_structure_id: int | None = None
     class_name: str
-    section_name: str | None = None
+    section_name: list[str] = Field(default_factory=list)
     fee_structure_name: str | None = None
     fee_category_id: int | None = None
     fee_category_name: str | None = None
@@ -76,8 +76,8 @@ class AssignedClassSection(BaseModel):
     assignment_id: int
     class_id: int
     class_name: str
-    section_id: int | None
-    section_name: str | None
+    section_id: list[int]
+    section_name: list[str]
 
 
 class AssignedFeeStructureDetail(BaseModel):

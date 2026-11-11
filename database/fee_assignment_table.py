@@ -1,4 +1,6 @@
 """Fee assignment schema migrations."""
+import json
+
 from database.advisory_lock import acquire_transaction_lock
 from sqlalchemy import BigInteger, MetaData, Table, inspect, select, text
 from sqlalchemy.schema import CreateTable
@@ -185,35 +187,102 @@ def _rebuild_fee_assignments(connection, include_configuration_foreign_key):
 
 
 def migrate_fee_assignment_class_configuration_uniqueness(connection):
-    """Store one class assignment per fee configuration, independent of section."""
+    """Store all selected section IDs as one JSON array per class assignment."""
+    if connection.dialect.name == 'postgresql':
+        acquire_transaction_lock(connection, 731904218)
     inspector = inspect(connection)
     if not inspector.has_table('fee_assignments'):
         return
-    assignments = Table('fee_assignments', MetaData(), autoload_with=connection)
-    connection.execute(text(
-        'DELETE FROM fee_assignments WHERE id NOT IN ('
-        'SELECT MIN(id) FROM fee_assignments '
-        'GROUP BY school_id, session_id, class_id, fee_configure_id)'
-    ))
-    connection.execute(assignments.update().values(section_id=None))
     unique_constraints = inspector.get_unique_constraints('fee_assignments')
-    if any(c.get('name') == 'uq_fee_assignment_class_configuration' for c in unique_constraints):
+    section_column = next(c for c in inspector.get_columns('fee_assignments') if c['name'] == 'section_id')
+    is_json = section_column['type'].__class__.__name__.lower() == 'json'
+    has_class_constraint = any(c.get('name') == 'uq_fee_assignment_class_configuration' for c in unique_constraints)
+    has_section_constraint = any('section_id' in (c.get('column_names') or []) for c in unique_constraints)
+    if is_json and has_class_constraint and not has_section_constraint:
+        if connection.dialect.name == 'postgresql':
+            connection.execute(text(
+                "UPDATE fee_assignments SET section_id = CASE "
+                "WHEN section_id IS NULL OR section_id::text = 'null' THEN '[]'::json "
+                "WHEN json_typeof(section_id) = 'array' THEN section_id "
+                "ELSE json_build_array(section_id) END "
+                "WHERE section_id IS NULL OR section_id::text = 'null' "
+                "OR json_typeof(section_id) <> 'array'"
+            ))
+            if section_column.get('nullable', True):
+                connection.execute(text('ALTER TABLE fee_assignments ALTER COLUMN section_id SET NOT NULL'))
+        elif connection.dialect.name == 'sqlite':
+            connection.execute(text(
+                "UPDATE fee_assignments SET section_id = CASE "
+                "WHEN section_id IS NULL OR section_id = 'null' THEN '[]' "
+                "WHEN json_valid(section_id) AND json_type(section_id) = 'array' THEN section_id "
+                "WHEN json_valid(section_id) THEN json_array(json_extract(section_id, '$')) "
+                "ELSE json_array(section_id) END "
+                "WHERE section_id IS NULL OR section_id = 'null' "
+                "OR NOT json_valid(section_id) OR json_type(section_id) <> 'array'"
+            ))
         return
+
+    source_rows = connection.execute(text(
+        'SELECT id, school_id, session_id, class_id, section_id, fee_configure_id '
+        'FROM fee_assignments ORDER BY id'
+    )).mappings().all()
+    grouped = {}
+    for row in source_rows:
+        key = (row['school_id'], row['session_id'], row['class_id'], row['fee_configure_id'])
+        entry = grouped.setdefault(key, {'row': dict(row), 'section_ids': [], 'all_sections': False})
+        value = row['section_id']
+        if value is None or value == []:
+            entry['all_sections'] = True
+        elif isinstance(value, (list, tuple)):
+            entry['section_ids'].extend(value)
+        else:
+            entry['section_ids'].append(value)
+    assignments = []
+    for entry in grouped.values():
+        entry['row']['section_id'] = [] if entry['all_sections'] else sorted(set(entry['section_ids']))
+        assignments.append(entry['row'])
+
     if connection.dialect.name == 'postgresql':
-        connection.execute(text('ALTER TABLE fee_assignments DROP CONSTRAINT IF EXISTS uq_fee_assignment_class_section'))
-        connection.execute(text('ALTER TABLE fee_assignments DROP CONSTRAINT IF EXISTS uq_fee_assignment_class'))
+        preparer = connection.dialect.identifier_preparer
+        connection.execute(text('ALTER TABLE fee_assignments ADD COLUMN IF NOT EXISTS section_id_json JSON'))
+        keep_ids = {item['id'] for item in assignments}
+        for item in assignments:
+            connection.execute(text(
+                'UPDATE fee_assignments SET section_id_json = CAST(:section_ids AS JSON) WHERE id = :id'
+            ), {'section_ids': json.dumps(item['section_id']), 'id': item['id']})
+        for item in source_rows:
+            if item['id'] not in keep_ids:
+                connection.execute(text('DELETE FROM fee_assignments WHERE id = :id'), {'id': item['id']})
+        for foreign_key in inspector.get_foreign_keys('fee_assignments'):
+            if 'section_id' in (foreign_key.get('constrained_columns') or []) and foreign_key.get('name'):
+                name = preparer.quote(foreign_key['name'])
+                connection.execute(text(f'ALTER TABLE fee_assignments DROP CONSTRAINT IF EXISTS {name}'))
+        for constraint in unique_constraints:
+            columns = set(constraint.get('column_names') or [])
+            if constraint.get('name') and ({'fee_configure_id', 'section_id'} & columns):
+                name = preparer.quote(constraint['name'])
+                connection.execute(text(f'ALTER TABLE fee_assignments DROP CONSTRAINT IF EXISTS {name}'))
+        for index in inspector.get_indexes('fee_assignments'):
+            if 'section_id' in (index.get('column_names') or []) and index.get('name'):
+                name = preparer.quote(index['name'])
+                connection.execute(text(f'DROP INDEX IF EXISTS {name}'))
+        connection.execute(text('ALTER TABLE fee_assignments DROP COLUMN section_id'))
+        connection.execute(text('ALTER TABLE fee_assignments RENAME COLUMN section_id_json TO section_id'))
+        connection.execute(text('ALTER TABLE fee_assignments ALTER COLUMN section_id SET NOT NULL'))
         connection.execute(text(
             'ALTER TABLE fee_assignments ADD CONSTRAINT uq_fee_assignment_class_configuration '
             'UNIQUE (school_id, session_id, class_id, fee_configure_id)'
         ))
         return
     if connection.dialect.name == 'sqlite':
+        from database.database import Base
         from models.fee_assignment import FeeAssignment
         metadata = MetaData()
+        for table in Base.metadata.sorted_tables:
+            table.to_metadata(metadata)
         replacement = FeeAssignment.__table__.to_metadata(metadata, name='fee_assignments_rebuilt')
         connection.execute(CreateTable(replacement))
-        columns = ', '.join(column.name for column in FeeAssignment.__table__.columns)
-        connection.execute(text(f'INSERT INTO fee_assignments_rebuilt ({columns}) SELECT {columns} FROM fee_assignments'))
+        connection.execute(replacement.insert(), assignments)
         connection.execute(text('DROP TABLE fee_assignments'))
         connection.execute(text('ALTER TABLE fee_assignments_rebuilt RENAME TO fee_assignments'))
         for index in FeeAssignment.__table__.indexes:
