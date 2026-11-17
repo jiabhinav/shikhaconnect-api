@@ -12,14 +12,259 @@ from models.fee_configuration import FeeConfigurationHead
 from models.fee_head import FeeHead
 from models.fee_structure import FeeStructure
 from models.session import Session as SchoolSession
+from models.student import Student
+from models.student_fee import StudentFee, StudentFeeHead
 from routers.fee_structures import fee_structure_school
 from schemas.fee_assignment import (
     FeeAssignmentWrite, FeeAssignmentBatchWrite, FeeAssignmentResult, FeeAssignmentListResult,
     AssignedFeeStructureDetailsResult,
 )
+from schemas.student_fee import (
+    FeePaymentHeadStatus, FeePaymentMonthStatus, FeePaymentStatusListResult,
+    StudentFeeListResult, StudentFeeWrite,
+)
+from schemas.enums import StudentFeeStatus
 from utils.fee_months import session_months
 
 router = APIRouter(tags=['Configure Fees'])
+
+
+def calculate_student_fee_status(net_amount, paid_amount):
+    if paid_amount >= net_amount:
+        return 'PAID'
+    if paid_amount == 0:
+        return 'UNPAID'
+    return 'PARTIAL'
+
+
+@router.post('/student_fees', response_model=StudentFeeListResult, status_code=201)
+def create_student_fee(school_id: int, session_id: int, payload: StudentFeeWrite,
+                       db: Session = Depends(fee_structure_school)):
+    student = db.query(Student.id, Student.class_id).filter_by(
+        id=payload.student_id, school_id=school_id, session_id=session_id,
+    ).first()
+    if student is None:
+        raise HTTPException(404, 'Student not found for this school session')
+
+    assignments = db.query(FeeAssignment, FeeConfigurationHead).join(
+        FeeConfigurationHead, FeeConfigurationHead.id == FeeAssignment.fee_configure_id,
+    ).filter(
+        FeeAssignment.school_id == school_id,
+        FeeAssignment.session_id == session_id,
+        FeeAssignment.class_id == student.class_id,
+    ).all()
+    items = []
+    try:
+        for month_payment in payload.months:
+            existing = db.query(StudentFee).filter_by(
+                school_id=school_id,
+                academic_session_id=session_id,
+                student_id=payload.student_id,
+                fee_month=month_payment.fee_month,
+            ).with_for_update().first()
+            if existing is not None:
+                if existing.due_amount == 0:
+                    raise HTTPException(409, f'Fee for {month_payment.fee_month} is already fully paid')
+                due_heads = sorted(
+                    (head for head in existing.fee_heads if head.due_amount > 0),
+                    key=lambda head: head.fee_head_id,
+                )
+                total_due = sum((head.due_amount for head in due_heads), Decimal('0.00'))
+                if month_payment.payment_amount > total_due:
+                    raise HTTPException(422, f'payment_amount cannot exceed the remaining due for {month_payment.fee_month}')
+
+                remaining_payment = month_payment.payment_amount
+                for head in due_heads:
+                    head_paid = min(remaining_payment, head.due_amount)
+                    head.paid_amount += head_paid
+                    remaining_payment -= head_paid
+                existing.paid_amount += month_payment.payment_amount
+                existing.status = calculate_student_fee_status(existing.net_amount, existing.paid_amount)
+                existing.payment_mode = payload.payment_mode
+                existing.description = payload.description
+                existing.collected_by = payload.collected_by
+                items.append(existing)
+                continue
+
+            monthly_heads = {}
+            for _, anchor in assignments:
+                configured_rows = db.query(FeeConfigurationHead, FeeHead).join(
+                    FeeHead, FeeHead.id == FeeConfigurationHead.fee_head_id,
+                ).filter(FeeConfigurationHead.configuration_id == anchor.configuration_id).all()
+                for head_config, fee_head in configured_rows:
+                    month_value = next((value for value in (head_config.monthly_config or [])
+                                        if value.get('month_key') == month_payment.fee_month), None)
+                    if month_value is not None and not month_value.get('enabled', True):
+                        continue
+                    amount = Decimal(str(month_value.get('amount', head_config.base_amount)
+                                         if month_value is not None else head_config.base_amount))
+                    monthly_heads.setdefault(fee_head.id, {
+                        'fee_head_id': fee_head.id,
+                        'fee_head_name': fee_head.fee_head_name,
+                        'amount': Decimal('0.00'),
+                    })['amount'] += amount
+            if not monthly_heads:
+                raise HTTPException(404, f'No fee heads are assigned for {month_payment.fee_month}')
+
+            ordered_heads = sorted(monthly_heads.values(), key=lambda head: head['fee_head_id'])
+            total_amount = sum((head['amount'] for head in ordered_heads), Decimal('0.00'))
+            if month_payment.payment_amount > total_amount:
+                raise HTTPException(422, f'payment_amount cannot exceed the total fee for {month_payment.fee_month}')
+
+            # Clear fee heads in ID order before applying payment to the next head.
+            remaining_payment = month_payment.payment_amount
+            paid_allocations = []
+            for head in ordered_heads:
+                head_paid = min(remaining_payment, head['amount'])
+                paid_allocations.append(head_paid)
+                remaining_payment -= head_paid
+
+            detail_rows = [StudentFeeHead(
+                fee_head_id=head['fee_head_id'], amount=head['amount'],
+                discount_amount=Decimal('0.00'), fine_amount=Decimal('0.00'),
+                net_amount=head['amount'], paid_amount=head_paid,
+            ) for head, head_paid in zip(ordered_heads, paid_allocations)]
+            item = StudentFee(
+                school_id=school_id,
+                academic_session_id=session_id,
+                student_id=payload.student_id,
+                fee_month=month_payment.fee_month,
+                total_amount=total_amount,
+                discount_amount=Decimal('0.00'),
+                fine_amount=Decimal('0.00'),
+                net_amount=total_amount,
+                paid_amount=month_payment.payment_amount,
+                status=calculate_student_fee_status(total_amount, month_payment.payment_amount),
+                payment_mode=payload.payment_mode,
+                description=payload.description,
+                collected_by=payload.collected_by,
+                fee_heads=detail_rows,
+            )
+            db.add(item)
+            items.append(item)
+        db.commit()
+        for item in items:
+            db.refresh(item)
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, 'A fee record already exists for one of the student months') from exc
+    except Exception:
+        db.rollback()
+        raise
+    return {'message': 'Student fee records created successfully', 'total': len(items), 'data': items}
+
+
+@router.get('/student_fees', response_model=StudentFeeListResult)
+def get_student_fees(school_id: int, session_id: int, fee_id: int | None = None,
+                     student_id: int | None = None, fee_month: str | None = None,
+                     status: str | None = None, db: Session = Depends(fee_structure_school)):
+    query = db.query(StudentFee).filter_by(school_id=school_id, academic_session_id=session_id)
+    if fee_id is not None:
+        query = query.filter_by(id=fee_id)
+    if student_id is not None:
+        query = query.filter_by(student_id=student_id)
+    if fee_month is not None:
+        if len(fee_month) != 7 or fee_month[4] != '-' or not fee_month[:4].isdigit() or not fee_month[5:].isdigit() or not 1 <= int(fee_month[5:]) <= 12:
+            raise HTTPException(422, 'fee_month must use YYYY-MM format')
+        query = query.filter_by(fee_month=fee_month)
+    if status is not None:
+        normalized_status = status.upper()
+        if normalized_status not in {'UNPAID', 'PARTIAL', 'PAID'}:
+            raise HTTPException(422, 'status must be UNPAID, PARTIAL, or PAID')
+        query = query.filter_by(status=normalized_status)
+    items = query.order_by(StudentFee.fee_month, StudentFee.student_id, StudentFee.id).all()
+    return {'message': 'Student fee records fetched successfully', 'total': len(items), 'data': items}
+
+
+@router.get('/fee_payments', response_model=FeePaymentStatusListResult)
+def get_fee_payment_status(school_id: int, session_id: int, student_id: int,
+                           fee_month: str | None = None,
+                           db: Session = Depends(fee_structure_school)):
+    student = db.query(Student.id, Student.class_id).filter_by(
+        id=student_id, school_id=school_id, session_id=session_id,
+    ).first()
+    if student is None:
+        raise HTTPException(404, 'Student not found for this school session')
+    session = db.query(SchoolSession).filter_by(id=session_id, school_id=school_id).first()
+    months = list(session_months(session.start_date, session.end_date))
+    if fee_month is not None:
+        if fee_month not in months:
+            raise HTTPException(422, 'fee_month is not part of this academic session')
+        months = [fee_month]
+
+    assignments = db.query(FeeAssignment, FeeConfigurationHead).join(
+        FeeConfigurationHead, FeeConfigurationHead.id == FeeAssignment.fee_configure_id,
+    ).filter(
+        FeeAssignment.school_id == school_id,
+        FeeAssignment.session_id == session_id,
+        FeeAssignment.class_id == student.class_id,
+    ).all()
+    configuration_ids = list({anchor.configuration_id for _, anchor in assignments})
+    configured_rows = []
+    if configuration_ids:
+        configured_rows = db.query(FeeConfigurationHead, FeeHead).join(
+            FeeHead, FeeHead.id == FeeConfigurationHead.fee_head_id,
+        ).filter(FeeConfigurationHead.configuration_id.in_(configuration_ids)).all()
+
+    payment_records = db.query(StudentFee).options(joinedload(StudentFee.fee_heads)).filter_by(
+        school_id=school_id, academic_session_id=session_id, student_id=student_id,
+    ).all()
+    records_by_month = {record.fee_month: record for record in payment_records}
+    data = []
+    for month in months:
+        month_heads = {}
+        for head_config, fee_head in configured_rows:
+            month_value = next((value for value in (head_config.monthly_config or [])
+                                if value.get('month_key') == month), None)
+            if month_value is not None and not month_value.get('enabled', True):
+                continue
+            amount = Decimal(str(month_value.get('amount', head_config.base_amount)
+                                 if month_value is not None else head_config.base_amount))
+            month_heads.setdefault(fee_head.id, {
+                'fee_head_id': fee_head.id,
+                'fee_head_name': fee_head.fee_head_name,
+                'payable_amount': Decimal('0.00'),
+            })['payable_amount'] += amount
+
+        record = records_by_month.get(month)
+        paid_by_head = {line.fee_head_id: line.paid_amount for line in record.fee_heads} if record else {}
+        if record:
+            # Keep the stored charge snapshot if configuration changed after payment.
+            names = {head_id: values['fee_head_name'] for head_id, values in month_heads.items()}
+            for line in record.fee_heads:
+                month_heads[line.fee_head_id] = {
+                    'fee_head_id': line.fee_head_id,
+                    'fee_head_name': names.get(line.fee_head_id, line.fee_head_name),
+                    'payable_amount': line.net_amount,
+                }
+
+        fee_heads = []
+        for values in sorted(month_heads.values(), key=lambda item: (item['fee_head_name'].casefold(), item['fee_head_id'])):
+            paid = min(paid_by_head.get(values['fee_head_id'], Decimal('0.00')), values['payable_amount'])
+            fee_heads.append(FeePaymentHeadStatus(
+                fee_head_id=values['fee_head_id'],
+                fee_head_name=values['fee_head_name'],
+                payable_amount=values['payable_amount'],
+                paid_amount=paid,
+                due_amount=values['payable_amount'] - paid,
+            ))
+        payable_amount = sum((head.payable_amount for head in fee_heads), Decimal('0.00'))
+        paid_amount = sum((head.paid_amount for head in fee_heads), Decimal('0.00'))
+        due_amount = payable_amount - paid_amount
+        data.append(FeePaymentMonthStatus(
+            fee_month=month,
+            payable_amount=payable_amount,
+            paid_amount=paid_amount,
+            due_amount=due_amount,
+            status=StudentFeeStatus.PAID if due_amount == 0 else (
+                StudentFeeStatus.UNPAID if paid_amount == 0 else StudentFeeStatus.PARTIAL
+            ),
+            fee_heads=fee_heads,
+        ))
+    return {'message': 'Fee payment status fetched successfully', 'total': len(data), 'data': data}
 
 
 def find_assignment(db, school_id, session_id, assignment_id):
