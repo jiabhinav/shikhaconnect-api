@@ -1,5 +1,6 @@
 from decimal import Decimal
 from calendar import month_name
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
@@ -13,6 +14,8 @@ from models.fee_head import FeeHead
 from models.fee_structure import FeeStructure
 from models.session import Session as SchoolSession
 from models.student import Student
+from models.student_carry_forward import CARRY_FORWARD_TAG, StudentCarryForward
+from models.student_fee_adjustment import StudentFeeAdjustment
 from models.student_fee import StudentFee, StudentFeeHead
 from routers.fee_structures import fee_structure_school
 from schemas.fee_assignment import (
@@ -20,10 +23,10 @@ from schemas.fee_assignment import (
     AssignedFeeStructureDetailsResult,
 )
 from schemas.student_fee import (
-    FeePaymentHeadStatus, FeePaymentMonthStatus, FeePaymentStatusListResult,
+    FeePaymentAdjustmentStatus, FeePaymentHeadStatus, FeePaymentMonthStatus, FeePaymentStatusListResult,
     StudentFeeListResult, StudentFeeWrite,
 )
-from schemas.enums import StudentFeeStatus
+from schemas.enums import FeeAdjustmentType, StudentFeeStatus
 from utils.fee_months import session_months
 
 router = APIRouter(tags=['Configure Fees'])
@@ -179,6 +182,55 @@ def get_student_fees(school_id: int, session_id: int, fee_id: int | None = None,
     return {'message': 'Student fee records fetched successfully', 'total': len(items), 'data': items}
 
 
+def carry_forward_head(db, scope, first_month):
+    carry_forward = db.query(StudentCarryForward).filter_by(**scope, month=first_month).one_or_none()
+    zero = Decimal("0.00")
+    return FeePaymentHeadStatus(
+        fee_head_id=None,
+        fee_head_name="Carry Forward",
+        tag=CARRY_FORWARD_TAG,
+        source_id=carry_forward.id if carry_forward is not None else None,
+        payable_amount=carry_forward.amount if carry_forward is not None else zero,
+        paid_amount=carry_forward.paid_amount if carry_forward is not None else zero,
+        due_amount=carry_forward.unpaid_amount if carry_forward is not None else zero,
+    )
+
+
+def fee_adjustments_by_month(db, scope, months):
+    heads = defaultdict(list)
+    adjustments = (
+        db.query(
+            StudentFeeAdjustment.id,
+            StudentFeeAdjustment.type,
+            StudentFeeAdjustment.amount,
+            StudentFeeAdjustment.date,
+            StudentFeeAdjustment.frequency,
+            StudentFeeAdjustment.discount_type,
+        )
+        .filter_by(**scope)
+        .order_by(StudentFeeAdjustment.date, StudentFeeAdjustment.id)
+        .all()
+    )
+    for adjustment in adjustments:
+        month = adjustment.date.strftime("%Y-%m")
+        if month not in months:
+            continue
+        amount = -adjustment.amount if adjustment.type == FeeAdjustmentType.DISCOUNT else adjustment.amount
+        heads[month].append(FeePaymentAdjustmentStatus(
+            fee_head_id=None,
+            fee_head_name=adjustment.type,
+            tag=adjustment.type.lower(),
+            source_id=adjustment.id,
+            frequency=adjustment.frequency,
+            date=adjustment.date,
+            discount_type=adjustment.discount_type,
+            payable_amount=amount,
+            paid_amount=Decimal("0.00"),
+            due_amount=amount,
+        ))
+    return heads
+
+
 @router.get('/fee_payments', response_model=FeePaymentStatusListResult)
 def get_fee_payment_status(school_id: int, session_id: int, student_id: int,
                            fee_month: str | None = None,
@@ -195,6 +247,10 @@ def get_fee_payment_status(school_id: int, session_id: int, student_id: int,
             raise HTTPException(422, 'fee_month is not part of this academic session')
         months = [fee_month]
 
+    scope = dict(school_id=school_id, session_id=session_id, student_id=student_id)
+    first_month = session.start_date.strftime("%Y-%m")
+    carry_forward = carry_forward_head(db, scope, first_month) if first_month in months else None
+    adjustment_heads = fee_adjustments_by_month(db, scope, set(months))
     assignments = db.query(FeeAssignment, FeeConfigurationHead).join(
         FeeConfigurationHead, FeeConfigurationHead.id == FeeAssignment.fee_configure_id,
     ).filter(
@@ -251,9 +307,14 @@ def get_fee_payment_status(school_id: int, session_id: int, student_id: int,
                 paid_amount=paid,
                 due_amount=values['payable_amount'] - paid,
             ))
-        payable_amount = sum((head.payable_amount for head in fee_heads), Decimal('0.00'))
-        paid_amount = sum((head.paid_amount for head in fee_heads), Decimal('0.00'))
-        due_amount = payable_amount - paid_amount
+        monthly_adjustments = adjustment_heads[month]
+        month_carry_forward = carry_forward if month == first_month else None
+        total_heads = fee_heads + monthly_adjustments
+        if month_carry_forward is not None:
+            total_heads.append(month_carry_forward)
+        payable_amount = max(Decimal('0.00'), sum((head.payable_amount for head in total_heads), Decimal('0.00')))
+        paid_amount = sum((head.paid_amount for head in total_heads), Decimal('0.00'))
+        due_amount = max(Decimal('0.00'), payable_amount - paid_amount)
         data.append(FeePaymentMonthStatus(
             fee_month=month,
             payable_amount=payable_amount,
@@ -263,8 +324,14 @@ def get_fee_payment_status(school_id: int, session_id: int, student_id: int,
                 StudentFeeStatus.UNPAID if paid_amount == 0 else StudentFeeStatus.PARTIAL
             ),
             fee_heads=fee_heads,
+            fee_adjustment=monthly_adjustments,
+            carry_forward=month_carry_forward,
         ))
-    return {'message': 'Fee payment status fetched successfully', 'total': len(data), 'data': data}
+    return {
+        'message': 'Fee payment status fetched successfully',
+        'total': len(data),
+        'data': data,
+    }
 
 
 def find_assignment(db, school_id, session_id, assignment_id):

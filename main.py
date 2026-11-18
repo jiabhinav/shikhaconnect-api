@@ -12,6 +12,7 @@ from routers.super_admin import router as super_admin_router
 from routers.users import router as user_router
 from routers.teachers import router as teacher_router
 
+from database.student_carry_forward_table import backfill_student_carry_forwards
 from database.table_init import ensure_all_tables
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 try:
     with engine.begin() as connection:
         ensure_all_tables(connection)
+        backfill_student_carry_forwards(connection)
     sync_missing_columns()
 except Exception:
     logger.exception("Database initialization failed; database requests will retry table creation")

@@ -1,6 +1,9 @@
-from sqlalchemy import Column, Date, ForeignKey, Integer, Float, String, UniqueConstraint, CheckConstraint
+from sqlalchemy import Column, Date, ForeignKey, Integer, Float, String, UniqueConstraint, CheckConstraint, event, select
 from database.database import Base
 from sqlalchemy.orm import relationship
+
+from models.session import Session as SchoolSession
+from models.student_carry_forward import StudentCarryForward
 
 
 class Student(Base):
@@ -79,6 +82,24 @@ class Student(Base):
     login = relationship("StudentLogin", uselist=False)
     addresses = relationship("StudentAddressRecord", cascade="all, delete-orphan")
     documents = relationship("StudentDocument", cascade="all, delete-orphan")
+
+
+@event.listens_for(Student, "after_insert")
+def create_student_carry_forward(mapper, connection, student):
+    session_start = connection.execute(
+        select(SchoolSession.start_date).where(
+            SchoolSession.id == student.session_id,
+            SchoolSession.school_id == student.school_id,
+        )
+    ).scalar_one()
+    connection.execute(
+        StudentCarryForward.__table__.insert().values(
+            school_id=student.school_id,
+            session_id=student.session_id,
+            student_id=student.id,
+            month=session_start.strftime("%Y-%m"),
+        )
+    )
 
 
 class StudentLogin(Base):

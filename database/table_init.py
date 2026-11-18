@@ -15,6 +15,7 @@ from database.fee_assignment_table import (ensure_fee_assignment_section_column,
                                            migrate_fee_assignment_configuration_reference,
                                            remove_fee_assignment_admission_amount,
                                            migrate_fee_assignment_class_configuration_uniqueness)
+from database.student_carry_forward_table import migrate_student_carry_forwards
 from database.student_table import migrate_optional_student_identity_fields, migrate_student_form_fields, migrate_student_dropdown_storage
 from database.student_table import migrate_student_status_choices
 from database.teacher_table import migrate_teacher_profile_image, migrate_optional_teacher_city, migrate_optional_teacher_identity, migrate_teacher_logins, migrate_teacher_employee_codes
@@ -92,6 +93,8 @@ def ensure_all_tables(connection):
     allow_legacy_service_name_null(connection)
     remove_legacy_session_year_index(connection)
     existing = set(inspect(connection).get_table_names())
+    if "student_carry_forwards" in existing:
+        migrate_student_carry_forwards(connection)
     if set(Base.metadata.tables).issubset(existing):
         _drop_legacy_session_month_date(connection)
         _normalize_session_month_format(connection)

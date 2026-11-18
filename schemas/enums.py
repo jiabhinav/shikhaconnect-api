@@ -17,3 +17,19 @@ class PaymentMode(str, Enum):
     DEMAND_DRAFT = "Demand-Draft"
     BANK_DEPOSIT = "Bank Deposit"
     OTHERS = "Others"
+
+
+class FeeAdjustmentType(str, Enum):
+    DISCOUNT = "Discount"
+    PENALTY = "Penalty"
+
+
+class FeeAdjustmentFrequency(str, Enum):
+    ONE_TIME = "One Time"
+    MONTHLY = "Monthly"
+
+
+class FeeDiscountType(str, Enum):
+    CHARITY = "Charity"
+    SIBLING = "Sibling"
+    OTHERS = "Others"

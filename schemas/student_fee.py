@@ -1,7 +1,8 @@
+from datetime import date
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
-from schemas.enums import PaymentMode, StudentFeeStatus
+from schemas.enums import FeeAdjustmentFrequency, FeeDiscountType, PaymentMode, StudentFeeStatus
 
 
 class StudentFeeWrite(BaseModel):
@@ -82,11 +83,19 @@ class StudentFeeListResult(BaseModel):
 
 
 class FeePaymentHeadStatus(BaseModel):
-    fee_head_id: int
+    fee_head_id: int | None
     fee_head_name: str
+    tag: str | None = None
+    source_id: int | None = None
+    frequency: FeeAdjustmentFrequency | None = None
     payable_amount: Decimal
     paid_amount: Decimal
     due_amount: Decimal
+
+
+class FeePaymentAdjustmentStatus(FeePaymentHeadStatus):
+    date: date
+    discount_type: FeeDiscountType | None
 
 
 class FeePaymentMonthStatus(BaseModel):
@@ -95,7 +104,14 @@ class FeePaymentMonthStatus(BaseModel):
     paid_amount: Decimal
     due_amount: Decimal
     status: StudentFeeStatus
+    fee_adjustment: list[FeePaymentAdjustmentStatus]
+    carry_forward: FeePaymentHeadStatus | None
     fee_heads: list[FeePaymentHeadStatus]
+
+    @computed_field
+    @property
+    def total_due_amount(self) -> Decimal:
+        return self.due_amount
 
 
 class FeePaymentStatusListResult(BaseModel):
