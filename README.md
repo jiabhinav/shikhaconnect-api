@@ -397,7 +397,8 @@ returns both types when the filter is omitted. The transport GET defaults to
 `payment_due_days` for `school_fee` and `payment_due_day` for `transport`.
 POST and PUT also accept the alternate spelling when only one due field has a
 value. The selected fee type determines validation and the response field.
-Each write affects its own panel. Duplicate POST requests return 409.
+A session can have one record per fee type. POST returns 409 when a record
+already exists for the selected type, even if the submitted settings differ.
 PUT returns 404 when the panel has not been created.
 Missing settings or inaccessible sessions return 404, invalid input 422.
 Responses use `status`, `message`, and `data`, including the settings ID, `school_id`, and `session_id`.

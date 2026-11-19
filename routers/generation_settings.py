@@ -45,7 +45,9 @@ def save_settings(db, school_id, session_id, payload, *, create):
         item = db.query(model).filter_by(school_id=school_id, session_id=session_id).first()
         if create:
             if item is not None:
-                raise HTTPException(409, "Generation settings already exist for this session")
+                raise HTTPException(
+                    409, f"Generation settings already exist for {payload.fee_type.value} in this session"
+                )
             item = model(school_id=session.school_id, session_id=session_id)
         elif item is None:
             raise HTTPException(404, "Generation settings have not been saved for this session")

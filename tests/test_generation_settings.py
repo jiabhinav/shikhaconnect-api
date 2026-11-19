@@ -90,6 +90,25 @@ class GenerationSettingsTests(unittest.TestCase):
             data = response.json()['data']
             self.assertEqual(fetched.json()['data'], [data] if endpoint == 'fee-generation-settings' else data)
 
+    def test_same_endpoint_creates_one_record_per_fee_type(self):
+        url = '/schools/fee-generation-settings'
+        params = {'school_id': 1, 'session_id': self.session_id()}
+        payload = {'generation_day': 3, 'payment_due_day': 10}
+        created = []
+        for fee_type in ('school_fee', 'transport'):
+            body = dict(payload, fee_type=fee_type)
+            response = self.client.post(url, params=params, json=body)
+            self.assertEqual(response.status_code, 201, response.text)
+            created.append(response.json()['data'])
+
+            duplicate = self.client.post(url, params=params, json=dict(body, generation_day=4))
+            self.assertEqual(duplicate.status_code, 409, duplicate.text)
+            self.assertIn(fee_type, duplicate.json()['detail'])
+
+        response = self.client.get(url, params=params)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data'], created)
+
     def test_access_and_validation(self):
         sid = self.session_id()
         payload = {'generation_day': 1, 'payment_due_days': 5}
