@@ -366,6 +366,8 @@ can access settings under **Schools**.
 
 Base path: `/schools`. Pass required `school_id` and `session_id` query parameters
 on each request, for example `/schools/fee-generation-settings?school_id=18&session_id=2`.
+POST and PUT also accept an optional `school_id` in the JSON body. When
+supplied, it must match the URL.
 
 - `POST /fee-generation-settings`: create the fee panel (201).
 - `PUT /fee-generation-settings`: update the saved fee panel (200).
@@ -376,11 +378,11 @@ on each request, for example `/schools/fee-generation-settings?school_id=18&sess
 
 Fee payload:
 ```json
-{"generation_day":1,"payment_due_days":10,"late_fee_enabled":false}
+{"school_id":18,"generation_day":1,"payment_due_days":10,"late_fee_enabled":false}
 ```
 Transport payload:
 ```json
-{"generation_day":1,"payment_due_day":15,"late_fee_enabled":false}
+{"school_id":18,"generation_day":1,"payment_due_day":15,"late_fee_enabled":false}
 ```
 
 `generation_day` and transport `payment_due_day` are days of month (1–31).

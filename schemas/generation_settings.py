@@ -23,6 +23,10 @@ PaymentDueDay = Annotated[int, Field(ge=1, le=31, strict=True)]
 
 
 class GenerationSettingsWrite(GenerationBase):
+    school_id: int | None = Field(
+        default=None, gt=0, strict=True, description="Must match the school_id in the request URL."
+    )
+
     @model_validator(mode="after")
     def require_late_fee_fields(self):
         if self.late_fee_enabled and (self.late_fee_amount is None or self.min_due_amount is None):

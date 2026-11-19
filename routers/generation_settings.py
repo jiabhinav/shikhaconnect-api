@@ -23,6 +23,8 @@ def settings_session(school_id: int, session_id: int, db: Session = Depends(get_
 
 
 def save_settings(db, model, school_id, session_id, payload, *, create):
+    if payload.school_id is not None and payload.school_id != school_id:
+        raise HTTPException(422, "Body school_id must match the school_id in the request URL")
     try:
         # Serialize writes for this session.
         session = db.query(SchoolSession).filter_by(id=session_id, school_id=school_id).with_for_update().first()
@@ -35,7 +37,7 @@ def save_settings(db, model, school_id, session_id, payload, *, create):
             item = model(school_id=session.school_id, session_id=session_id)
         elif item is None:
             raise HTTPException(404, "Generation settings have not been saved for this session")
-        for key, value in payload.model_dump(exclude={"fee_type"}).items():
+        for key, value in payload.model_dump(exclude={"fee_type", "school_id"}).items():
             setattr(item, key, value)
         db.add(item)
         db.commit()

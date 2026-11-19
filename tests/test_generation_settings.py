@@ -22,7 +22,8 @@ class GenerationSettingsTests(unittest.TestCase):
             url = f'/schools/school/1/sessions/{sid}/{endpoint}'
             self.assertEqual(self.client.get(url).status_code, 404)
             payload = {
-                'generation_day': 1, due: 10, 'late_fee_enabled': True, 'fee_type': fee_type,
+                'school_id': 1, 'generation_day': 1, due: 10,
+                'late_fee_enabled': True, 'fee_type': fee_type,
                 'late_fee_amount': '125.50', 'min_due_amount': 1, 'late_fee_type': 'daily',
             }
             for changes in (
@@ -32,10 +33,12 @@ class GenerationSettingsTests(unittest.TestCase):
                 {'fee_type': 'transport' if fee_type == 'school_fee' else 'school_fee'},
             ):
                 self.assertEqual(self.client.put(url, json=payload | changes).status_code, 422)
+            self.assertEqual(self.client.post(url, json=dict(payload, school_id=2)).status_code, 422)
             self.assertEqual(self.client.put(url, json=payload).status_code, 404)
             response = self.client.post(url, json=payload)
             self.assertEqual(response.status_code, 201, response.text)
             self.assertEqual(self.client.post(url, json=payload).status_code, 409)
+            self.assertEqual(self.client.put(url, json=dict(payload, school_id=2)).status_code, 422)
             item = response.json()['data']
             self.assertEqual(item['late_fee_amount'], '125.50')
             self.assertEqual(item['min_due_amount'], 1)
