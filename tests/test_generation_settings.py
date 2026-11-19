@@ -20,7 +20,11 @@ class GenerationSettingsTests(unittest.TestCase):
             ('transport-generation-settings', 'payment_due_day', 'transport'),
         ):
             url = f'/schools/school/1/sessions/{sid}/{endpoint}'
-            self.assertEqual(self.client.get(url).status_code, 404)
+            is_list = endpoint == 'fee-generation-settings'
+            empty = self.client.get(url)
+            self.assertEqual(empty.status_code, 200 if is_list else 404)
+            if is_list:
+                self.assertEqual(empty.json()['data'], [])
             payload = {
                 'school_id': 1, 'generation_day': 1, due: 10,
                 'late_fee_enabled': True, 'fee_type': fee_type,
@@ -47,10 +51,11 @@ class GenerationSettingsTests(unittest.TestCase):
             self.assertEqual(item['school_id'], 1)
             for field in ('created_at', 'updated_at'):
                 self.assertEqual(date.fromisoformat(item[field]).isoformat(), item[field])
-            self.assertEqual(self.client.get(url).json()['data'], item)
+            self.assertEqual(self.client.get(url).json()['data'], [item] if is_list else item)
             response = self.client.put(url, json=dict(payload, min_due_amount=100, late_fee_type='monthly'))
             self.assertEqual(response.json()['data']['min_due_amount'], 100)
-            self.assertEqual(self.client.get(url).json()['data']['late_fee_type'], 'monthly')
+            fetched = self.client.get(url).json()['data']
+            self.assertEqual((fetched[0] if is_list else fetched)['late_fee_type'], 'monthly')
             response = self.client.put(url, json=dict(payload, generation_day=5, late_fee_enabled=False))
             self.assertEqual(response.json()['data']['id'], item['id'])
             self.assertFalse(response.json()['data']['late_fee_enabled'])
@@ -79,7 +84,8 @@ class GenerationSettingsTests(unittest.TestCase):
             self.assertEqual(response.json()['data'][due_field], 15)
             fetched = self.client.get(url, params=dict(params, fee_type=fee_type))
             self.assertEqual(fetched.status_code, 200, fetched.text)
-            self.assertEqual(fetched.json()['data'], response.json()['data'])
+            data = response.json()['data']
+            self.assertEqual(fetched.json()['data'], [data] if endpoint == 'fee-generation-settings' else data)
 
     def test_access_and_validation(self):
         sid = self.session_id()
@@ -131,6 +137,8 @@ class GenerationSettingsTests(unittest.TestCase):
             response = self.client.get(url)
             self.assertEqual(response.status_code, 200, response.text)
             data = response.json()['data']
+            if endpoint == 'fee-generation-settings':
+                data = data[0]
             self.assertTrue(data['late_fee_enabled'])
             self.assertEqual(data['school_id'], 1)
             self.assertIsNone(data['late_fee_amount'])

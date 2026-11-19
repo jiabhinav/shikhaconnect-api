@@ -371,7 +371,7 @@ supplied, it must match the URL.
 
 - `POST /fee-generation-settings`: create the fee panel (201).
 - `PUT /fee-generation-settings`: update the saved fee panel (200).
-- `GET /fee-generation-settings`: retrieve the saved fee panel.
+- `GET /fee-generation-settings`: return matching settings in a `data` array. A valid session with no saved settings returns an empty array.
 - `POST /transport-generation-settings`: create the transport panel (201).
 - `PUT /transport-generation-settings`: update the saved transport panel (200).
 - `GET /transport-generation-settings`: retrieve the saved transport panel.

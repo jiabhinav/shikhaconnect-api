@@ -8,7 +8,12 @@ from models.session import Session as SchoolSession
 from models.user import User, UserRole
 from models.generation_settings import FeeGenerationSettings, TransportGenerationSettings
 from schemas.enums import FeeType
-from schemas.generation_settings import FeeSettingsWrite, TransportSettingsWrite, GenerationSettingsResult
+from schemas.generation_settings import (
+    FeeSettingsWrite,
+    GenerationSettingsListResult,
+    GenerationSettingsResult,
+    TransportSettingsWrite,
+)
 
 router = APIRouter()
 
@@ -81,12 +86,14 @@ def save_fee_settings(school_id: int, session_id: int, payload: FeeSettingsWrite
     return save_settings(db, school_id, session_id, payload, create=False)
 
 
-@router.get("/fee-generation-settings", response_model=GenerationSettingsResult)
+@router.get("/fee-generation-settings", response_model=GenerationSettingsListResult)
 def get_fee_settings(
     school_id: int, session_id: int, fee_type: FeeType = FeeType.SCHOOL_FEE,
     db: Session = Depends(settings_session),
 ):
-    return read_settings(db, SETTINGS_MODELS[fee_type], school_id, session_id)
+    model = SETTINGS_MODELS[fee_type]
+    items = db.query(model).filter_by(school_id=school_id, session_id=session_id).all()
+    return {"message": "Generation settings fetched successfully", "data": items}
 
 
 @router.post("/transport-generation-settings", response_model=GenerationSettingsResult, status_code=201)

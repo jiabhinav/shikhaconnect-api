@@ -95,3 +95,9 @@ class GenerationSettingsResult(BaseModel):
     status: str = "success"
     message: str
     data: FeeSettingsResponse | TransportSettingsResponse
+
+
+class GenerationSettingsListResult(BaseModel):
+    status: str = "success"
+    message: str
+    data: list[FeeSettingsResponse | TransportSettingsResponse]
