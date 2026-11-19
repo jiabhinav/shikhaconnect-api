@@ -190,6 +190,7 @@ def _normalize_session_month_format(connection):
 
 def _add_generation_settings_columns(connection, existing):
     column_definitions = {
+        "school_id": "INTEGER REFERENCES schools(id) ON DELETE CASCADE",
         "late_fee_amount": "NUMERIC(12, 2) CHECK (late_fee_amount > 0)",
         "min_due_amount": "INTEGER CHECK (min_due_amount BETWEEN 1 AND 100)",
         "late_fee_type": "VARCHAR(7) CHECK (late_fee_type IN ('daily', 'monthly'))",
@@ -208,3 +209,10 @@ def _add_generation_settings_columns(connection, existing):
         for name, definition in column_definitions.items():
             if name not in columns:
                 connection.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {name} {definition}")
+        if "school_id" not in columns:
+            connection.exec_driver_sql(
+                f"UPDATE {table_name} SET school_id = "
+                f"(SELECT sessions.school_id FROM sessions WHERE sessions.id = {table_name}.session_id)"
+            )
+            if connection.dialect.name == "postgresql":
+                connection.exec_driver_sql(f"ALTER TABLE {table_name} ALTER COLUMN school_id SET NOT NULL")

@@ -41,6 +41,7 @@ class GenerationSettingsTests(unittest.TestCase):
             self.assertEqual(item['min_due_amount'], 1)
             self.assertEqual(item['late_fee_type'], 'daily')
             self.assertEqual(item['fee_type'], fee_type)
+            self.assertEqual(item['school_id'], 1)
             for field in ('created_at', 'updated_at'):
                 self.assertEqual(date.fromisoformat(item[field]).isoformat(), item[field])
             self.assertEqual(self.client.get(url).json()['data'], item)
@@ -59,6 +60,7 @@ class GenerationSettingsTests(unittest.TestCase):
         url = f'/schools/school/1/sessions/{sid}/fee-generation-settings'
         other = f'/schools/school/2/sessions/{sid}/fee-generation-settings'
         self.assertEqual(self.client.put(other, json=payload).status_code, 404)
+        self.assertEqual(self.client.post(other, json=payload).status_code, 404)
         for values in ({'generation_day':0}, {'generation_day':32}, {'payment_due_days':-1}, {'generation_day':True}):
             self.assertEqual(self.client.put(url, json=dict(payload, **values)).status_code, 422)
         transport = f'/schools/school/1/sessions/{sid}/transport-generation-settings'
@@ -103,6 +105,7 @@ class GenerationSettingsTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.text)
             data = response.json()['data']
             self.assertTrue(data['late_fee_enabled'])
+            self.assertEqual(data['school_id'], 1)
             self.assertIsNone(data['late_fee_amount'])
             self.assertIsNone(data['min_due_amount'])
             self.assertIsNone(data['late_fee_type'])

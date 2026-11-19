@@ -360,8 +360,8 @@ Responses use `status`, `message`, and `data`; each house includes `id`,
 Two auto-created tables, `fee_generation_settings` and
 `transport_generation_settings`, each store one record per school session.
 Each has an auto-increment ID and unique `session_id` foreign key to `sessions.id`
-with cascading deletion. The school is derived from that session, avoiding
-inconsistent school/session pairs. Assigned Admins/Sub Admins and Super Admins
+with cascading deletion. Each record also stores the `school_id` from its
+linked session. Assigned Admins/Sub Admins and Super Admins
 can access settings under **Schools**.
 
 Base path: `/schools`. Pass required `school_id` and `session_id` query parameters
@@ -392,7 +392,7 @@ on the transport endpoint. Responses include this value. A mismatched value retu
 Each write affects its own panel. Duplicate POST requests return 409.
 PUT returns 404 when the panel has not been created.
 Missing settings or inaccessible sessions return 404, invalid input 422.
-Responses use `status`, `message`, and `data`, including ID and session ID.
+Responses use `status`, `message`, and `data`, including the settings ID, `school_id`, and `session_id`.
 The `created_at` and `updated_at` fields use YYYY-MM-DD dates. Historical
 records have null dates until the corresponding operation is recorded.
 These endpoints only store configuration; they do not generate invoices, run

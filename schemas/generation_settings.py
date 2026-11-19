@@ -44,6 +44,7 @@ class FeeSettingsResponse(GenerationBase):
     fee_type: Literal[FeeType.SCHOOL_FEE] = FeeType.SCHOOL_FEE
     model_config = ConfigDict(from_attributes=True)
     id: int
+    school_id: int
     session_id: int
     created_at: date | None
     updated_at: date | None
@@ -54,6 +55,7 @@ class TransportSettingsResponse(GenerationBase):
     fee_type: Literal[FeeType.TRANSPORT] = FeeType.TRANSPORT
     model_config = ConfigDict(from_attributes=True)
     id: int
+    school_id: int
     session_id: int
     created_at: date | None
     updated_at: date | None
