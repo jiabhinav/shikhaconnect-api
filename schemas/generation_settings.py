@@ -97,7 +97,12 @@ class GenerationSettingsResult(BaseModel):
     data: FeeSettingsResponse | TransportSettingsResponse
 
 
-class GenerationSettingsListResult(BaseModel):
+class SettingsByFeeType(BaseModel):
+    school_fee: FeeSettingsResponse | None = None
+    transport: TransportSettingsResponse | None = None
+
+
+class GenerationSettingsByFeeTypeResult(BaseModel):
     status: str = "success"
     message: str
-    data: list[FeeSettingsResponse | TransportSettingsResponse]
+    data: SettingsByFeeType

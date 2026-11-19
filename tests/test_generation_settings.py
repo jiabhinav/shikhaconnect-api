@@ -1,7 +1,9 @@
 import unittest
 from datetime import date
 import test_sessions
-from models.generation_settings import FeeGenerationSettings, TransportGenerationSettings
+from sqlalchemy import inspect
+
+from models.generation_settings import FeeGenerationSettings
 from models.user import UserRole
 from database.table_init import ensure_all_tables
 
@@ -20,11 +22,10 @@ class GenerationSettingsTests(unittest.TestCase):
             ('transport-generation-settings', 'payment_due_day', 'transport'),
         ):
             url = f'/schools/school/1/sessions/{sid}/{endpoint}'
-            is_list = endpoint == 'fee-generation-settings'
-            empty = self.client.get(url)
-            self.assertEqual(empty.status_code, 200 if is_list else 404)
-            if is_list:
-                self.assertEqual(empty.json()['data'], [])
+            params = {'fee_type': fee_type}
+            empty = self.client.get(url, params=params)
+            self.assertEqual(empty.status_code, 200)
+            self.assertEqual(empty.json()['data'], {'school_fee': None, 'transport': None})
             payload = {
                 'school_id': 1, 'generation_day': 1, due: 10,
                 'late_fee_enabled': True, 'fee_type': fee_type,
@@ -51,19 +52,23 @@ class GenerationSettingsTests(unittest.TestCase):
             self.assertEqual(item['school_id'], 1)
             for field in ('created_at', 'updated_at'):
                 self.assertEqual(date.fromisoformat(item[field]).isoformat(), item[field])
-            self.assertEqual(self.client.get(url).json()['data'], [item] if is_list else item)
+            fetched = self.client.get(url, params=params).json()['data']
+            expected = dict.fromkeys(('school_fee', 'transport'))
+            expected[fee_type] = item
+            self.assertEqual(fetched, expected)
             response = self.client.put(url, json=dict(payload, min_due_amount=100, late_fee_type='monthly'))
             self.assertEqual(response.json()['data']['min_due_amount'], 100)
             fetched = self.client.get(url).json()['data']
-            self.assertEqual((fetched[0] if is_list else fetched)['late_fee_type'], 'monthly')
+            self.assertEqual(fetched[fee_type]['late_fee_type'], 'monthly')
             response = self.client.put(url, json=dict(payload, generation_day=5, late_fee_enabled=False))
             self.assertEqual(response.json()['data']['id'], item['id'])
             self.assertFalse(response.json()['data']['late_fee_enabled'])
         combined = self.client.get(f'/schools/fee-generation-settings?school_id=1&session_id={sid}')
         self.assertEqual(combined.status_code, 200, combined.text)
-        self.assertEqual([item['fee_type'] for item in combined.json()['data']], ['school_fee', 'transport'])
-        self.assertEqual(self.db.query(FeeGenerationSettings).count(), 1)
-        self.assertEqual(self.db.query(TransportGenerationSettings).count(), 1)
+        data = combined.json()['data']
+        self.assertEqual(data['school_fee']['fee_type'], 'school_fee')
+        self.assertEqual(data['transport']['fee_type'], 'transport')
+        self.assertEqual(self.db.query(FeeGenerationSettings).count(), 2)
 
     def test_explicit_fee_type_selects_settings_on_either_endpoint(self):
         sid = self.session_id()
@@ -88,18 +93,20 @@ class GenerationSettingsTests(unittest.TestCase):
             fetched = self.client.get(url, params=dict(params, fee_type=fee_type))
             self.assertEqual(fetched.status_code, 200, fetched.text)
             data = response.json()['data']
-            self.assertEqual(fetched.json()['data'], [data] if endpoint == 'fee-generation-settings' else data)
+            expected = dict.fromkeys(('school_fee', 'transport'))
+            expected[fee_type] = data
+            self.assertEqual(fetched.json()['data'], expected)
 
     def test_same_endpoint_creates_one_record_per_fee_type(self):
         url = '/schools/fee-generation-settings'
         params = {'school_id': 1, 'session_id': self.session_id()}
         payload = {'generation_day': 3, 'payment_due_day': 10}
-        created = []
+        created = {}
         for fee_type in ('school_fee', 'transport'):
             body = dict(payload, fee_type=fee_type)
             response = self.client.post(url, params=params, json=body)
             self.assertEqual(response.status_code, 201, response.text)
-            created.append(response.json()['data'])
+            created[fee_type] = response.json()['data']
 
             duplicate = self.client.post(url, params=params, json=dict(body, generation_day=4))
             self.assertEqual(duplicate.status_code, 409, duplicate.text)
@@ -108,6 +115,9 @@ class GenerationSettingsTests(unittest.TestCase):
         response = self.client.get(url, params=params)
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()['data'], created)
+        transport = self.client.get('/schools/transport-generation-settings', params=params)
+        self.assertEqual(transport.status_code, 200, transport.text)
+        self.assertEqual(transport.json()['data'], created)
 
     def test_access_and_validation(self):
         sid = self.session_id()
@@ -128,45 +138,83 @@ class GenerationSettingsTests(unittest.TestCase):
             self.assertEqual(self.client.put(url, json=payload).status_code, 403)
             self.assertEqual(self.client.get(url).status_code, 403)
 
-    def test_missing_tables_recreated(self):
-        for model in (FeeGenerationSettings, TransportGenerationSettings):
-            model.__table__.drop(self.engine)
+    def test_missing_table_recreated(self):
+        FeeGenerationSettings.__table__.drop(self.engine)
         with self.engine.begin() as connection:
             ensure_all_tables(connection)
+            self.assertFalse(inspect(connection).has_table('transport_generation_settings'))
         self.assertEqual(self.db.query(FeeGenerationSettings).count(), 0)
-        self.assertEqual(self.db.query(TransportGenerationSettings).count(), 0)
 
-    def test_startup_adds_columns_to_existing_settings(self):
+    def test_startup_merges_existing_settings(self):
         sid = self.session_id()
-        resources = (
-            (FeeGenerationSettings, 'fee-generation-settings', 'payment_due_days'),
-            (TransportGenerationSettings, 'transport-generation-settings', 'payment_due_day'),
-        )
         with self.engine.begin() as connection:
-            for model, _, due in resources:
-                model.__table__.drop(connection)
-                table = model.__tablename__
+            FeeGenerationSettings.__table__.drop(connection)
+            for table, due_field, due in (
+                ('fee_generation_settings', 'payment_due_days', 10),
+                ('transport_generation_settings', 'payment_due_day', 15),
+            ):
                 connection.exec_driver_sql(
                     f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, session_id INTEGER UNIQUE, "
-                    f"generation_day INTEGER, {due} INTEGER, late_fee_enabled BOOLEAN)"
+                    f"generation_day INTEGER, {due_field} INTEGER, late_fee_enabled BOOLEAN, "
+                    "late_fee_amount NUMERIC(12, 2), min_due_amount INTEGER, late_fee_type VARCHAR(7))"
                 )
                 connection.exec_driver_sql(
-                    f"INSERT INTO {table} VALUES (1, ?, 1, 10, true)", (sid,)
+                    f"INSERT INTO {table} VALUES (8, ?, 1, ?, true, 125.50, 25, 'monthly')", (sid, due)
                 )
             ensure_all_tables(connection)
             ensure_all_tables(connection)
+            self.assertFalse(inspect(connection).has_table("transport_generation_settings"))
+            stored = connection.exec_driver_sql(
+                "SELECT fee_type, payment_due_days, payment_due_day "
+                "FROM fee_generation_settings ORDER BY fee_type"
+            ).all()
+            self.assertEqual(stored, [('school_fee', 10, None), ('transport', None, 15)])
 
-        for _, endpoint, _ in resources:
-            url = f'/schools/school/1/sessions/{sid}/{endpoint}'
-            response = self.client.get(url)
-            self.assertEqual(response.status_code, 200, response.text)
-            data = response.json()['data']
-            if endpoint == 'fee-generation-settings':
-                data = data[0]
-            self.assertTrue(data['late_fee_enabled'])
-            self.assertEqual(data['school_id'], 1)
-            self.assertIsNone(data['late_fee_amount'])
-            self.assertIsNone(data['min_due_amount'])
-            self.assertIsNone(data['late_fee_type'])
-            self.assertIsNone(data['created_at'])
-            self.assertIsNone(data['updated_at'])
+        url = f'/schools/school/1/sessions/{sid}/fee-generation-settings'
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()['data']
+        school, transport = data['school_fee'], data['transport']
+        self.assertEqual(school['id'], 8)
+        self.assertNotEqual(transport['id'], school['id'])
+        for item in (school, transport):
+            self.assertTrue(item['late_fee_enabled'])
+            self.assertEqual(item['school_id'], 1)
+            self.assertEqual(item['late_fee_amount'], '125.50')
+            self.assertEqual(item['min_due_amount'], 25)
+            self.assertEqual(item['late_fee_type'], 'monthly')
+            self.assertIsNone(item['created_at'])
+            self.assertIsNone(item['updated_at'])
+
+    def test_startup_drops_legacy_transport_table_after_prior_merge(self):
+        sid = self.session_id()
+        session = self.client.post(
+            "/schools/school/1/sessions",
+            json={"name": "2027-2028", "start_date": "2027-04-01", "end_date": "2028-03-31"},
+        )
+        self.assertEqual(session.status_code, 201, session.text)
+        missing_sid = session.json()["data"]["id"]
+        response = self.client.post(
+            "/schools/transport-generation-settings",
+            params={"school_id": 1, "session_id": sid},
+            json={"generation_day": 3, "payment_due_day": 20},
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+
+        with self.engine.begin() as connection:
+            connection.exec_driver_sql(
+                "CREATE TABLE transport_generation_settings (id INTEGER PRIMARY KEY, "
+                "session_id INTEGER UNIQUE, generation_day INTEGER, payment_due_day INTEGER, late_fee_enabled BOOLEAN)"
+            )
+            connection.exec_driver_sql(
+                "INSERT INTO transport_generation_settings VALUES (1, ?, 3, 10, false), (2, ?, 3, 15, false)",
+                (sid, missing_sid),
+            )
+            ensure_all_tables(connection)
+            ensure_all_tables(connection)
+            self.assertFalse(inspect(connection).has_table("transport_generation_settings"))
+            rows = connection.exec_driver_sql(
+                "SELECT session_id, payment_due_day FROM fee_generation_settings "
+                "WHERE fee_type = 'transport' ORDER BY session_id"
+            ).all()
+            self.assertEqual(rows, [(sid, 20), (missing_sid, 15)])

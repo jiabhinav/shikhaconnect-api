@@ -18,7 +18,7 @@ from models.fee_category import FeeCategory
 from models.subject import Subject
 from models.stream import Stream
 from models.house import House
-from models.generation_settings import FeeGenerationSettings, TransportGenerationSettings
+from models.generation_settings import FeeGenerationSettings
 from models.timetable_settings import TimetableSettings
 import test_school_creation
 
@@ -41,8 +41,10 @@ class SchoolDeletionTests(TestCase):
         section = Section(**values)
         self.db.add_all([caste, fee, school_class, section, Subject(**values),
                          Stream(**values), House(**values), SchoolAssets(school_id=school_id),
-                         FeeGenerationSettings(session_id=session.id, generation_day=1, payment_due_days=5),
-                         TransportGenerationSettings(session_id=session.id, generation_day=1, payment_due_day=5),
+                         FeeGenerationSettings(school_id=school_id, session_id=session.id, generation_day=1,
+                                               payment_due_days=5),
+                         FeeGenerationSettings(school_id=school_id, session_id=session.id, generation_day=1,
+                                               fee_type="transport", payment_due_day=5),
                          TimetableSettings(session_id=session.id, summer_start_time=time(8), summer_end_time=time(14),
                                            winter_start_time=time(9), winter_end_time=time(15),
                                            minimum_attendance_percentage=75, term_attendance_enabled=False)])
@@ -94,7 +96,7 @@ class SchoolDeletionTests(TestCase):
                         self.assertEqual(self.db.execute(select(table).where(table.c.school_id == other_id)).all(),
                                          [r for r in before[table.name] if r._mapping['school_id'] == other_id])
                 for model in (StudentAddressRecord, StaffAddress, StaffPermission,
-                              FeeGenerationSettings, TransportGenerationSettings, TimetableSettings):
+                              TimetableSettings):
                     self.assertEqual(self.db.query(model).count(), len(before[model.__tablename__]) - 1)
 
     def test_failure_rolls_back_all_deletions(self):

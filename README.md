@@ -357,12 +357,12 @@ Responses use `status`, `message`, and `data`; each house includes `id`,
 
 ## Fee and transport generation settings
 
-Two auto-created tables, `fee_generation_settings` and
-`transport_generation_settings`, each store one record per school session.
-Each has an auto-increment ID and unique `session_id` foreign key to `sessions.id`
-with cascading deletion. Each record also stores the `school_id` from its
-linked session. Assigned Admins/Sub Admins and Super Admins
-can access settings under **Schools**.
+The `fee_generation_settings` table stores both fee types, with one row per
+school session and fee type. Each row stores the `school_id` from its linked
+session. On upgrade, startup copies any missing legacy transport settings into
+the shared table, preserves existing shared records, and drops the legacy
+`transport_generation_settings` table. Assigned Admins/Sub Admins and Super Admins can
+access settings under **Schools**.
 
 Base path: `/schools`. Pass required `school_id` and `session_id` query parameters
 on each request, for example `/schools/fee-generation-settings?school_id=18&session_id=2`.
@@ -371,10 +371,10 @@ supplied, it must match the URL.
 
 - `POST /fee-generation-settings`: create the fee panel (201).
 - `PUT /fee-generation-settings`: update the saved fee panel (200).
-- `GET /fee-generation-settings`: return matching settings in a `data` array. A valid session with no saved settings returns an empty array.
+- `GET /fee-generation-settings`: return `data.school_fee` and `data.transport` as separate objects. Each key is `null` when its settings are missing or excluded by the filter.
 - `POST /transport-generation-settings`: create the transport panel (201).
 - `PUT /transport-generation-settings`: update the saved transport panel (200).
-- `GET /transport-generation-settings`: retrieve the saved transport panel.
+- `GET /transport-generation-settings`: return the same grouped response as the fee GET.
 
 Fee payload:
 ```json
@@ -391,9 +391,8 @@ These meanings follow the screenshot labels. The late-fee flag defaults to false
 The optional `late_fee_type` accepts `daily` or `monthly`.
 Both endpoints accept `school_fee` or `transport` as `fee_type` in POST and PUT
 bodies and as a GET query parameter. For POST and PUT, the fee endpoint defaults
-to `school_fee` and the transport endpoint defaults to `transport`. The fee GET
-returns both types when the filter is omitted. The transport GET defaults to
-`transport`. Each returned record includes its `fee_type`. Use
+to `school_fee` and the transport endpoint defaults to `transport`. Both GET endpoints
+return both types when the filter is omitted. Each returned record includes its `fee_type`. Use
 `payment_due_days` for `school_fee` and `payment_due_day` for `transport`.
 POST and PUT also accept the alternate spelling when only one due field has a
 value. The selected fee type determines validation and the response field.
