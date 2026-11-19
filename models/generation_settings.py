@@ -1,6 +1,6 @@
 from sqlalchemy import Boolean, CheckConstraint, Column, Date, Enum, ForeignKey, Integer, Numeric, func
 from database.database import Base
-from schemas.enums import LateFeeType
+from schemas.enums import FeeType, LateFeeType
 
 
 late_fee_type_enum = Enum(
@@ -14,6 +14,7 @@ late_fee_type_enum = Enum(
 
 class FeeGenerationSettings(Base):
     __tablename__ = "fee_generation_settings"
+    fee_type = FeeType.SCHOOL_FEE
     id = Column(Integer, primary_key=True, autoincrement=True)
     school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
     session_id = Column(Integer, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, unique=True)
@@ -35,6 +36,7 @@ class FeeGenerationSettings(Base):
 
 class TransportGenerationSettings(Base):
     __tablename__ = "transport_generation_settings"
+    fee_type = FeeType.TRANSPORT
     id = Column(Integer, primary_key=True, autoincrement=True)
     school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
     session_id = Column(Integer, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, unique=True)

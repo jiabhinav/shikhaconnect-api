@@ -70,7 +70,7 @@ class TransportSettingsWrite(GenerationSettingsWrite):
 
 
 class FeeSettingsResponse(GenerationBase):
-    fee_type: Literal[FeeType.SCHOOL_FEE] = FeeType.SCHOOL_FEE
+    fee_type: Literal[FeeType.SCHOOL_FEE]
     model_config = ConfigDict(from_attributes=True)
     id: int
     school_id: int
@@ -81,7 +81,7 @@ class FeeSettingsResponse(GenerationBase):
 
 
 class TransportSettingsResponse(GenerationBase):
-    fee_type: Literal[FeeType.TRANSPORT] = FeeType.TRANSPORT
+    fee_type: Literal[FeeType.TRANSPORT]
     model_config = ConfigDict(from_attributes=True)
     id: int
     school_id: int

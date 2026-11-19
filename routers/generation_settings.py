@@ -88,11 +88,13 @@ def save_fee_settings(school_id: int, session_id: int, payload: FeeSettingsWrite
 
 @router.get("/fee-generation-settings", response_model=GenerationSettingsListResult)
 def get_fee_settings(
-    school_id: int, session_id: int, fee_type: FeeType = FeeType.SCHOOL_FEE,
+    school_id: int, session_id: int, fee_type: FeeType | None = None,
     db: Session = Depends(settings_session),
 ):
-    model = SETTINGS_MODELS[fee_type]
-    items = db.query(model).filter_by(school_id=school_id, session_id=session_id).all()
+    models = SETTINGS_MODELS.values() if fee_type is None else (SETTINGS_MODELS[fee_type],)
+    items = []
+    for model in models:
+        items.extend(db.query(model).filter_by(school_id=school_id, session_id=session_id).all())
     return {"message": "Generation settings fetched successfully", "data": items}
 
 

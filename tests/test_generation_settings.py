@@ -59,6 +59,9 @@ class GenerationSettingsTests(unittest.TestCase):
             response = self.client.put(url, json=dict(payload, generation_day=5, late_fee_enabled=False))
             self.assertEqual(response.json()['data']['id'], item['id'])
             self.assertFalse(response.json()['data']['late_fee_enabled'])
+        combined = self.client.get(f'/schools/fee-generation-settings?school_id=1&session_id={sid}')
+        self.assertEqual(combined.status_code, 200, combined.text)
+        self.assertEqual([item['fee_type'] for item in combined.json()['data']], ['school_fee', 'transport'])
         self.assertEqual(self.db.query(FeeGenerationSettings).count(), 1)
         self.assertEqual(self.db.query(TransportGenerationSettings).count(), 1)
 
@@ -98,7 +101,9 @@ class GenerationSettingsTests(unittest.TestCase):
             self.assertEqual(self.client.put(url, json=dict(payload, **values)).status_code, 422)
         transport = f'/schools/school/1/sessions/{sid}/transport-generation-settings'
         self.assertEqual(self.client.put(transport, json={'generation_day':1,'payment_due_day':32}).status_code, 422)
-        self.assertEqual(self.client.post(url, json=payload).status_code, 201)
+        created = self.client.post(url, json=payload)
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(created.json()['data']['fee_type'], 'school_fee')
         for role in (UserRole.ADMIN, UserRole.SUB_ADMIN):
             self.user.role = role
             self.assertEqual(self.client.put(url, json=payload).status_code, 403)

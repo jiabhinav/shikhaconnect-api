@@ -390,8 +390,10 @@ Fee `payment_due_days` is a nonnegative number of days after generation.
 These meanings follow the screenshot labels. The late-fee flag defaults to false.
 The optional `late_fee_type` accepts `daily` or `monthly`.
 Both endpoints accept `school_fee` or `transport` as `fee_type` in POST and PUT
-bodies and as a GET query parameter. When omitted, the fee endpoint defaults to
-`school_fee` and the transport endpoint defaults to `transport`. Use
+bodies and as a GET query parameter. For POST and PUT, the fee endpoint defaults
+to `school_fee` and the transport endpoint defaults to `transport`. The fee GET
+returns both types when the filter is omitted. The transport GET defaults to
+`transport`. Each returned record includes its `fee_type`. Use
 `payment_due_days` for `school_fee` and `payment_due_day` for `transport`.
 POST and PUT also accept the alternate spelling when only one due field has a
 value. The selected fee type determines validation and the response field.
