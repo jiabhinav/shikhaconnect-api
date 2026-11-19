@@ -389,8 +389,12 @@ Transport payload:
 Fee `payment_due_days` is a nonnegative number of days after generation.
 These meanings follow the screenshot labels. The late-fee flag defaults to false.
 The optional `late_fee_type` accepts `daily` or `monthly`.
-The `fee_type` defaults to `school_fee` on the fee endpoint and `transport`
-on the transport endpoint. Responses include this value. A mismatched value returns 422.
+Both endpoints accept `school_fee` or `transport` as `fee_type` in POST and PUT
+bodies and as a GET query parameter. When omitted, the fee endpoint defaults to
+`school_fee` and the transport endpoint defaults to `transport`. Use
+`payment_due_days` for `school_fee` and `payment_due_day` for `transport`.
+POST and PUT also accept the alternate spelling when only one due field has a
+value. The selected fee type determines validation and the response field.
 Each write affects its own panel. Duplicate POST requests return 409.
 PUT returns 404 when the panel has not been created.
 Missing settings or inaccessible sessions return 404, invalid input 422.

@@ -30,7 +30,7 @@ class GenerationSettingsTests(unittest.TestCase):
                 {'late_fee_amount': None}, {'late_fee_amount': 0}, {'late_fee_amount': '1.234'},
                 {'min_due_amount': None}, {'min_due_amount': 0}, {'min_due_amount': 101},
                 {'late_fee_type': 'weekly'},
-                {'fee_type': 'transport' if fee_type == 'school_fee' else 'school_fee'},
+                {'fee_type': 'other'},
             ):
                 self.assertEqual(self.client.put(url, json=payload | changes).status_code, 422)
             self.assertEqual(self.client.post(url, json=dict(payload, school_id=2)).status_code, 422)
@@ -56,6 +56,30 @@ class GenerationSettingsTests(unittest.TestCase):
             self.assertFalse(response.json()['data']['late_fee_enabled'])
         self.assertEqual(self.db.query(FeeGenerationSettings).count(), 1)
         self.assertEqual(self.db.query(TransportGenerationSettings).count(), 1)
+
+    def test_explicit_fee_type_selects_settings_on_either_endpoint(self):
+        sid = self.session_id()
+        for endpoint, fee_type, due_field in (
+            ('transport-generation-settings', 'school_fee', 'payment_due_days'),
+            ('fee-generation-settings', 'transport', 'payment_due_day'),
+        ):
+            url = f'/schools/{endpoint}'
+            params = {'school_id': 1, 'session_id': sid}
+            alternate = 'payment_due_day' if fee_type == 'school_fee' else 'payment_due_days'
+            payload = {'fee_type': fee_type, 'generation_day': 1}
+            response = self.client.post(url, params=params, json=dict(payload, **{alternate: 10}))
+            if fee_type == 'transport':
+                invalid = self.client.put(url, params=params, json=dict(payload, payment_due_days=32))
+                self.assertEqual(invalid.status_code, 422)
+            self.assertEqual(response.status_code, 201, response.text)
+            self.assertEqual(response.json()['data']['fee_type'], fee_type)
+            self.assertEqual(response.json()['data'][due_field], 10)
+            response = self.client.put(url, params=params, json=dict(payload, **{alternate: 15}))
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()['data'][due_field], 15)
+            fetched = self.client.get(url, params=dict(params, fee_type=fee_type))
+            self.assertEqual(fetched.status_code, 200, fetched.text)
+            self.assertEqual(fetched.json()['data'], response.json()['data'])
 
     def test_access_and_validation(self):
         sid = self.session_id()
