@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from threading import Lock
 
 from pydantic_settings import BaseSettings
 from sqlalchemy import Boolean, Date, DateTime, Enum, Numeric, String, create_engine, inspect, text
@@ -46,6 +47,8 @@ settings = Settings()
 DATABASE_URL = build_database_url(settings)
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+_database_init_lock = Lock()
+_initialized_engine = None
 
 
 SessionLocal = sessionmaker(
@@ -168,26 +171,40 @@ def test_db_connection():
         return False
 
 
+def initialize_database():
+    global _initialized_engine
+    if _initialized_engine is engine:
+        return
+
+    from database.student_carry_forward_table import backfill_student_carry_forwards
+    from database.table_init import ensure_all_tables
+
+    with _database_init_lock:
+        if _initialized_engine is engine:
+            return
+        with engine.begin() as connection:
+            ensure_all_tables(connection)
+            backfill_student_carry_forwards(connection)
+        sync_missing_columns()
+        _initialized_engine = engine
+
+
 def get_db():
     import logging
     from fastapi import HTTPException
     from sqlalchemy.exc import SQLAlchemyError
-    from database.table_init import ensure_all_tables
-
-    # Run before authentication queries as users/schools may also be missing.
-    try:
-        with engine.begin() as connection:
-            ensure_all_tables(connection)
-    except SQLAlchemyError as exc:
-        logging.getLogger(__name__).exception("Automatic table creation failed")
-        raise HTTPException(
-            status_code=503,
-            detail="Database unavailable. Check database connectivity and schema creation permissions.",
-        ) from exc
 
     db = SessionLocal()
-
     try:
+        try:
+            initialize_database()
+            db.connection()
+        except (RuntimeError, SQLAlchemyError) as exc:
+            logging.getLogger(__name__).exception("Database session initialization failed")
+            raise HTTPException(
+                status_code=503,
+                detail="Database unavailable. Check database connectivity and schema creation permissions.",
+            ) from exc
         yield db
     finally:
         db.close()

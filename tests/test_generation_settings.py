@@ -72,9 +72,9 @@ class GenerationSettingsTests(unittest.TestCase):
 
     def test_explicit_fee_type_selects_settings_on_either_endpoint(self):
         sid = self.session_id()
-        for endpoint, fee_type, due_field in (
-            ('transport-generation-settings', 'school_fee', 'payment_due_days'),
-            ('fee-generation-settings', 'transport', 'payment_due_day'),
+        for endpoint, fee_type in (
+            ('transport-generation-settings', 'school_fee'),
+            ('fee-generation-settings', 'transport'),
         ):
             url = f'/schools/{endpoint}'
             params = {'school_id': 1, 'session_id': sid}
@@ -86,10 +86,10 @@ class GenerationSettingsTests(unittest.TestCase):
                 self.assertEqual(invalid.status_code, 422)
             self.assertEqual(response.status_code, 201, response.text)
             self.assertEqual(response.json()['data']['fee_type'], fee_type)
-            self.assertEqual(response.json()['data'][due_field], 10)
+            self.assertEqual(response.json()['data']['payment_due_day'], 10)
             response = self.client.put(url, params=params, json=dict(payload, **{alternate: 15}))
             self.assertEqual(response.status_code, 200, response.text)
-            self.assertEqual(response.json()['data'][due_field], 15)
+            self.assertEqual(response.json()['data']['payment_due_day'], 15)
             fetched = self.client.get(url, params=dict(params, fee_type=fee_type))
             self.assertEqual(fetched.status_code, 200, fetched.text)
             data = response.json()['data']
@@ -165,10 +165,10 @@ class GenerationSettingsTests(unittest.TestCase):
             ensure_all_tables(connection)
             self.assertFalse(inspect(connection).has_table("transport_generation_settings"))
             stored = connection.exec_driver_sql(
-                "SELECT fee_type, payment_due_days, payment_due_day "
+                "SELECT fee_type, payment_due_day "
                 "FROM fee_generation_settings ORDER BY fee_type"
             ).all()
-            self.assertEqual(stored, [('school_fee', 10, None), ('transport', None, 15)])
+            self.assertEqual(stored, [('school_fee', 10), ('transport', 15)])
 
         url = f'/schools/school/1/sessions/{sid}/fee-generation-settings'
         response = self.client.get(url)
@@ -218,3 +218,26 @@ class GenerationSettingsTests(unittest.TestCase):
                 "WHERE fee_type = 'transport' ORDER BY session_id"
             ).all()
             self.assertEqual(rows, [(sid, 20), (missing_sid, 15)])
+
+    def test_startup_replaces_two_due_columns_with_one(self):
+        sid = self.session_id()
+        with self.engine.begin() as connection:
+            FeeGenerationSettings.__table__.drop(connection)
+            connection.exec_driver_sql(
+                "CREATE TABLE fee_generation_settings (id INTEGER PRIMARY KEY, session_id INTEGER, "
+                "fee_type VARCHAR(10), generation_day INTEGER, late_fee_enabled BOOLEAN, "
+                "payment_due_days INTEGER, payment_due_day INTEGER, UNIQUE (session_id, fee_type))"
+            )
+            connection.exec_driver_sql(
+                "INSERT INTO fee_generation_settings VALUES "
+                "(1, ?, 'transport', 1, false, NULL, 11), (3, ?, 'school_fee', 2, false, 6, NULL)",
+                (sid, sid),
+            )
+            ensure_all_tables(connection)
+            ensure_all_tables(connection)
+            columns = {column["name"] for column in inspect(connection).get_columns("fee_generation_settings")}
+            self.assertNotIn("payment_due_days", columns)
+            rows = connection.exec_driver_sql(
+                "SELECT id, fee_type, payment_due_day FROM fee_generation_settings ORDER BY id"
+            ).all()
+            self.assertEqual(rows, [(1, "transport", 11), (3, "school_fee", 6)])

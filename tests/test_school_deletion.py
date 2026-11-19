@@ -42,7 +42,7 @@ class SchoolDeletionTests(TestCase):
         self.db.add_all([caste, fee, school_class, section, Subject(**values),
                          Stream(**values), House(**values), SchoolAssets(school_id=school_id),
                          FeeGenerationSettings(school_id=school_id, session_id=session.id, generation_day=1,
-                                               payment_due_days=5),
+                                               payment_due_day=5),
                          FeeGenerationSettings(school_id=school_id, session_id=session.id, generation_day=1,
                                                fee_type="transport", payment_due_day=5),
                          TimetableSettings(session_id=session.id, summer_start_time=time(8), summer_end_time=time(14),

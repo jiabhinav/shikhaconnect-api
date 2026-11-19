@@ -1,11 +1,44 @@
 import unittest
+from unittest.mock import patch
 
+from fastapi import HTTPException
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import sessionmaker
+from database import database
 from database.table_init import ensure_all_tables
 from database.database import Base
 
 
 class TableInitializationTests(unittest.TestCase):
+    def test_database_dependency_retries_failed_initialization_and_runs_it_once(self):
+        engine = create_engine("sqlite://")
+        self.addCleanup(engine.dispose)
+        with (
+            patch.object(database, "engine", engine),
+            patch.object(database, "SessionLocal", sessionmaker(bind=engine)),
+            patch.object(database, "_initialized_engine", None),
+            patch("database.table_init.ensure_all_tables", side_effect=[
+                OperationalError("startup", {}, Exception("unavailable")),
+                None,
+            ]) as initialize,
+            patch("database.student_carry_forward_table.backfill_student_carry_forwards"),
+            patch.object(database, "sync_missing_columns") as sync,
+        ):
+            with self.assertLogs("database.database", level="ERROR"):
+                with self.assertRaises(HTTPException) as error:
+                    next(database.get_db())
+            self.assertEqual(error.exception.status_code, 503)
+
+            for _ in range(3):
+                dependency = database.get_db()
+                try:
+                    self.assertEqual(next(dependency).execute(text("SELECT 1")).scalar_one(), 1)
+                finally:
+                    dependency.close()
+            self.assertEqual(initialize.call_count, 2)
+            sync.assert_called_once()
+
     def test_staff_permission_table_and_missing_action_columns_are_created(self):
         engine = create_engine("sqlite://")
         try:

@@ -24,8 +24,7 @@ class FeeGenerationSettings(Base):
     school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
     session_id = Column(Integer, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
     generation_day = Column(Integer, nullable=False)
-    payment_due_days = Column(Integer)
-    payment_due_day = Column(Integer)
+    payment_due_day = Column(Integer, nullable=False)
     late_fee_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
     late_fee_type = Column(late_fee_type_enum)
     late_fee_amount = Column(Numeric(12, 2))
@@ -39,10 +38,8 @@ class FeeGenerationSettings(Base):
         CheckConstraint("late_fee_amount > 0", name="ck_fee_late_fee_amount"),
         CheckConstraint("min_due_amount BETWEEN 1 AND 100", name="ck_fee_min_due_amount"),
         CheckConstraint(
-            "(fee_type = 'school_fee' AND payment_due_days IS NOT NULL "
-            "AND payment_due_days >= 0 AND payment_due_day IS NULL) OR "
-            "(fee_type = 'transport' AND payment_due_day IS NOT NULL "
-            "AND payment_due_day BETWEEN 1 AND 31 AND payment_due_days IS NULL)",
+            "(fee_type = 'school_fee' AND payment_due_day >= 0) OR "
+            "(fee_type = 'transport' AND payment_due_day BETWEEN 1 AND 31)",
             name="ck_generation_settings_payment_due",
         ),
     )

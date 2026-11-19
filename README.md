@@ -378,7 +378,7 @@ supplied, it must match the URL.
 
 Fee payload:
 ```json
-{"school_id":18,"generation_day":1,"payment_due_days":10,"late_fee_enabled":false}
+{"school_id":18,"generation_day":1,"payment_due_day":10,"late_fee_enabled":false}
 ```
 Transport payload:
 ```json
@@ -386,16 +386,13 @@ Transport payload:
 ```
 
 `generation_day` and transport `payment_due_day` are days of month (1–31).
-Fee `payment_due_days` is a nonnegative number of days after generation.
+For school fees, `payment_due_day` is a nonnegative number of days after generation.
 These meanings follow the screenshot labels. The late-fee flag defaults to false.
 The optional `late_fee_type` accepts `daily` or `monthly`.
 Both endpoints accept `school_fee` or `transport` as `fee_type` in POST and PUT
 bodies and as a GET query parameter. For POST and PUT, the fee endpoint defaults
 to `school_fee` and the transport endpoint defaults to `transport`. Both GET endpoints
-return both types when the filter is omitted. Each returned record includes its `fee_type`. Use
-`payment_due_days` for `school_fee` and `payment_due_day` for `transport`.
-POST and PUT also accept the alternate spelling when only one due field has a
-value. The selected fee type determines validation and the response field.
+return both types when the filter is omitted. Each returned record includes its `fee_type` and `payment_due_day`. POST and PUT also accept legacy `payment_due_days` as an input alias.
 A session can have one record per fee type. POST returns 409 when a record
 already exists for the selected type, even if the submitted settings differ.
 PUT returns 404 when the panel has not been created.

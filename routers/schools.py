@@ -37,6 +37,7 @@ from routers.caste_categories import router as caste_category_router
 from routers.houses import router as house_router
 from routers.generation_settings import router as generation_settings_router
 from routers.timetable_settings import router as timetable_settings_router
+from routers.student_carry_forwards import router as student_carry_forward_router
 from routers.student_fee_adjustments import router as student_fee_adjustment_router
 from routers.students import router as student_router
 from routers.staff import router as staff_router
@@ -56,6 +57,7 @@ router.include_router(fee_configuration_router, prefix="/{school_id}/sessions/{s
 router.include_router(fee_configuration_router)
 router.include_router(fee_assignment_router)
 router.include_router(student_fee_adjustment_router)
+router.include_router(student_carry_forward_router)
 router.include_router(fee_configuration_router, prefix="/school/{school_id}/sessions/{session_id}", include_in_schema=False)
 router.include_router(caste_category_router)
 router.include_router(house_router)
