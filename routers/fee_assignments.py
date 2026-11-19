@@ -45,7 +45,7 @@ def create_student_fee(school_id: int, session_id: int, payload: StudentFeeWrite
                        db: Session = Depends(fee_structure_school)):
     student = db.query(Student.id, Student.class_id).filter_by(
         id=payload.student_id, school_id=school_id, session_id=session_id,
-    ).first()
+    ).with_for_update().first()
     if student is None:
         raise HTTPException(404, 'Student not found for this school session')
 
@@ -196,9 +196,9 @@ def carry_forward_head(db, scope, first_month):
     )
 
 
-def fee_adjustments_by_month(db, scope, months):
+def fee_adjustments_by_month(db, scope, months, *, exclude_adjustment_id=None):
     heads = defaultdict(list)
-    adjustments = (
+    query = (
         db.query(
             StudentFeeAdjustment.id,
             StudentFeeAdjustment.type,
@@ -208,10 +208,10 @@ def fee_adjustments_by_month(db, scope, months):
             StudentFeeAdjustment.discount_type,
         )
         .filter_by(**scope)
-        .order_by(StudentFeeAdjustment.date, StudentFeeAdjustment.id)
-        .all()
     )
-    for adjustment in adjustments:
+    if exclude_adjustment_id is not None:
+        query = query.filter(StudentFeeAdjustment.id != exclude_adjustment_id)
+    for adjustment in query.order_by(StudentFeeAdjustment.date, StudentFeeAdjustment.id):
         month = adjustment.date.strftime("%Y-%m")
         if month not in months:
             continue
@@ -235,22 +235,32 @@ def fee_adjustments_by_month(db, scope, months):
 def get_fee_payment_status(school_id: int, session_id: int, student_id: int,
                            fee_month: str | None = None,
                            db: Session = Depends(fee_structure_school)):
+    months = [fee_month] if fee_month is not None else None
+    data = fee_payment_months(db, school_id, session_id, student_id, months=months)
+    return {
+        'message': 'Fee payment status fetched successfully',
+        'total': len(data),
+        'data': data,
+    }
+
+
+def fee_payment_months(db, school_id, session_id, student_id, *, months=None, exclude_adjustment_id=None):
     student = db.query(Student.id, Student.class_id).filter_by(
         id=student_id, school_id=school_id, session_id=session_id,
     ).first()
     if student is None:
         raise HTTPException(404, 'Student not found for this school session')
     session = db.query(SchoolSession).filter_by(id=session_id, school_id=school_id).first()
-    months = list(session_months(session.start_date, session.end_date))
-    if fee_month is not None:
-        if fee_month not in months:
-            raise HTTPException(422, 'fee_month is not part of this academic session')
-        months = [fee_month]
+    session_fee_months = list(session_months(session.start_date, session.end_date))
+    if months is None:
+        months = session_fee_months
+    elif any(month not in session_fee_months for month in months):
+        raise HTTPException(422, 'fee_month is not part of this academic session')
 
     scope = dict(school_id=school_id, session_id=session_id, student_id=student_id)
     first_month = session.start_date.strftime("%Y-%m")
     carry_forward = carry_forward_head(db, scope, first_month) if first_month in months else None
-    adjustment_heads = fee_adjustments_by_month(db, scope, set(months))
+    adjustment_heads = fee_adjustments_by_month(db, scope, set(months), exclude_adjustment_id=exclude_adjustment_id)
     assignments = db.query(FeeAssignment, FeeConfigurationHead).join(
         FeeConfigurationHead, FeeConfigurationHead.id == FeeAssignment.fee_configure_id,
     ).filter(
@@ -267,7 +277,7 @@ def get_fee_payment_status(school_id: int, session_id: int, student_id: int,
 
     payment_records = db.query(StudentFee).options(joinedload(StudentFee.fee_heads)).filter_by(
         school_id=school_id, academic_session_id=session_id, student_id=student_id,
-    ).all()
+    ).filter(StudentFee.fee_month.in_(months)).all()
     records_by_month = {record.fee_month: record for record in payment_records}
     data = []
     for month in months:
@@ -327,11 +337,7 @@ def get_fee_payment_status(school_id: int, session_id: int, student_id: int,
             fee_adjustment=monthly_adjustments,
             carry_forward=month_carry_forward,
         ))
-    return {
-        'message': 'Fee payment status fetched successfully',
-        'total': len(data),
-        'data': data,
-    }
+    return data
 
 
 def find_assignment(db, school_id, session_id, assignment_id):

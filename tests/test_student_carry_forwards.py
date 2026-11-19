@@ -117,6 +117,24 @@ class StudentCarryForwardBulkTests(unittest.TestCase):
             files={'file': ('carry-forward.xlsx', stream.getvalue())},
         )
 
+    def test_raw_upload_accepts_array_and_replaces_existing_amount(self):
+        first = self.make_student(1, 1, '004003')
+        second = self.make_student(1, 1, '3762')
+        url = '/schools/student_carry_forwards/bulk-upload/raw'
+        params = {'school_id': 1, 'session_id': 1}
+        rows = [{'admission_number': '004003', 'amount': '125.50'}, {'admission_id': 3762, 'amount': 80}]
+        response = self.client.post(url, params=params, json=rows)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([row['student_id'] for row in response.json()['data']], [first, second])
+        duplicate = self.client.post(url, params=params, json=rows + [{'admission_number': '3762', 'amount': 10}])
+        self.assertEqual(duplicate.status_code, 422, duplicate.text)
+        self.assertEqual(self.client.post(url, params=params, json={'rows': rows}).status_code, 422)
+
+        replacement = self.client.post(url, params=params, json=[{'admission_number': '004003', 'amount': 50}])
+        self.assertEqual(replacement.status_code, 200, replacement.text)
+        self.assertEqual(replacement.json()['data'][0]['id'], response.json()['data'][0]['id'])
+        self.assertEqual(Decimal(replacement.json()['data'][0]['amount']), Decimal('50.00'))
+
     def test_excel_upload_matches_template_and_skips_blank_amounts(self):
         schema = self.client.app.openapi()
         operation = schema['paths']['/schools/student_carry_forwards/bulk-upload']['post']
@@ -173,6 +191,7 @@ class StudentCarryForwardBulkTests(unittest.TestCase):
              for row in result['data']],
             [(1, 'Amir', 'PARTIAL', '75.00'), (2, 'Ben', 'PAID', '0.00'), (3, 'Zoya', 'UNPAID', '100.00')],
         )
+        self.assertEqual(result['data'][1]['amount'], '100.00')
         self.assertTrue(all(row['class_name'] == 'Test' and row['section_name'] == 'A' for row in result['data']))
         empty = self.client.get(url, params=dict(params, section_id=999))
         self.assertEqual(empty.status_code, 200)
@@ -182,20 +201,20 @@ class StudentCarryForwardBulkTests(unittest.TestCase):
         unassigned_id = self.make_student(1, 1, '005')
         self.db.query(StudentCarryForward).filter_by(student_id=unassigned_id).delete()
         self.db.commit()
+        zero_amount_id = self.make_student(1, 1, '008')
         self.make_student(1, 3, '006')
         scope = {'school_id': 1, 'session_id': 1}
         response = self.client.get(url, params=scope)
         self.assertEqual(response.status_code, 200, response.text)
         unfiltered = response.json()
-        self.assertEqual(unfiltered['total'], 5)
-        self.assertEqual(unfiltered['total_records'], 5)
-        unassigned = next(row for row in unfiltered['data'] if row['student_id'] == unassigned_id)
-        self.assertIsNone(unassigned['id'])
-        self.assertIsNone(unassigned['section_id'])
-        self.assertEqual(unassigned['due_amount'], '0.00')
+        self.assertEqual(unfiltered['total'], 4)
+        self.assertEqual(unfiltered['total_records'], 4)
+        listed_ids = {row['student_id'] for row in unfiltered['data']}
+        self.assertNotIn(unassigned_id, listed_ids)
+        self.assertNotIn(zero_amount_id, listed_ids)
 
         for filters, names in (
-            ({'class_id': params['class_id']}, ['Amir', 'Ben', 'Zoya', 'Excluded', 'Student']),
+            ({'class_id': params['class_id']}, ['Amir', 'Ben', 'Zoya', 'Excluded']),
             ({'section_id': section.id}, ['Amir', 'Ben', 'Zoya']),
             ({'payment_status': 'UNPAID'}, ['Zoya', 'Excluded']),
             ({'payment_status': 'PARTIAL', 'search': 'AMi'}, ['Amir']),
@@ -204,7 +223,7 @@ class StudentCarryForwardBulkTests(unittest.TestCase):
             result = self.client.get(url, params=scope | filters)
             self.assertEqual(result.status_code, 200, result.text)
             self.assertEqual([row['student_name'] for row in result.json()['data']], names)
-            self.assertEqual(result.json()['total_records'], 5)
+            self.assertEqual(result.json()['total_records'], 4)
 
         earlier_student = self.db.get(Student, self.make_student(1, 1, '007'))
         self.db.get(SchoolClass, params['class_id']).class_order = 2
@@ -213,11 +232,12 @@ class StudentCarryForwardBulkTests(unittest.TestCase):
         self.db.flush()
         earlier_student.class_id = earlier_class.id
         earlier_student.first_name = 'Zara'
+        self.db.query(StudentCarryForward).filter_by(student_id=earlier_student.id).one().amount = Decimal('10.00')
         self.db.commit()
 
         result = self.client.get(url, params=scope)
         self.assertEqual(result.status_code, 200, result.text)
         self.assertEqual(
             [row['student_name'] for row in result.json()['data']],
-            ['Zara', 'Amir', 'Ben', 'Zoya', 'Excluded', 'Student'],
+            ['Zara', 'Amir', 'Ben', 'Zoya', 'Excluded'],
         )

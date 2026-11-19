@@ -23,6 +23,7 @@ from schemas.student_carry_forward import (
     CarryForwardBulkResult,
     CarryForwardBulkWrite,
     CarryForwardListResult,
+    CarryForwardRawBulkWrite,
     CarryForwardUploadRow,
 )
 
@@ -57,12 +58,9 @@ def list_carry_forwards(
     search: str | None = Query(None, max_length=767),
     db: Session = Depends(carry_forward_db),
 ):
-    amount = func.coalesce(StudentCarryForward.amount, 0)
-    paid_amount = func.coalesce(StudentCarryForward.paid_amount, 0)
-    due_amount = func.coalesce(StudentCarryForward.unpaid_amount, 0)
     status = case(
-        (due_amount == 0, StudentFeeStatus.PAID.value),
-        (paid_amount == 0, StudentFeeStatus.UNPAID.value),
+        (StudentCarryForward.unpaid_amount == 0, StudentFeeStatus.PAID.value),
+        (StudentCarryForward.paid_amount == 0, StudentFeeStatus.UNPAID.value),
         else_=StudentFeeStatus.PARTIAL.value,
     )
     scope = (Student.school_id == school_id, Student.session_id == session_id)
@@ -70,18 +68,19 @@ def list_carry_forwards(
         db.query(
             StudentCarryForward.id.label("carry_forward_id"), Student,
             SchoolClass.name.label("class_name"), Section.name.label("section_name"),
-            amount.label("amount"), paid_amount.label("paid_amount"), due_amount.label("due_amount"),
+            StudentCarryForward.amount, StudentCarryForward.paid_amount,
+            StudentCarryForward.unpaid_amount.label("due_amount"),
             status.label("payment_status"),
         )
         .select_from(Student)
-        .outerjoin(StudentCarryForward, and_(
+        .join(StudentCarryForward, and_(
             StudentCarryForward.student_id == Student.id,
             StudentCarryForward.school_id == Student.school_id,
             StudentCarryForward.session_id == Student.session_id,
         ))
         .outerjoin(SchoolClass, and_(SchoolClass.id == Student.class_id, SchoolClass.school_id == school_id))
         .outerjoin(Section, and_(Section.id == Student.section_id, Section.school_id == school_id))
-        .filter(*scope)
+        .filter(*scope, StudentCarryForward.amount > 0)
     )
     filters = []
     if class_id is not None:
@@ -127,7 +126,7 @@ def list_carry_forwards(
             "due_amount": row.due_amount,
             "status": row.payment_status,
         })
-    total_records = db.query(func.count(Student.id)).filter(*scope).scalar() if filters else len(data)
+    total_records = query.with_entities(func.count(StudentCarryForward.id)).scalar() if filters else len(data)
     return {
         "message": "Carry-forward fees fetched successfully",
         "total": len(data),
@@ -143,7 +142,17 @@ def bulk_upload_carry_forwards(
     payload: CarryForwardBulkWrite,
     db: Session = Depends(carry_forward_db),
 ):
-    return save_carry_forwards(db, school_id, session_id, payload)
+    return save_carry_forwards(db, school_id, session_id, payload.rows)
+
+
+@router.post("/student_carry_forwards/bulk-upload/raw", response_model=CarryForwardBulkResult)
+def bulk_upload_carry_forwards_raw(
+    school_id: int,
+    session_id: int,
+    payload: CarryForwardRawBulkWrite,
+    db: Session = Depends(carry_forward_db),
+):
+    return save_carry_forwards(db, school_id, session_id, payload.root)
 
 
 @router.post("/student_carry_forwards/bulk-upload", response_model=CarryForwardBulkResult)
@@ -158,7 +167,8 @@ def bulk_upload_carry_forwards_excel(
     file: UploadFile = File(...),
     db: Session = Depends(carry_forward_db),
 ):
-    return save_carry_forwards(db, school_id, session_id, read_carry_forward_workbook(file))
+    payload = read_carry_forward_workbook(file)
+    return save_carry_forwards(db, school_id, session_id, payload.rows)
 
 
 def read_carry_forward_workbook(file: UploadFile) -> CarryForwardBulkWrite:
@@ -224,9 +234,9 @@ def read_carry_forward_workbook(file: UploadFile) -> CarryForwardBulkWrite:
         raise HTTPException(422, exc.errors(include_context=False, include_input=False, include_url=False)) from exc
 
 
-def save_carry_forwards(db, school_id, session_id, payload):
+def save_carry_forwards(db, school_id, session_id, rows):
     scope = {"school_id": school_id, "session_id": session_id}
-    admissions = [row.admission_number for row in payload.rows]
+    admissions = [row.admission_number for row in rows]
     try:
         session = db.query(SchoolSession).filter_by(id=session_id, school_id=school_id).first()
         if session is None:
@@ -257,7 +267,7 @@ def save_carry_forwards(db, school_id, session_id, payload):
             .all()
         }
         below_paid = [
-            row.admission_number for row in payload.rows
+            row.admission_number for row in rows
             if students[row.admission_number] in saved
             and row.amount < saved[students[row.admission_number]].paid_amount
         ]
@@ -268,7 +278,7 @@ def save_carry_forwards(db, school_id, session_id, payload):
             })
 
         items = []
-        for row in payload.rows:
+        for row in rows:
             student_id = students[row.admission_number]
             item = saved.get(student_id)
             if item is None:
@@ -287,7 +297,7 @@ def save_carry_forwards(db, school_id, session_id, payload):
                 "paid_amount": item.paid_amount,
                 "unpaid_amount": item.amount - item.paid_amount,
             }
-            for row, item in zip(payload.rows, items)
+            for row, item in zip(rows, items)
         ]
         db.commit()
     except IntegrityError as exc:
