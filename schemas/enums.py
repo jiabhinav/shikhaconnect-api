@@ -33,3 +33,13 @@ class FeeDiscountType(str, Enum):
     CHARITY = "Charity"
     SIBLING = "Sibling"
     OTHERS = "Others"
+
+
+class LateFeeType(str, Enum):
+    DAILY = "daily"
+    MONTHLY = "monthly"
+
+
+class FeeType(str, Enum):
+    SCHOOL_FEE = "school_fee"
+    TRANSPORT = "transport"

@@ -95,6 +95,7 @@ def ensure_all_tables(connection):
     existing = set(inspect(connection).get_table_names())
     if "student_carry_forwards" in existing:
         migrate_student_carry_forwards(connection)
+    _add_generation_settings_columns(connection, existing)
     if set(Base.metadata.tables).issubset(existing):
         _drop_legacy_session_month_date(connection)
         _normalize_session_month_format(connection)
@@ -185,3 +186,25 @@ def _normalize_session_month_format(connection):
             connection.execute(text(
                 "UPDATE session_months SET month = :month WHERE id = :id"
             ), {"month": normalized, "id": row_id})
+
+
+def _add_generation_settings_columns(connection, existing):
+    column_definitions = {
+        "late_fee_amount": "NUMERIC(12, 2) CHECK (late_fee_amount > 0)",
+        "min_due_amount": "INTEGER CHECK (min_due_amount BETWEEN 1 AND 100)",
+        "late_fee_type": "VARCHAR(7) CHECK (late_fee_type IN ('daily', 'monthly'))",
+        "created_at": "DATE",
+        "updated_at": "DATE",
+    }
+    for table_name in ("fee_generation_settings", "transport_generation_settings"):
+        if table_name not in existing:
+            continue
+        columns = {column["name"] for column in inspect(connection).get_columns(table_name)}
+        if column_definitions.keys() <= columns:
+            continue
+        if connection.dialect.name == "postgresql":
+            acquire_transaction_lock(connection, 731904218)
+            columns = {column["name"] for column in inspect(connection).get_columns(table_name)}
+        for name, definition in column_definitions.items():
+            if name not in columns:
+                connection.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {name} {definition}")

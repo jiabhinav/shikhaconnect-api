@@ -22,14 +22,18 @@ def settings_session(school_id: int, session_id: int, db: Session = Depends(get_
     return db
 
 
-def save_settings(db, model, session_id, payload):
+def save_settings(db, model, session_id, payload, *, create):
     try:
-        # Serialize saves, including two concurrent first saves for a session.
+        # Serialize writes for this session.
         db.query(SchoolSession).filter_by(id=session_id).with_for_update().one()
         item = db.query(model).filter_by(session_id=session_id).first()
-        if item is None:
+        if create:
+            if item is not None:
+                raise HTTPException(409, "Generation settings already exist for this session")
             item = model(session_id=session_id)
-        for key, value in payload.model_dump().items():
+        elif item is None:
+            raise HTTPException(404, "Generation settings have not been saved for this session")
+        for key, value in payload.model_dump(exclude={"fee_type"}).items():
             setattr(item, key, value)
         db.add(item)
         db.commit()
@@ -40,7 +44,8 @@ def save_settings(db, model, session_id, payload):
     except Exception:
         db.rollback()
         raise
-    return {"message": "Generation settings saved successfully", "data": item}
+    action = "created" if create else "updated"
+    return {"message": f"Generation settings {action} successfully", "data": item}
 
 
 def read_settings(db, model, session_id):
@@ -50,9 +55,14 @@ def read_settings(db, model, session_id):
     return {"message": "Generation settings fetched successfully", "data": item}
 
 
+@router.post("/fee-generation-settings", response_model=FeeSettingsResult, status_code=201)
+def create_fee_settings(session_id: int, payload: FeeSettingsWrite, db: Session = Depends(settings_session)):
+    return save_settings(db, FeeGenerationSettings, session_id, payload, create=True)
+
+
 @router.put("/fee-generation-settings", response_model=FeeSettingsResult)
 def save_fee_settings(session_id: int, payload: FeeSettingsWrite, db: Session = Depends(settings_session)):
-    return save_settings(db, FeeGenerationSettings, session_id, payload)
+    return save_settings(db, FeeGenerationSettings, session_id, payload, create=False)
 
 
 @router.get("/fee-generation-settings", response_model=FeeSettingsResult)
@@ -60,9 +70,14 @@ def get_fee_settings(session_id: int, db: Session = Depends(settings_session)):
     return read_settings(db, FeeGenerationSettings, session_id)
 
 
+@router.post("/transport-generation-settings", response_model=TransportSettingsResult, status_code=201)
+def create_transport_settings(session_id: int, payload: TransportSettingsWrite, db: Session = Depends(settings_session)):
+    return save_settings(db, TransportGenerationSettings, session_id, payload, create=True)
+
+
 @router.put("/transport-generation-settings", response_model=TransportSettingsResult)
 def save_transport_settings(session_id: int, payload: TransportSettingsWrite, db: Session = Depends(settings_session)):
-    return save_settings(db, TransportGenerationSettings, session_id, payload)
+    return save_settings(db, TransportGenerationSettings, session_id, payload, create=False)
 
 
 @router.get("/transport-generation-settings", response_model=TransportSettingsResult)

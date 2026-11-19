@@ -367,9 +367,11 @@ can access settings under **Schools**.
 Base path: `/schools`. Pass required `school_id` and `session_id` query parameters
 on each request, for example `/schools/fee-generation-settings?school_id=18&session_id=2`.
 
-- `PUT /fee-generation-settings`: create or replace the fee panel (200).
+- `POST /fee-generation-settings`: create the fee panel (201).
+- `PUT /fee-generation-settings`: update the saved fee panel (200).
 - `GET /fee-generation-settings`: retrieve the saved fee panel.
-- `PUT /transport-generation-settings`: create or replace the transport panel (200).
+- `POST /transport-generation-settings`: create the transport panel (201).
+- `PUT /transport-generation-settings`: update the saved transport panel (200).
 - `GET /transport-generation-settings`: retrieve the saved transport panel.
 
 Fee payload:
@@ -384,9 +386,15 @@ Transport payload:
 `generation_day` and transport `payment_due_day` are days of month (1–31).
 Fee `payment_due_days` is a nonnegative number of days after generation.
 These meanings follow the screenshot labels. The late-fee flag defaults to false.
-Each save affects only its own panel; repeated saves update the existing record.
+The optional `late_fee_type` accepts `daily` or `monthly`.
+The `fee_type` defaults to `school_fee` on the fee endpoint and `transport`
+on the transport endpoint. Responses include this value. A mismatched value returns 422.
+Each write affects its own panel. Duplicate POST requests return 409.
+PUT returns 404 when the panel has not been created.
 Missing settings or inaccessible sessions return 404, invalid input 422.
 Responses use `status`, `message`, and `data`, including ID and session ID.
+The `created_at` and `updated_at` fields use YYYY-MM-DD dates. Historical
+records have null dates until the corresponding operation is recorded.
 These endpoints only store configuration; they do not generate invoices, run
 scheduled jobs, calculate late charges, or determine short-month billing dates.
 
