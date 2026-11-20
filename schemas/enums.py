@@ -17,6 +17,7 @@ class PaymentMode(str, Enum):
     DEMAND_DRAFT = "Demand-Draft"
     BANK_DEPOSIT = "Bank Deposit"
     OTHERS = "Others"
+    RAZORPAY = "Razorpay"
 
 
 class FeeAdjustmentType(str, Enum):

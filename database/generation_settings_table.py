@@ -52,6 +52,21 @@ def merge_generation_settings(connection):
             connection.exec_driver_sql(f"DROP TABLE {legacy_fee}")
 
 
+def ensure_late_fee_enabled_default(connection):
+    if connection.dialect.name != "postgresql":
+        return
+    inspector = inspect(connection)
+    table_name = FeeGenerationSettings.__tablename__
+    if not inspector.has_table(table_name):
+        return
+    for column in inspector.get_columns(table_name):
+        if column["name"] == "late_fee_enabled" and column["default"] != "true":
+            connection.exec_driver_sql(
+                "ALTER TABLE fee_generation_settings ALTER COLUMN late_fee_enabled SET DEFAULT true"
+            )
+            return
+
+
 def _consolidate_postgresql_due_columns(connection):
     connection.exec_driver_sql(
         "ALTER TABLE fee_generation_settings DROP CONSTRAINT IF EXISTS ck_generation_settings_payment_due"

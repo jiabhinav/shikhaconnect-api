@@ -86,10 +86,12 @@ class GenerationSettingsTests(unittest.TestCase):
                 self.assertEqual(invalid.status_code, 422)
             self.assertEqual(response.status_code, 201, response.text)
             self.assertEqual(response.json()['data']['fee_type'], fee_type)
+            self.assertTrue(response.json()['data']['late_fee_enabled'])
             self.assertEqual(response.json()['data']['payment_due_day'], 10)
             response = self.client.put(url, params=params, json=dict(payload, **{alternate: 15}))
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(response.json()['data']['payment_due_day'], 15)
+            self.assertTrue(response.json()['data']['late_fee_enabled'])
             fetched = self.client.get(url, params=dict(params, fee_type=fee_type))
             self.assertEqual(fetched.status_code, 200, fetched.text)
             data = response.json()['data']

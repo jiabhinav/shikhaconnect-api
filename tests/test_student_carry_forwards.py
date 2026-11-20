@@ -1,19 +1,90 @@
 import unittest
+from datetime import datetime
 from decimal import Decimal
 from io import BytesIO
+from unittest.mock import patch
 
 from openpyxl import Workbook
 
 import catalog_setup
 import test_sessions
 from models.class_section import SchoolClass, Section
+from models.generation_settings import FeeGenerationSettings
 from models.student import Student
 from models.student_carry_forward import StudentCarryForward
+from schemas.enums import FeeType, LateFeeType
 
 
 class StudentCarryForwardBulkTests(unittest.TestCase):
     setUp = catalog_setup.setUp
     tearDown = test_sessions.SessionTests.tearDown
+
+    def test_payment_can_clear_carry_forward_before_fee_heads_are_configured(self):
+        student_id = self.make_student(1, 1, '001')
+        carry = self.db.query(StudentCarryForward).filter_by(student_id=student_id).one()
+        carry.amount = Decimal('100')
+        self.db.commit()
+        scope = {'school_id': 1, 'session_id': 1}
+        payment = {'student_id': student_id, 'payment_mode': 'Cash',
+                   'months': [{'fee_month': '2025-01', 'payment_amount': '35.00'}]}
+        for payload in (payment, payment | {'cheque_number': ''}):
+            response = self.client.post('/schools/student_fees', params=scope, json=payload)
+            self.assertEqual(response.status_code, 201, response.text)
+            self.assertEqual(response.json()['carry_forward_paid_amount'], '35.00')
+            self.assertEqual(response.json()['data'], [])
+        balance = self.client.get('/schools/fee_payments', params=scope | {'student_id': student_id}).json()['data'][0]
+        self.assertEqual(balance['carry_forward']['due_amount'], '30.00')
+
+    def test_fee_payments_calculates_daily_and_flat_monthly_late_fees(self):
+        student_id = self.make_student(1, 1, '001')
+        carry = self.db.query(StudentCarryForward).filter_by(student_id=student_id).one()
+        carry.amount = Decimal('100')
+        settings = FeeGenerationSettings(
+            school_id=1, session_id=1, fee_type=FeeType.SCHOOL_FEE, generation_day=1,
+            payment_due_day=9, late_fee_enabled=True, late_fee_type=LateFeeType.DAILY,
+            late_fee_amount=Decimal('5.50'), min_due_amount=25,
+        )
+        self.db.add(settings)
+        self.db.commit()
+
+        def balance_on(day, fee_month='2025-01'):
+            params = {'school_id': 1, 'session_id': 1, 'student_id': student_id}
+            if fee_month is not None:
+                params['fee_month'] = fee_month
+            with patch('routers.fee_assignments.datetime') as clock:
+                clock.now.return_value = datetime(2025, 1, day)
+                response = self.client.get('/schools/fee_payments', params=params)
+            self.assertEqual(response.status_code, 200, response.text)
+            return response.json()
+
+        above_threshold = balance_on(13)['late_fee']
+        self.assertEqual(above_threshold['amount'], '16.50')
+        self.assertNotIn('due_percentage', above_threshold)
+        carry.paid_amount = Decimal('75')
+        self.db.commit()
+        self.assertEqual(balance_on(10)['late_fee']['amount'], '0.00')
+        overdue = balance_on(13)
+        self.assertEqual(overdue['late_fee'], {
+            'enabled': True, 'type': 'daily', 'due_date': '2025-01-10', 'overdue_days': 3, 'amount': '16.50',
+            'late_fee_amount': '5.50', 'min_due_percentage': 25, 'fee_month': '2025-01',
+            'paid_amount': '0.00', 'due_amount': '16.50',
+        })
+        self.assertEqual(overdue['data'][0]['due_amount'], '25.00')
+        self.assertNotIn('late_fee', overdue['data'][0])
+        self.assertEqual(balance_on(13, fee_month=None)['late_fee'], overdue['late_fee'])
+        self.assertEqual(balance_on(13, fee_month='2025-02')['late_fee'], overdue['late_fee'])
+
+        settings.late_fee_type = LateFeeType.MONTHLY
+        self.db.commit()
+        self.assertEqual(balance_on(11)['late_fee']['amount'], '5.50')
+        self.assertEqual(balance_on(30)['late_fee']['amount'], '5.50')
+
+        carry.paid_amount = Decimal('76')
+        self.db.commit()
+        self.assertEqual(balance_on(30)['late_fee']['amount'], '0.00')
+        carry.paid_amount = Decimal('100')
+        self.db.commit()
+        self.assertEqual(balance_on(30)['late_fee']['amount'], '0.00')
 
     def make_student(self, school_id, session_id, admission_number):
         school_class = self.db.query(SchoolClass).filter_by(school_id=school_id, session_id=session_id).first()

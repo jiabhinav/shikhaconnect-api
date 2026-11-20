@@ -25,7 +25,7 @@ class FeeGenerationSettings(Base):
     session_id = Column(Integer, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
     generation_day = Column(Integer, nullable=False)
     payment_due_day = Column(Integer, nullable=False)
-    late_fee_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
+    late_fee_enabled = Column(Boolean, nullable=False, default=True, server_default="true")
     late_fee_type = Column(late_fee_type_enum)
     late_fee_amount = Column(Numeric(12, 2))
     min_due_amount = Column(Integer)

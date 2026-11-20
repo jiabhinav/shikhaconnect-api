@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 from models.class_section import SchoolClass, Section
 from models.session import Session as SchoolSession
 from models.student import Student
-from models.student_fee import StudentFee, StudentFeeHead
 from models.student_fee_adjustment import StudentFeeAdjustment
 from routers.fee_assignments import fee_payment_months
 from routers.fee_structures import fee_structure_school
@@ -23,6 +22,8 @@ from schemas.student_fee_adjustment import (
     StudentFeeAdjustmentBulkResult,
     StudentFeeAdjustmentCreateResult,
     StudentFeeAdjustmentListResult,
+    StudentFeeAdjustmentMonthBulkResult,
+    StudentFeeAdjustmentMonthBulkWrite,
     StudentFeeAdjustmentResponse,
     StudentFeeAdjustmentResult,
     StudentFeeAdjustmentWrite,
@@ -31,6 +32,7 @@ from utils.fee_months import session_months
 
 router = APIRouter(prefix="/student_fee_adjustments", tags=["Configure Fees"])
 AllFilter = Literal["all", "All", "ALL"]
+BULK_UPLOAD_TAG = "Bulk Upload"
 
 
 @router.get("/dropdowns", response_model=FeeAdjustmentDropdownResult)
@@ -67,23 +69,9 @@ def find_adjustment(db, scope, adjustment_id, *, lock=False):
     return item
 
 
-def require_editable_adjustment(db, scope, item):
-    if item.type == FeeAdjustmentType.DISCOUNT:
-        recorded_discount = db.query(StudentFee.id).filter_by(
-            school_id=scope["school_id"],
-            academic_session_id=scope["session_id"],
-            student_id=scope["student_id"],
-            fee_month=item.date.strftime("%Y-%m"),
-        ).filter(or_(
-            StudentFee.discount_amount > 0,
-            StudentFee.fee_heads.any(StudentFeeHead.discount_amount > 0),
-        )).first()
-        if recorded_discount is not None:
-            raise HTTPException(409, "A discount is already recorded in the fee payment for this month")
-        validate_discount_due(db, scope, [item.date], item.amount, exclude_adjustment_id=item.id)
-        return
-    if item.applied_at is not None:
-        raise HTTPException(409, "Applied student fee adjustments cannot be edited or deleted")
+def require_editable_adjustment(item):
+    if not item.editable:
+        raise HTTPException(409, "This adjustment is locked because a payment or adjustment has already been applied")
 
 
 def save_adjustments(db, items):
@@ -100,11 +88,12 @@ def commit_adjustments(db):
 
 
 def lock_adjustment_student(db, scope):
-    student = db.query(Student.id).filter_by(
+    student = db.query(Student.id, Student.admission_number).filter_by(
         id=scope["student_id"], school_id=scope["school_id"], session_id=scope["session_id"],
     ).with_for_update().first()
     if student is None:
         raise HTTPException(404, "Student not found for this school session")
+    return student.admission_number
 
 
 def discount_due_failures(db, scope, dates, amount, *, exclude_adjustment_id=None):
@@ -151,31 +140,35 @@ def monthly_dates(selected_date, end_date):
         yield min(date(year, month, day), end_date)
 
 
-def prepare_adjustments(db, scope, payload):
+def prepare_adjustments(db, scope, payload, *, expand_monthly=True):
     is_discount = payload.type == FeeAdjustmentType.DISCOUNT
     is_monthly = payload.frequency == FeeAdjustmentFrequency.MONTHLY
     dates = [payload.date]
-    if is_monthly:
+    if is_monthly and expand_monthly:
         end_date = monthly_session_end(db, scope, payload.date, by_month=is_discount)
         dates = list(monthly_dates(payload.date, end_date))
     skipped_months = []
     if is_discount:
         failures = discount_due_failures(db, scope, dates, payload.amount)
-        if failures and not is_monthly:
+        if failures and (not is_monthly or not expand_monthly):
             raise HTTPException(422, failures[0])
         skipped_months = failures
         months_to_skip = {failure["fee_month"] for failure in skipped_months}
         dates = [selected for selected in dates if selected.strftime("%Y-%m") not in months_to_skip]
         if not dates:
-            raise HTTPException(422, {
-                "message": "No month has enough remaining due for this discount",
-                "skipped_months": skipped_months,
-            })
+            reject_all_skipped(skipped_months)
     fields = payload.model_dump(exclude={"date"})
     if is_discount:
         fields["applied_at"] = datetime.now(timezone.utc)
     items = [StudentFeeAdjustment(**scope, **fields, date=adjustment_date) for adjustment_date in dates]
     return items, skipped_months
+
+
+def reject_all_skipped(skipped_months):
+    raise HTTPException(422, {
+        "message": "No month has enough remaining due for this discount",
+        "skipped_months": skipped_months,
+    })
 
 
 @router.post("", response_model=StudentFeeAdjustmentCreateResult, status_code=201)
@@ -201,15 +194,28 @@ def bulk_create_adjustments(
     scope: dict = Depends(adjustment_scope),
     db: Session = Depends(fee_structure_school),
 ):
-    lock_adjustment_student(db, scope)
+    admission_number = lock_adjustment_student(db, scope)
+    return save_bulk_adjustments(db, (
+        (scope, admission_number, [adjustment]) for adjustment in payload
+    ))
+
+
+def save_bulk_adjustments(db, rows, *, expand_monthly=True):
     results = []
     total = 0
-    for row, adjustment in enumerate(payload, start=1):
+    for row, (scope, admission_number, adjustments) in enumerate(rows, start=1):
         try:
-            items, skipped_months = prepare_adjustments(db, scope, adjustment)
-            db.add_all(items)
-            # Make earlier rows visible to the next discount balance check.
-            db.flush()
+            items, skipped_months = [], []
+            for adjustment in adjustments:
+                prepared, skipped = prepare_adjustments(db, scope, adjustment, expand_monthly=expand_monthly)
+                for item in prepared:
+                    item.tag = BULK_UPLOAD_TAG
+                    item.admission_number = admission_number
+                db.add_all(prepared)
+                # Later entries can use the same date and must see earlier adjustments.
+                db.flush()
+                items.extend(prepared)
+                skipped_months.extend(skipped)
             results.append({
                 "row": row,
                 "data": [StudentFeeAdjustmentResponse.model_validate(item) for item in items],
@@ -226,6 +232,80 @@ def bulk_create_adjustments(
 
     commit_adjustments(db)
     return {"message": "Student fee adjustments saved successfully", "total": total, "data": results}
+
+
+@router.post("/bulk-upload/monthly", response_model=StudentFeeAdjustmentMonthBulkResult, status_code=201)
+def bulk_create_month_adjustments(
+    payload: Annotated[
+        list[StudentFeeAdjustmentMonthBulkWrite],
+        Body(
+            min_length=1,
+            max_length=1000,
+            openapi_examples={
+                "one_time_discount": {
+                    "summary": "Two one-time discounts on the same date",
+                    "value": [
+                        {
+                            "admission_number": "004003",
+                            "type": "Discount",
+                            "frequency": "One Time",
+                            "discount_type": "Charity",
+                            "month": [
+                                {"amount": 6291, "date": "2026-11-20", "description": ""},
+                                {"amount": 1791, "date": "2026-11-20", "description": ""},
+                            ],
+                        }
+                    ],
+                }
+            },
+        ),
+    ],
+    school_id: int,
+    session_id: int,
+    db: Session = Depends(fee_structure_school),
+):
+    """Save fee adjustments for students identified by admission number."""
+    session = db.query(SchoolSession).filter_by(id=session_id, school_id=school_id).one()
+    first_month = session.start_date.replace(day=1)
+    rows = []
+    for row, adjustment in enumerate(payload, start=1):
+        if adjustment.frequency == FeeAdjustmentFrequency.MONTHLY:
+            seen = set()
+            for entry in adjustment.month:
+                if not first_month <= entry.date <= session.end_date:
+                    raise HTTPException(422, {"row": row, "message": f"{entry.date} must be within the selected session"})
+                month = entry.date.replace(day=1)
+                if month in seen:
+                    raise HTTPException(422, {"row": row, "message": f"{month:%Y-%m} appears more than once in month"})
+                seen.add(month)
+        fields = adjustment.model_dump(exclude={"admission_number", "month"})
+        entries = [StudentFeeAdjustmentWrite(**fields, **entry.model_dump()) for entry in adjustment.month]
+        rows.append((adjustment.admission_number, entries))
+
+    admission_numbers = {admission_number for admission_number, _ in rows}
+    student_ids = dict(
+        db.query(Student.admission_number, Student.id)
+        .filter_by(school_id=school_id, session_id=session_id)
+        .filter(Student.admission_number.in_(admission_numbers))
+        .order_by(Student.id)
+        .with_for_update()
+        .all()
+    )
+    scoped_rows = []
+    for row, (admission_number, entries) in enumerate(rows, start=1):
+        student_id = student_ids.get(admission_number)
+        if student_id is None:
+            raise HTTPException(404, {
+                "row": row,
+                "admission_number": admission_number,
+                "message": "Admission number not found in this school session",
+            })
+        scope = {"school_id": school_id, "session_id": session_id, "student_id": student_id}
+        scoped_rows.append((scope, admission_number, entries))
+    result = save_bulk_adjustments(db, scoped_rows, expand_monthly=False)
+    for saved_row, adjustment in zip(result["data"], payload, strict=True):
+        saved_row["admission_number"] = adjustment.admission_number
+    return result
 
 
 @router.get("", response_model=StudentFeeAdjustmentListResult)
@@ -277,9 +357,12 @@ def list_adjustment_students(
         if value not in (None, "all", "All", "ALL"):
             query = query.filter(column == value)
     adjustments = db.query(StudentFeeAdjustment).filter_by(school_id=school_id, session_id=session_id)
+    matching = adjustments.with_entities(StudentFeeAdjustment.student_id)
     if isinstance(adjustment_type, FeeAdjustmentType):
-        matching = adjustments.filter_by(type=adjustment_type.value)
-        query = query.filter(matching.filter(StudentFeeAdjustment.student_id == Student.id).exists())
+        matching = matching.filter_by(type=adjustment_type.value)
+    query = query.filter(Student.id.in_(
+        matching.group_by(StudentFeeAdjustment.student_id).having(func.sum(StudentFeeAdjustment.amount) > 0)
+    ))
     term = (search or "").strip()
     if term:
         name_match = and_(*(or_(
@@ -381,10 +464,10 @@ def update_adjustment(
 ):
     lock_adjustment_student(db, scope)
     item = find_adjustment(db, scope, adjustment_id, lock=True)
-    require_editable_adjustment(db, scope, item)
+    require_editable_adjustment(item)
     is_discount = payload.type == FeeAdjustmentType.DISCOUNT
     if payload.frequency == FeeAdjustmentFrequency.MONTHLY:
-        monthly_session_end(db, scope, payload.date, by_month=is_discount)
+        monthly_session_end(db, scope, payload.date, by_month=is_discount or item.tag == BULK_UPLOAD_TAG)
     if is_discount:
         validate_discount_due(db, scope, [payload.date], payload.amount, exclude_adjustment_id=item.id)
     fields = payload.model_dump()
@@ -411,7 +494,9 @@ def delete_adjustment(
 ):
     lock_adjustment_student(db, scope)
     item = find_adjustment(db, scope, adjustment_id, lock=True)
-    require_editable_adjustment(db, scope, item)
+    require_editable_adjustment(item)
+    if item.type == FeeAdjustmentType.DISCOUNT:
+        validate_discount_due(db, scope, [item.date], item.amount, exclude_adjustment_id=item.id)
     db.delete(item)
     db.commit()
     return Response(status_code=204)

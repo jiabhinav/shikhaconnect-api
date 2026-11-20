@@ -1,6 +1,7 @@
 from decimal import Decimal
-from calendar import month_name
+from calendar import month_name, monthrange
 from collections import defaultdict
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
@@ -12,24 +13,27 @@ from models.fee_assignment import FeeAssignment
 from models.fee_configuration import FeeConfigurationHead
 from models.fee_head import FeeHead
 from models.fee_structure import FeeStructure
+from models.generation_settings import FeeGenerationSettings
 from models.session import Session as SchoolSession
 from models.student import Student
 from models.student_carry_forward import CARRY_FORWARD_TAG, StudentCarryForward
 from models.student_fee_adjustment import StudentFeeAdjustment
-from models.student_fee import StudentFee, StudentFeeHead
+from models.student_fee import StudentFee, StudentFeeChequePayment, StudentFeeHead, StudentFeeLatePayment
 from routers.fee_structures import fee_structure_school
 from schemas.fee_assignment import (
     FeeAssignmentWrite, FeeAssignmentBatchWrite, FeeAssignmentResult, FeeAssignmentListResult,
     AssignedFeeStructureDetailsResult,
 )
 from schemas.student_fee import (
-    FeePaymentAdjustmentStatus, FeePaymentHeadStatus, FeePaymentMonthStatus, FeePaymentStatusListResult,
-    StudentFeeListResult, StudentFeeWrite,
+    FeePaymentAdjustmentStatus, FeePaymentHeadStatus, FeePaymentLateFee, FeePaymentMonthStatus, FeePaymentStatusListResult,
+    ChequePaymentStatus, StudentFeeChequeListResult, StudentFeeChequeResult, StudentFeeChequeStatusWrite,
+    StudentFeeListResult, StudentFeePaymentResult, StudentFeeWrite,
 )
-from schemas.enums import FeeAdjustmentType, StudentFeeStatus
+from schemas.enums import FeeAdjustmentType, FeeType, LateFeeType, PaymentMode, StudentFeeStatus
 from utils.fee_months import session_months
 
 router = APIRouter(tags=['Configure Fees'])
+INDIA_TIME = timezone(timedelta(hours=5, minutes=30))
 
 
 def calculate_student_fee_status(net_amount, paid_amount):
@@ -40,124 +44,210 @@ def calculate_student_fee_status(net_amount, paid_amount):
     return 'PARTIAL'
 
 
-@router.post('/student_fees', response_model=StudentFeeListResult, status_code=201)
+@router.post('/student_fees', response_model=StudentFeePaymentResult | StudentFeeChequeResult, status_code=201)
 def create_student_fee(school_id: int, session_id: int, payload: StudentFeeWrite,
                        db: Session = Depends(fee_structure_school)):
-    student = db.query(Student.id, Student.class_id).filter_by(
-        id=payload.student_id, school_id=school_id, session_id=session_id,
-    ).with_for_update().first()
-    if student is None:
-        raise HTTPException(404, 'Student not found for this school session')
-
-    assignments = db.query(FeeAssignment, FeeConfigurationHead).join(
-        FeeConfigurationHead, FeeConfigurationHead.id == FeeAssignment.fee_configure_id,
-    ).filter(
-        FeeAssignment.school_id == school_id,
-        FeeAssignment.session_id == session_id,
-        FeeAssignment.class_id == student.class_id,
-    ).all()
-    items = []
+    is_cheque = payload.payment_mode == PaymentMode.CHEQUE
     try:
-        for month_payment in payload.months:
-            existing = db.query(StudentFee).filter_by(
-                school_id=school_id,
-                academic_session_id=session_id,
-                student_id=payload.student_id,
-                fee_month=month_payment.fee_month,
-            ).with_for_update().first()
-            if existing is not None:
-                if existing.due_amount == 0:
-                    raise HTTPException(409, f'Fee for {month_payment.fee_month} is already fully paid')
-                due_heads = sorted(
-                    (head for head in existing.fee_heads if head.due_amount > 0),
-                    key=lambda head: head.fee_head_id,
-                )
-                total_due = sum((head.due_amount for head in due_heads), Decimal('0.00'))
-                if month_payment.payment_amount > total_due:
-                    raise HTTPException(422, f'payment_amount cannot exceed the remaining due for {month_payment.fee_month}')
-
-                remaining_payment = month_payment.payment_amount
-                for head in due_heads:
-                    head_paid = min(remaining_payment, head.due_amount)
-                    head.paid_amount += head_paid
-                    remaining_payment -= head_paid
-                existing.paid_amount += month_payment.payment_amount
-                existing.status = calculate_student_fee_status(existing.net_amount, existing.paid_amount)
-                existing.payment_mode = payload.payment_mode
-                existing.description = payload.description
-                existing.collected_by = payload.collected_by
-                items.append(existing)
-                continue
-
-            monthly_heads = {}
-            for _, anchor in assignments:
-                configured_rows = db.query(FeeConfigurationHead, FeeHead).join(
-                    FeeHead, FeeHead.id == FeeConfigurationHead.fee_head_id,
-                ).filter(FeeConfigurationHead.configuration_id == anchor.configuration_id).all()
-                for head_config, fee_head in configured_rows:
-                    month_value = next((value for value in (head_config.monthly_config or [])
-                                        if value.get('month_key') == month_payment.fee_month), None)
-                    if month_value is not None and not month_value.get('enabled', True):
-                        continue
-                    amount = Decimal(str(month_value.get('amount', head_config.base_amount)
-                                         if month_value is not None else head_config.base_amount))
-                    monthly_heads.setdefault(fee_head.id, {
-                        'fee_head_id': fee_head.id,
-                        'fee_head_name': fee_head.fee_head_name,
-                        'amount': Decimal('0.00'),
-                    })['amount'] += amount
-            if not monthly_heads:
-                raise HTTPException(404, f'No fee heads are assigned for {month_payment.fee_month}')
-
-            ordered_heads = sorted(monthly_heads.values(), key=lambda head: head['fee_head_id'])
-            total_amount = sum((head['amount'] for head in ordered_heads), Decimal('0.00'))
-            if month_payment.payment_amount > total_amount:
-                raise HTTPException(422, f'payment_amount cannot exceed the total fee for {month_payment.fee_month}')
-
-            # Clear fee heads in ID order before applying payment to the next head.
-            remaining_payment = month_payment.payment_amount
-            paid_allocations = []
-            for head in ordered_heads:
-                head_paid = min(remaining_payment, head['amount'])
-                paid_allocations.append(head_paid)
-                remaining_payment -= head_paid
-
-            detail_rows = [StudentFeeHead(
-                fee_head_id=head['fee_head_id'], amount=head['amount'],
-                discount_amount=Decimal('0.00'), fine_amount=Decimal('0.00'),
-                net_amount=head['amount'], paid_amount=head_paid,
-            ) for head, head_paid in zip(ordered_heads, paid_allocations)]
-            item = StudentFee(
-                school_id=school_id,
-                academic_session_id=session_id,
-                student_id=payload.student_id,
-                fee_month=month_payment.fee_month,
-                total_amount=total_amount,
-                discount_amount=Decimal('0.00'),
-                fine_amount=Decimal('0.00'),
-                net_amount=total_amount,
-                paid_amount=month_payment.payment_amount,
-                status=calculate_student_fee_status(total_amount, month_payment.payment_amount),
-                payment_mode=payload.payment_mode,
-                description=payload.description,
+        items, carry_forward_paid, penalty_paid = apply_student_fee_payment(db, school_id, session_id, payload, validate_only=is_cheque)
+        if is_cheque:
+            cheque = StudentFeeChequePayment(
+                school_id=school_id, session_id=session_id, student_id=payload.student_id,
+                cheque_number=payload.cheque_number, description=payload.description,
                 collected_by=payload.collected_by,
-                fee_heads=detail_rows,
+                months=[entry.model_dump(mode="json") for entry in payload.months],
+                late_fee_payment_amount=payload.late_fee_payment_amount,
             )
-            db.add(item)
-            items.append(item)
+            db.add(cheque)
+            db.commit()
+            db.refresh(cheque)
+            return {'message': 'Cheque payment recorded as pending', 'data': cheque}
         db.commit()
         for item in items:
             db.refresh(item)
-    except HTTPException:
-        db.rollback()
-        raise
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(409, 'A fee record already exists for one of the student months') from exc
     except Exception:
         db.rollback()
         raise
-    return {'message': 'Student fee records created successfully', 'total': len(items), 'data': items}
+    return {
+        'message': 'Student fee records created successfully', 'total': len(items), 'data': items,
+        'carry_forward_paid_amount': carry_forward_paid, 'penalty_paid_amount': penalty_paid,
+        'late_fee_paid_amount': payload.late_fee_payment_amount,
+    }
+
+
+def apply_student_fee_payment(db, school_id, session_id, payload, *, validate_only=False, gateway_mode=None,
+                              quoted_at=None):
+    payment_mode = gateway_mode or payload.payment_mode
+    student = db.query(Student.id).filter_by(
+        id=payload.student_id, school_id=school_id, session_id=session_id,
+    ).with_for_update().first()
+    if student is None:
+        raise HTTPException(404, 'Student not found for this school session')
+
+    requested_months = [entry.fee_month for entry in payload.months]
+    carry_forward = db.query(StudentCarryForward).filter_by(
+        school_id=school_id, session_id=session_id, student_id=payload.student_id,
+    ).filter(StudentCarryForward.month.in_(requested_months)).with_for_update().one_or_none()
+    late_amount = payload.late_fee_payment_amount
+    if late_amount:
+        all_balances = fee_payment_months(db, school_id, session_id, payload.student_id)
+        by_month = {balance.fee_month: balance for balance in all_balances}
+        if any(month not in by_month for month in requested_months):
+            raise HTTPException(422, 'fee_month is not part of this academic session')
+        balances = [by_month[month] for month in requested_months]
+        scope = dict(school_id=school_id, session_id=session_id, student_id=payload.student_id)
+        quote, assessment = student_late_fee(db, scope, all_balances, fee_payment_date(quoted_at))
+        if late_amount > quote.due_amount:
+            raise HTTPException(422, 'Late fee payment cannot exceed the outstanding late fee')
+        payments = {entry.fee_month: entry.payment_amount for entry in payload.months}
+        if any(balance.due_amount > payments.get(balance.fee_month, 0)
+               for balance in all_balances if balance.fee_month <= quote.fee_month):
+            raise HTTPException(422, 'Clear the fees through the late-fee month before paying the late fee')
+    else:
+        balances = fee_payment_months(db, school_id, session_id, payload.student_id, months=requested_months)
+    items = []
+    carry_forward_paid = penalty_paid = Decimal('0.00')
+    for entry, balance in zip(payload.months, balances, strict=True):
+        month = entry.fee_month
+        if entry.payment_amount > balance.due_amount:
+            raise HTTPException(422, f'Payment amount cannot exceed the remaining balance for {month}')
+
+        remaining = entry.payment_amount
+        if carry_forward is not None and carry_forward.month == month:
+            carry_forward_paid = min(remaining, carry_forward.unpaid_amount)
+            remaining -= carry_forward_paid
+            if carry_forward_paid > 0:
+                if not validate_only:
+                    carry_forward.paid_amount += carry_forward_paid
+                if remaining == 0:
+                    continue
+
+        discount_credit = -sum(
+            (line.payable_amount for line in balance.fee_adjustment if line.tag == 'discount'), Decimal('0.00'),
+        )
+        head_due = sum((head.due_amount for head in balance.fee_heads), Decimal('0.00'))
+        head_payment = min(remaining, max(Decimal('0.00'), head_due - discount_credit))
+        penalty_payment = remaining - head_payment
+        if penalty_payment > 0:
+            penalty_paid += allocate_penalty_payment(db, balance, penalty_payment, validate_only=validate_only)
+        if validate_only or (penalty_payment > 0 and head_payment == 0):
+            continue
+
+        existing = db.query(StudentFee).filter_by(
+            school_id=school_id, academic_session_id=session_id,
+            student_id=payload.student_id, fee_month=month,
+        ).with_for_update().first()
+        if existing is None:
+            if not balance.fee_heads:
+                raise HTTPException(404, f'No fee heads are assigned for {month}')
+            total_amount = sum((head.payable_amount for head in balance.fee_heads), Decimal('0.00'))
+            existing = StudentFee(
+                school_id=school_id, academic_session_id=session_id, student_id=payload.student_id,
+                fee_month=month, total_amount=total_amount, net_amount=total_amount,
+                paid_amount=Decimal('0.00'),
+                fee_heads=[
+                    StudentFeeHead(
+                        fee_head_id=head.fee_head_id, amount=head.payable_amount, net_amount=head.payable_amount,
+                        paid_amount=Decimal('0.00'),
+                    )
+                    for head in balance.fee_heads
+                ],
+            )
+            db.add(existing)
+        elif existing.due_amount == 0:
+            raise HTTPException(409, f'Fee for {month} is already fully paid')
+
+        unallocated = head_payment
+        for head in sorted(existing.fee_heads, key=lambda head: head.fee_head_id):
+            head_paid = min(unallocated, head.due_amount)
+            head.paid_amount += head_paid
+            unallocated -= head_paid
+        if unallocated:
+            raise HTTPException(409, f'Fee balance changed for {month}. Refresh the balance and try again.')
+        existing.paid_amount += head_payment
+        existing.status = calculate_student_fee_status(existing.net_amount, existing.paid_amount)
+        existing.payment_mode = payment_mode
+        existing.description = payload.description
+        existing.collected_by = payload.collected_by
+        items.append(existing)
+    if late_amount and not validate_only:
+        if assessment is None:
+            assessment = StudentFeeLatePayment(
+                **scope, fee_month=quote.fee_month, due_date=quote.due_date, overdue_days=quote.overdue_days,
+                amount=quote.amount, paid_amount=Decimal('0.00'),
+            )
+            db.add(assessment)
+        assessment.paid_amount += late_amount
+    return items, carry_forward_paid, penalty_paid
+
+
+def allocate_penalty_payment(db, balance, amount, *, validate_only):
+    penalty_ids = [line.source_id for line in balance.fee_adjustment if line.tag == 'penalty' and line.due_amount > 0]
+    penalties = db.query(StudentFeeAdjustment).filter(StudentFeeAdjustment.id.in_(penalty_ids)).order_by(
+        StudentFeeAdjustment.date, StudentFeeAdjustment.id,
+    ).with_for_update().all()
+    remaining = amount
+    for penalty in penalties:
+        paid = min(remaining, penalty.amount - penalty.paid_amount)
+        if not validate_only and paid > 0:
+            penalty.paid_amount += paid
+            if penalty.applied_at is None:
+                penalty.applied_at = datetime.now(timezone.utc)
+        remaining -= paid
+    if remaining:
+        raise HTTPException(409, f'Penalty balance changed for {balance.fee_month}. Refresh the balance and try again.')
+    return amount
+
+
+@router.get('/student_fees/cheque_payments', response_model=StudentFeeChequeListResult)
+def list_student_fee_cheques(school_id: int, session_id: int, student_id: int | None = None,
+                             status: ChequePaymentStatus | None = None,
+                             db: Session = Depends(fee_structure_school)):
+    query = db.query(StudentFeeChequePayment).filter_by(school_id=school_id, session_id=session_id)
+    if student_id is not None:
+        query = query.filter_by(student_id=student_id)
+    if status is not None:
+        query = query.filter_by(status=status)
+    items = query.order_by(StudentFeeChequePayment.id.desc()).all()
+    return {'message': 'Cheque payments fetched successfully', 'total': len(items), 'data': items}
+
+
+@router.patch('/student_fees/cheque_payments/{cheque_id}', response_model=StudentFeeChequeResult)
+def resolve_student_fee_cheque(school_id: int, session_id: int, cheque_id: int,
+                               payload: StudentFeeChequeStatusWrite,
+                               db: Session = Depends(fee_structure_school)):
+    cheque = db.query(StudentFeeChequePayment).filter_by(
+        id=cheque_id, school_id=school_id, session_id=session_id,
+    ).with_for_update().first()
+    if cheque is None:
+        raise HTTPException(404, 'Cheque payment not found')
+    if cheque.status == payload.status:
+        return {'message': 'Cheque payment already resolved', 'data': cheque}
+    if cheque.status != 'PENDING':
+        raise HTTPException(409, 'Only a pending cheque payment can change status')
+
+    try:
+        if payload.status == 'SUCCESS':
+            payment = StudentFeeWrite(
+                student_id=cheque.student_id, months=cheque.months, payment_mode=PaymentMode.CHEQUE,
+                cheque_number=cheque.cheque_number, description=cheque.description, collected_by=cheque.collected_by,
+                late_fee_payment_amount=cheque.late_fee_payment_amount,
+            )
+            apply_student_fee_payment(db, school_id, session_id, payment, quoted_at=cheque.created_at)
+        cheque.status = payload.status
+        cheque.resolved_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(cheque)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, 'The cheque payment conflicts with an existing record') from exc
+    except Exception:
+        db.rollback()
+        raise
+    return {'message': 'Cheque payment status updated successfully', 'data': cheque}
 
 
 @router.get('/student_fees', response_model=StudentFeeListResult)
@@ -203,6 +293,7 @@ def fee_adjustments_by_month(db, scope, months, *, exclude_adjustment_id=None):
             StudentFeeAdjustment.id,
             StudentFeeAdjustment.type,
             StudentFeeAdjustment.amount,
+            StudentFeeAdjustment.paid_amount,
             StudentFeeAdjustment.date,
             StudentFeeAdjustment.frequency,
             StudentFeeAdjustment.discount_type,
@@ -225,8 +316,8 @@ def fee_adjustments_by_month(db, scope, months, *, exclude_adjustment_id=None):
             date=adjustment.date,
             discount_type=adjustment.discount_type,
             payable_amount=amount,
-            paid_amount=Decimal("0.00"),
-            due_amount=amount,
+            paid_amount=adjustment.paid_amount,
+            due_amount=amount - adjustment.paid_amount,
         ))
     return heads
 
@@ -235,13 +326,78 @@ def fee_adjustments_by_month(db, scope, months, *, exclude_adjustment_id=None):
 def get_fee_payment_status(school_id: int, session_id: int, student_id: int,
                            fee_month: str | None = None,
                            db: Session = Depends(fee_structure_school)):
-    months = [fee_month] if fee_month is not None else None
-    data = fee_payment_months(db, school_id, session_id, student_id, months=months)
+    balances = fee_payment_months(db, school_id, session_id, student_id)
+    data = balances
+    if fee_month is not None:
+        data = [balance for balance in balances if balance.fee_month == fee_month]
+        if not data:
+            raise HTTPException(422, 'fee_month is not part of this academic session')
+    scope = dict(school_id=school_id, session_id=session_id, student_id=student_id)
+    late_fee, _ = student_late_fee(db, scope, balances, fee_payment_date())
     return {
         'message': 'Fee payment status fetched successfully',
         'total': len(data),
         'data': data,
+        'late_fee': late_fee,
     }
+
+
+def fee_payment_date(quoted_at=None):
+    if quoted_at is None:
+        return datetime.now(INDIA_TIME).date()
+    if quoted_at.tzinfo is None:
+        quoted_at = quoted_at.replace(tzinfo=timezone.utc)
+    return quoted_at.astimezone(INDIA_TIME).date()
+
+
+def student_late_fee(db, scope, balances, today):
+    settings = db.query(FeeGenerationSettings).filter_by(
+        school_id=scope["school_id"], session_id=scope["session_id"], fee_type=FeeType.SCHOOL_FEE,
+    ).one_or_none()
+    assessment = db.query(StudentFeeLatePayment).filter_by(**scope).one_or_none()
+    late_fee = calculate_late_fee(settings, balances, today)
+    if assessment is not None:
+        late_fee.fee_month = assessment.fee_month
+        late_fee.due_date = assessment.due_date
+        late_fee.overdue_days = assessment.overdue_days
+        late_fee.amount = assessment.amount
+        late_fee.paid_amount = assessment.paid_amount
+    return late_fee, assessment
+
+
+def calculate_late_fee(settings, balances, today):
+    outstanding = [balance for balance in balances if balance.due_amount > 0]
+    total_due = sum(balance.due_amount for balance in outstanding)
+    total_payable = sum(balance.payable_amount for balance in balances)
+    late_fee = FeePaymentLateFee()
+    if settings is None:
+        return late_fee
+    late_fee.enabled = settings.late_fee_enabled
+    late_fee.type = settings.late_fee_type
+    late_fee.late_fee_amount = settings.late_fee_amount
+    late_fee.min_due_percentage = settings.min_due_amount
+    if not outstanding:
+        return late_fee
+    first_unpaid_month = min(balance.fee_month for balance in outstanding)
+    late_fee.fee_month = first_unpaid_month
+    year, month = map(int, first_unpaid_month.split("-"))
+    generation_date = date(year, month, min(settings.generation_day, monthrange(year, month)[1]))
+    due_ordinal = generation_date.toordinal() + settings.payment_due_day
+    if due_ordinal > date.max.toordinal():
+        return late_fee
+    late_fee.due_date = date.fromordinal(due_ordinal)
+    late_fee.overdue_days = max(0, (today - late_fee.due_date).days)
+    if (
+        not late_fee.enabled or not late_fee.overdue_days
+        or settings.min_due_amount is None or settings.late_fee_amount is None
+        or total_due * 100 < total_payable * settings.min_due_amount
+    ):
+        return late_fee
+    if late_fee.type == LateFeeType.DAILY:
+        late_fee.amount = settings.late_fee_amount * late_fee.overdue_days
+    elif late_fee.type == LateFeeType.MONTHLY:
+        late_fee.amount = settings.late_fee_amount
+    return late_fee
 
 
 def fee_payment_months(db, school_id, session_id, student_id, *, months=None, exclude_adjustment_id=None):

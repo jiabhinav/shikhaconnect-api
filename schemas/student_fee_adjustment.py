@@ -9,12 +9,25 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 from schemas.enums import FeeAdjustmentFrequency, FeeAdjustmentType, FeeDiscountType
 
 
-class StudentFeeAdjustmentWrite(BaseModel):
+class StudentFeeAdjustmentKind(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: FeeAdjustmentType
     frequency: FeeAdjustmentFrequency
     discount_type: FeeDiscountType | None = None
+
+    @model_validator(mode="after")
+    def validate_discount_type(self):
+        if self.type == FeeAdjustmentType.DISCOUNT and self.discount_type is None:
+            raise ValueError("discount_type is required for discounts")
+        if self.type == FeeAdjustmentType.PENALTY and self.discount_type is not None:
+            raise ValueError("discount_type is only allowed for discounts")
+        return self
+
+
+class StudentFeeAdjustmentDateAmount(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
     date: Date = Field(description="Adjustment date in YYYY-MM-DD, or YYYY-MM for the first day of a month.")
     description: Annotated[str, StringConstraints(strip_whitespace=True, max_length=1000)] = ""
@@ -31,13 +44,14 @@ class StudentFeeAdjustmentWrite(BaseModel):
     def accept_null_description(cls, value):
         return "" if value is None else value
 
-    @model_validator(mode="after")
-    def validate_discount_type(self):
-        if self.type == FeeAdjustmentType.DISCOUNT and self.discount_type is None:
-            raise ValueError("discount_type is required for discounts")
-        if self.type == FeeAdjustmentType.PENALTY and self.discount_type is not None:
-            raise ValueError("discount_type is only allowed for discounts")
-        return self
+
+class StudentFeeAdjustmentWrite(StudentFeeAdjustmentKind, StudentFeeAdjustmentDateAmount):
+    pass
+
+
+class StudentFeeAdjustmentMonthBulkWrite(StudentFeeAdjustmentKind):
+    admission_number: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)]
+    month: list[StudentFeeAdjustmentDateAmount] = Field(min_length=1, max_length=12)
 
 
 class StudentFeeAdjustmentResponse(StudentFeeAdjustmentWrite):
@@ -47,7 +61,10 @@ class StudentFeeAdjustmentResponse(StudentFeeAdjustmentWrite):
     school_id: int
     session_id: int
     student_id: int
+    admission_number: str | None = None
+    tag: str | None = None
     applied_at: datetime | None
+    editable: bool
 
 
 class StudentFeeAdjustmentResult(BaseModel):
@@ -78,6 +95,14 @@ class StudentFeeAdjustmentBulkResult(BaseModel):
     message: str
     total: int
     data: list[StudentFeeAdjustmentBulkRowResult]
+
+
+class StudentFeeAdjustmentMonthBulkRowResult(StudentFeeAdjustmentBulkRowResult):
+    admission_number: str
+
+
+class StudentFeeAdjustmentMonthBulkResult(StudentFeeAdjustmentBulkResult):
+    data: list[StudentFeeAdjustmentMonthBulkRowResult]
 
 
 class StudentFeeAdjustmentListResult(BaseModel):

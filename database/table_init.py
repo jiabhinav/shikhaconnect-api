@@ -9,7 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from database.database import Base
 from database.fee_configuration_table import migrate_fee_configuration_month_rows
-from database.generation_settings_table import merge_generation_settings
+from database.generation_settings_table import ensure_late_fee_enabled_default, merge_generation_settings
 from database.fee_structure_table import remove_fee_structure_carry_forward
 from database.fee_assignment_table import (ensure_fee_assignment_section_column,
                                            rename_fee_assignment_structure_column,
@@ -94,9 +94,30 @@ def ensure_all_tables(connection):
     allow_legacy_service_name_null(connection)
     remove_legacy_session_year_index(connection)
     existing = set(inspect(connection).get_table_names())
+    if "student_fee_adjustments" in existing:
+        columns = {column["name"] for column in inspect(connection).get_columns("student_fee_adjustments")}
+        if_not_exists = "IF NOT EXISTS " if connection.dialect.name == "postgresql" else ""
+        for name, definition in (
+            ("tag", "VARCHAR(50)"),
+            ("admission_number", "VARCHAR(150)"),
+            ("paid_amount", "NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (paid_amount >= 0 AND paid_amount <= amount)"),
+        ):
+            if name not in columns:
+                connection.exec_driver_sql(
+                    f"ALTER TABLE student_fee_adjustments ADD COLUMN {if_not_exists}{name} {definition}"
+                )
     if "student_carry_forwards" in existing:
         migrate_student_carry_forwards(connection)
+    for table in ("student_fee_cheque_payments", "student_fee_razorpay_orders"):
+        if table in existing and "late_fee_payment_amount" not in {
+            column["name"] for column in inspect(connection).get_columns(table)
+        }:
+            if_not_exists = "IF NOT EXISTS " if connection.dialect.name == "postgresql" else ""
+            connection.exec_driver_sql(
+                f"ALTER TABLE {table} ADD COLUMN {if_not_exists}late_fee_payment_amount NUMERIC(16, 2) NOT NULL DEFAULT 0"
+            )
     merge_generation_settings(connection)
+    ensure_late_fee_enabled_default(connection)
     if set(Base.metadata.tables).issubset(existing):
         _drop_legacy_session_month_date(connection)
         _normalize_session_month_format(connection)

@@ -10,7 +10,7 @@ from schemas.enums import FeeType, LateFeeType
 class GenerationBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
     generation_day: int = Field(ge=1, le=31, strict=True)
-    late_fee_enabled: bool = Field(default=False, strict=True)
+    late_fee_enabled: bool = Field(default=True, strict=True)
     late_fee_type: LateFeeType | None = None
     late_fee_amount: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
     min_due_amount: int | None = Field(
@@ -33,7 +33,11 @@ class GenerationSettingsWrite(GenerationBase):
 
     @model_validator(mode="after")
     def validate_settings(self):
-        if self.late_fee_enabled and (self.late_fee_amount is None or self.min_due_amount is None):
+        if (
+            self.late_fee_enabled
+            and "late_fee_enabled" in self.model_fields_set
+            and (self.late_fee_amount is None or self.min_due_amount is None)
+        ):
             raise ValueError("late_fee_amount and min_due_amount are required when late fees are enabled")
         if self.fee_type == FeeType.TRANSPORT and not 1 <= self.payment_due_day <= 31:
             raise ValueError("transport payment_due_day must be between 1 and 31")

@@ -387,7 +387,7 @@ Transport payload:
 
 `generation_day` and transport `payment_due_day` are days of month (1–31).
 For school fees, `payment_due_day` is a nonnegative number of days after generation.
-These meanings follow the screenshot labels. The late-fee flag defaults to false.
+These meanings follow the screenshot labels. The late-fee flag defaults to true.
 The optional `late_fee_type` accepts `daily` or `monthly`.
 Both endpoints accept `school_fee` or `transport` as `fee_type` in POST and PUT
 bodies and as a GET query parameter. For POST and PUT, the fee endpoint defaults
@@ -1485,3 +1485,44 @@ amounts return `amount: "0.00"`, with the entered value retained in
 and `session_id` to return details for the selected assignment's class and fee
 configuration, including all sections assigned to that same class/configuration
 (for example, when opening the eye/details action).
+
+### Razorpay school-fee checkout
+
+Set `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and `RAZORPAY_WEBHOOK_SECRET`
+in the API environment. Use matching Razorpay test credentials for testing.
+Enable automatic capture and subscribe to `payment.captured` at
+`POST /schools/student_fees/razorpay/webhook` using the webhook secret.
+
+School administrators can call
+`POST /schools/student_fees/razorpay/orders?school_id=18&session_id=29`
+with the fee allocations in rupees.
+
+```json
+{
+  "student_id": 225,
+  "months": [
+    { "fee_month": "2026-11", "payment_amount": "11700.00" }
+  ]
+}
+```
+
+To collect a late fee, include the outstanding late fee in
+`late_fee_payment_amount` at the top level of the order or
+`POST /schools/student_fees` request. Keep the monthly amounts in `months`.
+The API applies the late-fee payment after clearing the regular balance
+through the month identified by `late_fee.fee_month` in
+`GET /schools/fee_payments`. That response also reports
+`late_fee.paid_amount` and `late_fee.due_amount`.
+
+Use the returned `data.key_id`, `data.order_id`, `data.amount` in paise, and
+`data.currency` to open Razorpay Standard Checkout. Submit Checkout's
+`razorpay_order_id`, `razorpay_payment_id`, and `razorpay_signature` to
+`POST /schools/student_fees/razorpay/verify?school_id=18&session_id=29`.
+Successful verification returns `status: "success"` and
+`data.payment_status: "captured"`.
+Keep both secrets on the server.
+
+The fee ledger is updated only after a verified capture. If the outstanding
+balance changes during checkout and the captured amount can no longer be
+applied, reconcile the order in the Razorpay Dashboard. Refunds are handled
+through Razorpay.

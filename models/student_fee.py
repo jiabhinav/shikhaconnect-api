@@ -1,4 +1,6 @@
-from sqlalchemy import CheckConstraint, Column, ForeignKey, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    JSON, BigInteger, CheckConstraint, Column, Date, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint, func,
+)
 from sqlalchemy.orm import relationship
 
 from database.database import Base
@@ -59,3 +61,57 @@ class StudentFeeHead(Base):
     @property
     def due_amount(self):
         return self.net_amount - self.paid_amount
+
+
+class StudentFeeChequePayment(Base):
+    __tablename__ = "student_fee_cheque_payments"
+    __table_args__ = (
+        CheckConstraint("status IN ('PENDING', 'SUCCESS', 'BOUNCED')", name="ck_fee_cheque_status"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id = Column(Integer, ForeignKey("sessions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True)
+    cheque_number = Column(String(100), nullable=False)
+    months = Column(JSON, nullable=False)
+    late_fee_payment_amount = Column(Numeric(16, 2), nullable=False, server_default="0")
+    description = Column(String(1000), nullable=True)
+    collected_by = Column(String(255), nullable=True)
+    status = Column(String(10), nullable=False, default="PENDING")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class StudentFeeRazorpayOrder(Base):
+    __tablename__ = "student_fee_razorpay_orders"
+
+    id = Column(Integer, primary_key=True)
+    school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id = Column(Integer, ForeignKey("sessions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True)
+    razorpay_order_id = Column(String(100), nullable=False, unique=True)
+    razorpay_payment_id = Column(String(100), nullable=True, unique=True)
+    amount = Column(BigInteger, nullable=False)
+    months = Column(JSON, nullable=False)
+    late_fee_payment_amount = Column(Numeric(16, 2), nullable=False, server_default="0")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    posted_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class StudentFeeLatePayment(Base):
+    __tablename__ = "student_fee_late_payments"
+    __table_args__ = (
+        UniqueConstraint("school_id", "session_id", "student_id", name="uq_student_fee_late_payment_session"),
+        CheckConstraint("amount > 0 AND paid_amount >= 0 AND paid_amount <= amount", name="ck_fee_late_payment_range"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False)
+    session_id = Column(Integer, ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    fee_month = Column(String(7), nullable=False)
+    due_date = Column(Date, nullable=False)
+    overdue_days = Column(Integer, nullable=False)
+    amount = Column(Numeric(16, 2), nullable=False)
+    paid_amount = Column(Numeric(16, 2), nullable=False)
