@@ -25,6 +25,7 @@ class StudentFee(Base):
     fine_amount = Column(Numeric(12, 2), nullable=False, default=0)
     net_amount = Column(Numeric(12, 2), nullable=False)
     paid_amount = Column(Numeric(12, 2), nullable=False, default=0)
+    late_fee_amount = Column(Numeric(16, 2), CheckConstraint("late_fee_amount >= 0"), nullable=False, server_default="0")
     status = Column(String(10), nullable=False, default="UNPAID")
     payment_mode = Column(String(50), nullable=True)
     description = Column(String(1000), nullable=True)
@@ -102,7 +103,7 @@ class StudentFeeRazorpayOrder(Base):
 class StudentFeeLatePayment(Base):
     __tablename__ = "student_fee_late_payments"
     __table_args__ = (
-        UniqueConstraint("school_id", "session_id", "student_id", name="uq_student_fee_late_payment_session"),
+        UniqueConstraint("school_id", "session_id", "student_id", "fee_month", name="uq_student_fee_late_payment_month"),
         CheckConstraint("amount > 0 AND paid_amount >= 0 AND paid_amount <= amount", name="ck_fee_late_payment_range"),
     )
 

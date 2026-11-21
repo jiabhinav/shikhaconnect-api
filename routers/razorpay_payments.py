@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -35,11 +35,14 @@ class RazorpayOrderWrite(BaseModel):
 
     @model_validator(mode="after")
     def validate_allocations(self):
-        if not self.months and self.late_fee_payment_amount == 0:
-            raise ValueError("Select fee months or enter a late fee payment amount")
+        if not self.months:
+            raise ValueError("Select at least one fee month")
         if len({month.fee_month for month in self.months}) != len(self.months):
             raise ValueError("fee_month values must be unique")
-        if any(month.payment_amount <= 0 for month in self.months):
+        payment = StudentFeeWrite(
+            student_id=self.student_id, months=self.months, late_fee_payment_amount=self.late_fee_payment_amount,
+        )
+        if any(month.payment_amount + payment.late_fee_payment_for(month) <= 0 for month in self.months):
             raise ValueError("Razorpay payment amounts must be greater than zero")
         return self
 
@@ -108,7 +111,7 @@ def create_order(
     apply_student_fee_payment(
         db, school_id, session_id, payment, validate_only=True, gateway_mode=PaymentMode.RAZORPAY,
     )
-    amount = int(sum((month.payment_amount for month in payload.months), payload.late_fee_payment_amount) * 100)
+    amount = int(sum((month.payment_amount for month in payload.months), payment.total_late_fee_payment) * 100)
     created = client.request("POST", "/v1/orders", {
         "amount": amount, "currency": "INR", "receipt": uuid4().hex, "partial_payment": False,
     })
@@ -176,7 +179,7 @@ def post_captured_payment(db, order, payment):
             student_id=order.student_id, months=order.months, late_fee_payment_amount=order.late_fee_payment_amount,
         )
         apply_student_fee_payment(
-            db, order.school_id, order.session_id, allocation, gateway_mode=PaymentMode.RAZORPAY, quoted_at=order.created_at,
+            db, order.school_id, order.session_id, allocation, gateway_mode=PaymentMode.RAZORPAY,
         )
         order.razorpay_payment_id = payment_id
         order.posted_at = datetime.now(timezone.utc)
@@ -184,6 +187,9 @@ def post_captured_payment(db, order, payment):
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(409, "Razorpay payment could not be posted to the fee ledger") from exc
+    except ValidationError as exc:
+        db.rollback()
+        raise HTTPException(409, "The stored order requires explicit late-fee amounts for its fee months") from exc
     except Exception:
         db.rollback()
         raise

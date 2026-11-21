@@ -108,6 +108,18 @@ def ensure_all_tables(connection):
                 )
     if "student_carry_forwards" in existing:
         migrate_student_carry_forwards(connection)
+    if "student_fees" in existing:
+        add_student_fee_late_fee_amount(connection, backfill="student_fee_late_payments" in existing)
+    if "student_fee_late_payments" in existing and connection.dialect.name == "postgresql":
+        old_constraint = "uq_student_fee_late_payment_session"
+        table = "student_fee_late_payments"
+        if any(item["name"] == old_constraint for item in inspect(connection).get_unique_constraints(table)):
+            acquire_transaction_lock(connection, 731904218)
+            connection.exec_driver_sql(f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {old_constraint}")
+            connection.exec_driver_sql(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS uq_student_fee_late_payment_month "
+                f"ON {table} (school_id, session_id, student_id, fee_month)"
+            )
     for table in ("student_fee_cheque_payments", "student_fee_razorpay_orders"):
         if table in existing and "late_fee_payment_amount" not in {
             column["name"] for column in inspect(connection).get_columns(table)
@@ -184,6 +196,46 @@ def ensure_all_tables(connection):
     migrate_teacher_logins(connection)
     migrate_teacher_employee_codes(connection)
     migrate_teacher_profile_image(connection)
+
+
+def add_student_fee_late_fee_amount(connection, *, backfill):
+    if "late_fee_amount" in {column["name"] for column in inspect(connection).get_columns("student_fees")}:
+        return
+    if connection.dialect.name == "postgresql":
+        acquire_transaction_lock(connection, 731904218)
+        if "late_fee_amount" in {column["name"] for column in inspect(connection).get_columns("student_fees")}:
+            return
+    connection.exec_driver_sql(
+        "ALTER TABLE student_fees ADD COLUMN late_fee_amount NUMERIC(16, 2) "
+        "NOT NULL DEFAULT 0 CHECK (late_fee_amount >= 0)"
+    )
+    if backfill:
+        connection.exec_driver_sql("""
+            UPDATE student_fees
+            SET late_fee_amount = COALESCE((
+                SELECT late.paid_amount FROM student_fee_late_payments AS late
+                WHERE late.school_id = student_fees.school_id
+                  AND late.session_id = student_fees.academic_session_id
+                  AND late.student_id = student_fees.student_id
+                  AND late.fee_month = student_fees.fee_month
+            ), 0)
+        """)
+        connection.exec_driver_sql("""
+            INSERT INTO student_fees (
+                school_id, academic_session_id, student_id, fee_month,
+                total_amount, discount_amount, fine_amount, net_amount, paid_amount, status, late_fee_amount
+            )
+            SELECT late.school_id, late.session_id, late.student_id, late.fee_month,
+                   0, 0, 0, 0, 0, 'PAID', late.paid_amount
+            FROM student_fee_late_payments AS late
+            WHERE late.paid_amount > 0 AND NOT EXISTS (
+                SELECT 1 FROM student_fees AS fee
+                WHERE fee.school_id = late.school_id
+                  AND fee.academic_session_id = late.session_id
+                  AND fee.student_id = late.student_id
+                  AND fee.fee_month = late.fee_month
+            )
+        """)
 
 
 def _drop_legacy_session_month_date(connection):

@@ -2,6 +2,8 @@ import unittest
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
+from sqlalchemy import event
+
 import catalog_setup
 import test_sessions
 import test_student_carry_forwards
@@ -23,6 +25,94 @@ class StudentFeeDiscountTests(unittest.TestCase):
     setUp = catalog_setup.setUp
     tearDown = test_sessions.SessionTests.tearDown
     make_student = test_student_carry_forwards.StudentCarryForwardBulkTests.make_student
+
+    def test_late_payment_records_amounts_supplied_for_each_month(self):
+        student_id = self.make_student(1, 1, '001')
+        scope = {'school_id': 1, 'session_id': 1}
+        tuition = FeeHead(**scope, fee_head_name='Tuition', student_type='New')
+        settings = FeeGenerationSettings(
+            **scope, generation_day=1, payment_due_day=9, late_fee_enabled=True,
+            late_fee_type='daily', late_fee_amount=10, min_due_amount=1,
+        )
+        self.db.add_all([tuition, settings])
+        for month in range(1, 6):
+            self.db.add(StudentFee(
+                school_id=1, academic_session_id=1, student_id=student_id, fee_month=f'2025-{month:02d}',
+                total_amount=100, net_amount=100, paid_amount=0, status='UNPAID',
+                fee_heads=[StudentFeeHead(fee_head=tuition, amount=100, net_amount=100, paid_amount=0)],
+            ))
+        self.db.commit()
+        student_scope = scope | {'student_id': student_id}
+        payload = {
+            'student_id': student_id, 'payment_mode': 'Cash',
+            'months': [
+                {'fee_month': '2025-02', 'payment_amount': 100, 'late_fee_payment_amount': '13.25'},
+                {'fee_month': '2025-03', 'payment_amount': 100, 'late_fee_payment_amount': '481.90'},
+            ],
+        }
+        url = '/schools/student_fees'
+        ambiguous = self.client.post(url, params=scope, json=payload | {'late_fee_payment_amount': 100})
+        self.assertEqual(ambiguous.status_code, 422, ambiguous.text)
+        paid = self.client.post(url, params=scope, json=payload)
+        self.assertEqual(paid.status_code, 201, paid.text)
+        self.assertEqual(paid.json()['late_fee_paid_amount'], '495.15')
+        self.assertEqual([row['late_fee_amount'] for row in paid.json()['data']], ['13.25', '481.90'])
+        balances = self.client.get('/schools/fee_payments', params=student_scope).json()['data']
+        self.assertEqual([row['status'] for row in balances[:5]], ['UNPAID', 'PAID', 'PAID', 'UNPAID', 'UNPAID'])
+
+        response = self.client.post(url, params=scope, json=payload | {
+            'months': [
+                {'fee_month': '2025-05', 'payment_amount': 100},
+                {'fee_month': '2025-04', 'payment_amount': 50},
+            ],
+            'late_fee_payment_amount': '51.00',
+        })
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()['late_fee_paid_amount'], '51.00')
+        self.assertEqual(
+            {row['fee_month']: row['late_fee_amount'] for row in response.json()['data']},
+            {'2025-04': '51.00', '2025-05': '0.00'},
+        )
+        april = next(row for row in response.json()['data'] if row['fee_month'] == '2025-04')
+        self.assertEqual((april['status'], april['due_amount']), ('PARTIAL', '50.00'))
+
+    def test_total_payment_clears_earlier_month_and_only_partially_funds_last_head(self):
+        student_id = self.make_student(1, 1, '001')
+        scope = {'school_id': 1, 'session_id': 1}
+        tuition = FeeHead(**scope, fee_head_name='Tuition', student_type='New')
+        transport = FeeHead(**scope, fee_head_name='Transport', student_type='New')
+        activities = FeeHead(**scope, fee_head_name='Activities', student_type='New')
+        self.db.add_all([tuition, transport, activities])
+        self.db.flush()
+        for month in ('2025-01', '2025-02', '2025-03'):
+            self.db.add(StudentFee(
+                school_id=1, academic_session_id=1, student_id=student_id, fee_month=month,
+                total_amount=175, net_amount=175, paid_amount=0, status='UNPAID',
+                fee_heads=[
+                    StudentFeeHead(fee_head=tuition, amount=100, net_amount=100, paid_amount=0),
+                    StudentFeeHead(fee_head=transport, amount=50, net_amount=50, paid_amount=0),
+                    StudentFeeHead(fee_head=activities, amount=25, net_amount=25, paid_amount=0),
+                ],
+            ))
+        self.db.commit()
+        payload = {
+            'student_id': student_id, 'payment_mode': 'Cash', 'payment_amount': '300.00',
+            'months': [{'fee_month': month} for month in ('2025-03', '2025-02', '2025-01')],
+        }
+        url = '/schools/student_fees'
+        self.assertEqual(self.client.post(url, params=scope, json=payload | {'payment_amount': '525.01'}).status_code, 422)
+        response = self.client.post(url, params=scope, json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(
+            [(month['fee_month'], month['status'], month['due_amount']) for month in response.json()['data']],
+            [('2025-01', 'PAID', '0.00'), ('2025-02', 'PARTIAL', '50.00')],
+        )
+        balances = self.client.get('/schools/fee_payments', params=scope | {'student_id': student_id}).json()['data']
+        self.assertEqual(
+            {head['fee_head_name']: (head['paid_amount'], head['due_amount']) for head in balances[1]['fee_heads']},
+            {'Tuition': ('100.00', '0.00'), 'Transport': ('25.00', '25.00'), 'Activities': ('0.00', '25.00')},
+        )
+        self.assertEqual((balances[2]['status'], balances[2]['due_amount']), ('UNPAID', '175.00'))
 
     def test_cash_payment_clears_carry_forward_fee_heads_and_penalty(self):
         student_id = self.make_student(1, 1, '001')
@@ -69,25 +159,105 @@ class StudentFeeDiscountTests(unittest.TestCase):
         month = balance.json()['data'][0]
         self.assertEqual((month['paid_amount'], month['due_amount'], month['status']), ('5900.00', '0.00', 'PAID'))
         self.assertEqual(month['fee_adjustment'][0]['due_amount'], '0.00')
-        self.assertEqual(balance.json()['late_fee']['due_amount'], '120.00')
+        self.assertEqual(month['late_fee_paid_amount'], '1000.00')
         remainder = self.client.post(
             url, params=scope, json=payload | {
-                'payment_mode': 'Cheque', 'cheque_number': '00120', 'months': [], 'late_fee_payment_amount': 120,
+                'payment_mode': 'Cheque', 'cheque_number': '00120', 'late_fee_payment_amount': 120,
+                'months': [{'fee_month': '2025-01', 'payment_amount': 0}],
             },
         )
         self.assertEqual(remainder.status_code, 201, remainder.text)
         cheque = remainder.json()['data']
         self.assertEqual(cheque['status'], 'PENDING')
         self.assertEqual(
-            self.client.get('/schools/fee_payments', params=student_scope).json()['late_fee']['due_amount'], '120.00',
+            self.client.get('/schools/fee_payments', params=student_scope).json()['data'][0]['late_fee_paid_amount'], '1000.00',
         )
         cleared = self.client.patch(
             f"{url}/cheque_payments/{cheque['id']}", params=scope, json={'status': 'SUCCESS'},
         )
         self.assertEqual(cleared.status_code, 200, cleared.text)
-        settled = self.client.get('/schools/fee_payments', params=student_scope).json()['late_fee']
-        self.assertEqual((settled['paid_amount'], settled['due_amount']), ('1120.00', '0.00'))
-        self.assertEqual(self.client.post(url, params=scope, json=payload).status_code, 422)
+        settled = self.client.get('/schools/fee_payments', params=student_scope).json()['data'][0]
+        self.assertEqual(settled['late_fee_paid_amount'], '1120.00')
+        record = self.db.query(StudentFee).filter_by(student_id=student_id, fee_month='2025-01').one()
+        self.assertEqual(record.late_fee_amount, Decimal('1120.00'))
+        repeated = self.client.post(url, params=scope, json=payload | {'late_fee_payment_amount': 0})
+        self.assertEqual(repeated.status_code, 201, repeated.text)
+        self.assertEqual(repeated.json()['data'], [])
+
+    def test_cash_payment_skips_settled_carry_forward_and_months(self):
+        student_id = self.make_student(1, 1, '001')
+        scope = {'school_id': 1, 'session_id': 1}
+        carry = self.db.query(StudentCarryForward).filter_by(student_id=student_id).one()
+        carry.amount = carry.paid_amount = Decimal('50.00')
+        tuition = FeeHead(**scope, fee_head_name='Tuition', student_type='New')
+        for month, paid in (('2025-02', 100), ('2025-03', 0)):
+            self.db.add(StudentFee(
+                school_id=1, academic_session_id=1, student_id=student_id, fee_month=month,
+                total_amount=100, net_amount=100, paid_amount=paid, status='PAID' if paid else 'UNPAID',
+                fee_heads=[StudentFeeHead(fee_head=tuition, amount=100, net_amount=100, paid_amount=paid)],
+            ))
+        self.db.commit()
+        response = self.client.post('/schools/student_fees', params=scope, json={
+            'student_id': student_id, 'payment_mode': 'Cash',
+            'months': [
+                {'fee_month': '2025-01', 'payment_amount': 50},
+                {'fee_month': '2025-02', 'payment_amount': 100},
+                {'fee_month': '2025-03', 'payment_amount': 25},
+            ],
+        })
+        self.assertEqual(response.status_code, 201, response.text)
+        result = response.json()
+        self.assertEqual(result['carry_forward_paid_amount'], '0.00')
+        self.assertEqual(
+            [(row['fee_month'], row['due_amount']) for row in result['data']], [('2025-03', '75.00')],
+        )
+        self.db.refresh(carry)
+        self.assertEqual(carry.paid_amount, Decimal('50.00'))
+
+    def test_late_fee_reuses_month_created_before_insert(self):
+        student_id = self.make_student(1, 1, '001')
+        carry = self.db.query(StudentCarryForward).filter_by(student_id=student_id).one()
+        carry.amount = carry.paid_amount = Decimal('50.00')
+        self.db.commit()
+        inserted_ids = []
+
+        def insert_month_first(conn, cursor, statement, parameters, context, executemany):
+            if not inserted_ids and statement.startswith('INSERT INTO student_fees '):
+                cursor.execute("""
+                    INSERT INTO student_fees (
+                        school_id, academic_session_id, student_id, fee_month,
+                        total_amount, discount_amount, fine_amount, net_amount, paid_amount, status
+                    ) VALUES (1, 1, ?, '2025-01', 0, 0, 0, 0, 0, 'PAID')
+                """, (student_id,))
+                inserted_ids.append(cursor.lastrowid)
+
+        event.listen(self.engine, 'before_cursor_execute', insert_month_first)
+        try:
+            response = self.client.post('/schools/student_fees', params={'school_id': 1, 'session_id': 1}, json={
+                'student_id': student_id, 'payment_mode': 'Cash',
+                'months': [{'fee_month': '2025-01', 'payment_amount': 50}],
+                'late_fee_payment_amount': '51.00',
+            })
+        finally:
+            event.remove(self.engine, 'before_cursor_execute', insert_month_first)
+        self.assertEqual(response.status_code, 201, response.text)
+        record = self.db.query(StudentFee).filter_by(student_id=student_id, fee_month='2025-01').one()
+        self.assertEqual((record.id, record.late_fee_amount), (inserted_ids[0], Decimal('51.00')))
+
+    def test_late_fee_payment_works_when_legacy_column_has_no_default(self):
+        student_id = self.make_student(1, 1, '001')
+        with self.engine.begin() as connection:
+            connection.exec_driver_sql('ALTER TABLE student_fees DROP COLUMN late_fee_amount')
+            connection.exec_driver_sql('ALTER TABLE student_fees ADD COLUMN late_fee_amount NUMERIC(16, 2) NOT NULL')
+
+        response = self.client.post('/schools/student_fees', params={'school_id': 1, 'session_id': 1}, json={
+            'student_id': student_id, 'payment_mode': 'Cash',
+            'months': [{'fee_month': '2025-01', 'payment_amount': 0}],
+            'late_fee_payment_amount': '51.00',
+        })
+        self.assertEqual(response.status_code, 201, response.text)
+        record = self.db.query(StudentFee).filter_by(student_id=student_id, fee_month='2025-01').one()
+        self.assertEqual(record.late_fee_amount, Decimal('51.00'))
 
     def test_cheque_payment_waits_for_clearance_and_posts_only_once(self):
         student_id = self.make_student(1, 1, '001')

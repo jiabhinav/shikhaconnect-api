@@ -8,13 +8,16 @@ from pydantic import (
 from schemas.enums import StudentFeeStatus
 
 
-class CarryForwardUploadRow(BaseModel):
+class CarryForwardAmountWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    amount: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
+
+
+class CarryForwardUploadRow(CarryForwardAmountWrite):
     admission_number: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)] = Field(
         validation_alias=AliasChoices("admission_number", "admission_id")
     )
-    amount: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
 
     @field_validator("admission_number", mode="before", json_schema_input_type=str | int)
     @classmethod
@@ -82,3 +85,18 @@ class CarryForwardListResult(BaseModel):
     total: int
     total_records: int
     data: list[CarryForwardListRow]
+
+
+class CarryForwardEditResultRow(BaseModel):
+    id: int
+    student_id: int
+    admission_number: str | None
+    amount: Decimal
+    paid_amount: Decimal
+    unpaid_amount: Decimal
+
+
+class CarryForwardEditResult(BaseModel):
+    status: str = "success"
+    message: str
+    data: CarryForwardEditResultRow

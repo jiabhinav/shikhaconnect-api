@@ -11,6 +11,31 @@ from database.database import Base
 
 
 class TableInitializationTests(unittest.TestCase):
+    def test_student_fee_late_amount_migration_backfills_collected_amounts(self):
+        engine = create_engine("sqlite://")
+        self.addCleanup(engine.dispose)
+        with engine.begin() as connection:
+            ensure_all_tables(connection)
+            connection.exec_driver_sql("ALTER TABLE student_fees DROP COLUMN late_fee_amount")
+            connection.exec_driver_sql("""
+                INSERT INTO student_fees (
+                    school_id, academic_session_id, student_id, fee_month,
+                    total_amount, discount_amount, fine_amount, net_amount, paid_amount, status
+                ) VALUES (1, 1, 1, '2025-01', 100, 0, 0, 100, 100, 'PAID')
+            """)
+            connection.exec_driver_sql("""
+                INSERT INTO student_fee_late_payments (
+                    school_id, session_id, student_id, fee_month, due_date, overdue_days, amount, paid_amount
+                ) VALUES (1, 1, 1, '2025-01', '2025-01-10', 10, 50, 25),
+                         (1, 1, 1, '2025-02', '2025-02-10', 10, 50, 40)
+            """)
+            ensure_all_tables(connection)
+            ensure_all_tables(connection)
+            rows = connection.exec_driver_sql("""
+                SELECT fee_month, paid_amount, late_fee_amount FROM student_fees ORDER BY fee_month
+            """).all()
+            self.assertEqual(rows, [('2025-01', 100, 25), ('2025-02', 0, 40)])
+
     def test_database_dependency_retries_failed_initialization_and_runs_it_once(self):
         engine = create_engine("sqlite://")
         self.addCleanup(engine.dispose)

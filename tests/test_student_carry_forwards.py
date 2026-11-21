@@ -1,8 +1,6 @@
 import unittest
-from datetime import datetime
 from decimal import Decimal
 from io import BytesIO
-from unittest.mock import patch
 
 from openpyxl import Workbook
 
@@ -35,56 +33,25 @@ class StudentCarryForwardBulkTests(unittest.TestCase):
         balance = self.client.get('/schools/fee_payments', params=scope | {'student_id': student_id}).json()['data'][0]
         self.assertEqual(balance['carry_forward']['due_amount'], '30.00')
 
-    def test_fee_payments_calculates_daily_and_flat_monthly_late_fees(self):
+    def test_fee_payments_returns_saved_late_fee_settings(self):
         student_id = self.make_student(1, 1, '001')
-        carry = self.db.query(StudentCarryForward).filter_by(student_id=student_id).one()
-        carry.amount = Decimal('100')
         settings = FeeGenerationSettings(
             school_id=1, session_id=1, fee_type=FeeType.SCHOOL_FEE, generation_day=1,
-            payment_due_day=9, late_fee_enabled=True, late_fee_type=LateFeeType.DAILY,
+            payment_due_day=9, late_fee_enabled=False, late_fee_type=LateFeeType.DAILY,
             late_fee_amount=Decimal('5.50'), min_due_amount=25,
         )
         self.db.add(settings)
         self.db.commit()
+        params = {'school_id': 1, 'session_id': 1, 'student_id': student_id, 'fee_month': '2025-01'}
 
-        def balance_on(day, fee_month='2025-01'):
-            params = {'school_id': 1, 'session_id': 1, 'student_id': student_id}
-            if fee_month is not None:
-                params['fee_month'] = fee_month
-            with patch('routers.fee_assignments.datetime') as clock:
-                clock.now.return_value = datetime(2025, 1, day)
-                response = self.client.get('/schools/fee_payments', params=params)
-            self.assertEqual(response.status_code, 200, response.text)
-            return response.json()
-
-        above_threshold = balance_on(13)['late_fee']
-        self.assertEqual(above_threshold['amount'], '16.50')
-        self.assertNotIn('due_percentage', above_threshold)
-        carry.paid_amount = Decimal('75')
-        self.db.commit()
-        self.assertEqual(balance_on(10)['late_fee']['amount'], '0.00')
-        overdue = balance_on(13)
-        self.assertEqual(overdue['late_fee'], {
-            'enabled': True, 'type': 'daily', 'due_date': '2025-01-10', 'overdue_days': 3, 'amount': '16.50',
-            'late_fee_amount': '5.50', 'min_due_percentage': 25, 'fee_month': '2025-01',
-            'paid_amount': '0.00', 'due_amount': '16.50',
+        response = self.client.get('/schools/fee_payments', params=params)
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertEqual(result['late_fee'], {
+            'enabled': False, 'type': 'daily', 'late_fee_amount': '5.50', 'min_due_percentage': 25,
+            'generation_day': 1, 'payment_due_day': 9,
         })
-        self.assertEqual(overdue['data'][0]['due_amount'], '25.00')
-        self.assertNotIn('late_fee', overdue['data'][0])
-        self.assertEqual(balance_on(13, fee_month=None)['late_fee'], overdue['late_fee'])
-        self.assertEqual(balance_on(13, fee_month='2025-02')['late_fee'], overdue['late_fee'])
-
-        settings.late_fee_type = LateFeeType.MONTHLY
-        self.db.commit()
-        self.assertEqual(balance_on(11)['late_fee']['amount'], '5.50')
-        self.assertEqual(balance_on(30)['late_fee']['amount'], '5.50')
-
-        carry.paid_amount = Decimal('76')
-        self.db.commit()
-        self.assertEqual(balance_on(30)['late_fee']['amount'], '0.00')
-        carry.paid_amount = Decimal('100')
-        self.db.commit()
-        self.assertEqual(balance_on(30)['late_fee']['amount'], '0.00')
+        self.assertEqual(result['data'][0]['late_fee_paid_amount'], '0.00')
 
     def make_student(self, school_id, session_id, admission_number):
         school_class = self.db.query(SchoolClass).filter_by(school_id=school_id, session_id=session_id).first()
@@ -230,6 +197,69 @@ class StudentCarryForwardBulkTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422, response.text)
         self.assertEqual(response.json()['detail']['row'], 3)
         self.assertEqual(self.db.query(StudentCarryForward).filter_by(student_id=first).one().amount, Decimal('125.50'))
+
+    def test_edit_and_delete_carry_forward_preserve_payments_and_scope(self):
+        student_id = self.make_student(1, 1, None)
+        record = self.db.query(StudentCarryForward).filter_by(student_id=student_id).one()
+        record.amount = Decimal('100.00')
+        record.paid_amount = Decimal('25.00')
+        self.db.commit()
+        scope = {'school_id': 1, 'session_id': 1}
+        list_url = '/schools/student_carry_forwards'
+        url = f'{list_url}/{record.id}'
+
+        for request in (
+            lambda params: self.client.put(url, params=params, json={'amount': '75.00'}),
+            lambda params: self.client.delete(url, params=params),
+        ):
+            self.assertEqual(request({'school_id': 1, 'session_id': 3}).status_code, 404)
+            self.assertEqual(request({'school_id': 2, 'session_id': 2}).status_code, 404)
+
+        response = self.client.put(url, params=scope, json={'amount': '75.00'})
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(self.client.delete(url, params=scope).status_code, 409)
+
+        unpaid_id = self.make_student(1, 1, '002')
+        unpaid = self.db.query(StudentCarryForward).filter_by(student_id=unpaid_id).one()
+        unpaid.amount = Decimal('200.00')
+        self.db.commit()
+        delete_url = f'{list_url}/{unpaid.id}'
+        response = self.client.put(delete_url, params=scope, json={'amount': '75.00'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['data']['unpaid_amount'], '75.00')
+        self.assertEqual(self.client.put(delete_url, params=scope, json={'amount': '80.001'}).status_code, 422)
+        response = self.client.delete(delete_url, params=scope)
+        self.assertEqual(response.status_code, 204, response.text)
+        self.assertEqual(self.client.delete(delete_url, params=scope).status_code, 404)
+        self.assertEqual(self.client.put(delete_url, params=scope, json={'amount': '75.00'}).status_code, 404)
+        rows = self.client.get(list_url, params=scope).json()['data']
+        self.assertEqual([row['id'] for row in rows], [record.id])
+        self.assertEqual(rows[0]['due_amount'], '75.00')
+        self.assertEqual(rows[0]['status'], 'PARTIAL')
+        self.db.refresh(unpaid)
+        self.assertEqual(unpaid.amount, Decimal('0.00'))
+
+    def test_fully_paid_carry_forward_cannot_be_edited_or_deleted(self):
+        student_id = self.make_student(1, 1, '001')
+        record = self.db.query(StudentCarryForward).filter_by(student_id=student_id).one()
+        record.amount = record.paid_amount = Decimal('200.00')
+        self.db.commit()
+        scope = {'school_id': 1, 'session_id': 1}
+        list_url = '/schools/student_carry_forwards'
+        url = f'{list_url}/{record.id}'
+
+        for response in (
+            self.client.put(url, params=scope, json={'amount': '250.00'}),
+            self.client.delete(url, params=scope),
+        ):
+            self.assertEqual(response.status_code, 409, response.text)
+            self.assertEqual(response.json()['detail'], 'Only unpaid carry-forward fees can be edited or deleted')
+
+        row = self.client.get(list_url, params=scope).json()['data'][0]
+        self.assertEqual(
+            (row['amount'], row['paid_amount'], row['due_amount'], row['status']),
+            ('200.00', '200.00', '0.00', 'PAID'),
+        )
 
     def test_list_carry_forwards_filters_class_and_section_and_returns_payment_status(self):
         section = Section(school_id=1, session_id=1, name='A')

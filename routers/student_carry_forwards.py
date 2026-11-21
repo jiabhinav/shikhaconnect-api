@@ -20,8 +20,10 @@ from models.user import User, UserRole
 from routers.fee_structures import fee_structure_school
 from schemas.enums import StudentFeeStatus
 from schemas.student_carry_forward import (
+    CarryForwardAmountWrite,
     CarryForwardBulkResult,
     CarryForwardBulkWrite,
+    CarryForwardEditResult,
     CarryForwardListResult,
     CarryForwardRawBulkWrite,
     CarryForwardUploadRow,
@@ -133,6 +135,70 @@ def list_carry_forwards(
         "total_records": total_records,
         "data": data,
     }
+
+
+def get_carry_forward_for_update(db: Session, school_id: int, session_id: int, carry_forward_id: int):
+    result = (
+        db.query(StudentCarryForward, Student.admission_number)
+        .join(Student, and_(
+            Student.id == StudentCarryForward.student_id,
+            Student.school_id == StudentCarryForward.school_id,
+            Student.session_id == StudentCarryForward.session_id,
+        ))
+        .filter(
+            StudentCarryForward.id == carry_forward_id,
+            StudentCarryForward.school_id == school_id,
+            StudentCarryForward.session_id == session_id,
+            StudentCarryForward.amount > 0,
+        )
+        .with_for_update(of=StudentCarryForward)
+        .one_or_none()
+    )
+    if result is None:
+        raise HTTPException(404, "Carry-forward fee not found")
+    item, _ = result
+    if item.paid_amount > 0:
+        raise HTTPException(409, "Only unpaid carry-forward fees can be edited or deleted")
+    return result
+
+
+@router.put("/student_carry_forwards/{carry_forward_id}", response_model=CarryForwardEditResult)
+def edit_carry_forward(
+    carry_forward_id: int,
+    school_id: int,
+    session_id: int,
+    payload: CarryForwardAmountWrite,
+    db: Session = Depends(carry_forward_db),
+):
+    item, admission_number = get_carry_forward_for_update(db, school_id, session_id, carry_forward_id)
+    item.amount = payload.amount
+    db.flush()
+    result = {
+        "message": "Carry-forward fee updated successfully",
+        "data": {
+            "id": item.id,
+            "student_id": item.student_id,
+            "admission_number": admission_number,
+            "amount": item.amount,
+            "paid_amount": item.paid_amount,
+            "unpaid_amount": item.unpaid_amount,
+        },
+    }
+    db.commit()
+    return result
+
+
+@router.delete("/student_carry_forwards/{carry_forward_id}", status_code=204)
+def delete_carry_forward(
+    carry_forward_id: int,
+    school_id: int,
+    session_id: int,
+    db: Session = Depends(carry_forward_db),
+):
+    item, _ = get_carry_forward_for_update(db, school_id, session_id, carry_forward_id)
+    # Keep the per-student record used by student creation and bulk upload.
+    item.amount = 0
+    db.commit()
 
 
 @router.post("/student_carry_forwards/bulk-upload/json", response_model=CarryForwardBulkResult)

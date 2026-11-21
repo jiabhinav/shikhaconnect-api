@@ -11,7 +11,8 @@ class StudentFeeWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     student_id: int = Field(gt=0)
-    months: list["StudentFeeMonthPayment"] = Field(max_length=12)
+    months: list["StudentFeeMonthPayment | StudentFeeMonthSelection"] = Field(max_length=12)
+    payment_amount: Decimal | None = Field(default=None, gt=0, max_digits=16, decimal_places=2)
     late_fee_payment_amount: Decimal = Field(default=Decimal("0.00"), ge=0, max_digits=16, decimal_places=2)
     payment_mode: PaymentMode | None = None
     cheque_number: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)] | None = None
@@ -27,14 +28,23 @@ class StudentFeeWrite(BaseModel):
 
     @model_validator(mode="after")
     def validate_unique_months(self):
-        if not self.months and self.late_fee_payment_amount == 0:
-            raise ValueError("Select fee months or enter a late fee payment amount")
+        if not self.months:
+            raise ValueError("Select at least one fee month")
         if len({month.fee_month for month in self.months}) != len(self.months):
             raise ValueError("fee_month values must be unique")
+        if self.late_fee_payment_amount and any(month.late_fee_payment_amount for month in self.months):
+            raise ValueError("Enter late_fee_payment_amount at the top level or on each applicable month")
+        if self.payment_amount is not None:
+            if not self.months or any(isinstance(month, StudentFeeMonthPayment) for month in self.months):
+                raise ValueError("A total payment amount requires selected months without per-month payment amounts")
+        elif any(not isinstance(month, StudentFeeMonthPayment) for month in self.months):
+            raise ValueError("Enter a total payment amount or a payment amount for each selected month")
         if self.payment_mode == PaymentMode.CHEQUE:
             if self.cheque_number is None:
                 raise PydanticCustomError("cheque_number_required", "Enter the cheque number.")
-            if any(month.payment_amount <= 0 for month in self.months):
+            if self.payment_amount is None and any(
+                month.payment_amount + self.late_fee_payment_for(month) <= 0 for month in self.months
+            ):
                 raise ValueError("cheque payment amounts must be greater than zero")
         elif self.cheque_number is not None:
             raise ValueError("cheque_number is only allowed for cheque payments")
@@ -42,11 +52,24 @@ class StudentFeeWrite(BaseModel):
             raise ValueError("Razorpay payments require checkout verification")
         return self
 
+    @property
+    def total_late_fee_payment(self) -> Decimal:
+        return sum((month.late_fee_payment_amount for month in self.months), self.late_fee_payment_amount)
 
-class StudentFeeMonthPayment(BaseModel):
+    def late_fee_payment_for(self, month: "StudentFeeMonthSelection") -> Decimal:
+        if self.late_fee_payment_amount and month.fee_month == min(entry.fee_month for entry in self.months):
+            return self.late_fee_payment_amount
+        return month.late_fee_payment_amount
+
+
+class StudentFeeMonthSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     fee_month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    late_fee_payment_amount: Decimal = Field(default=Decimal("0.00"), ge=0, max_digits=16, decimal_places=2)
+
+
+class StudentFeeMonthPayment(StudentFeeMonthSelection):
     payment_amount: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
 
 
@@ -80,6 +103,7 @@ class StudentFeeResponse(BaseModel):
     fine_amount: Decimal
     net_amount: Decimal
     paid_amount: Decimal
+    late_fee_amount: Decimal
     status: StudentFeeStatus
     payment_mode: PaymentMode | None
     description: str | None
@@ -140,7 +164,10 @@ class StudentFeeChequeResponse(BaseModel):
     @computed_field
     @property
     def payment_amount(self) -> Decimal:
-        return sum((entry.payment_amount for entry in self.months), self.late_fee_payment_amount)
+        return sum(
+            (entry.payment_amount + entry.late_fee_payment_amount for entry in self.months),
+            self.late_fee_payment_amount,
+        )
 
 
 class StudentFeeChequeResult(BaseModel):
@@ -172,27 +199,11 @@ class FeePaymentAdjustmentStatus(FeePaymentHeadStatus):
     discount_type: FeeDiscountType | None
 
 
-class FeePaymentLateFee(BaseModel):
-    enabled: bool = False
-    type: LateFeeType | None = None
-    fee_month: str | None = None
-    due_date: date | None = None
-    overdue_days: int = 0
-    amount: Decimal = Decimal("0.00")
-    paid_amount: Decimal = Decimal("0.00")
-    late_fee_amount: Decimal | None = None
-    min_due_percentage: int | None = None
-
-    @computed_field
-    @property
-    def due_amount(self) -> Decimal:
-        return self.amount - self.paid_amount
-
-
 class FeePaymentMonthStatus(BaseModel):
     fee_month: str
     payable_amount: Decimal
     paid_amount: Decimal
+    late_fee_paid_amount: Decimal = Decimal("0.00")
     due_amount: Decimal
     status: StudentFeeStatus
     fee_adjustment: list[FeePaymentAdjustmentStatus]
@@ -205,9 +216,18 @@ class FeePaymentMonthStatus(BaseModel):
         return self.due_amount
 
 
+class FeePaymentLateFeeSettings(BaseModel):
+    enabled: bool = False
+    type: LateFeeType | None = None
+    late_fee_amount: Decimal | None = None
+    min_due_percentage: int | None = None
+    generation_day: int | None = None
+    payment_due_day: int | None = None
+
+
 class FeePaymentStatusListResult(BaseModel):
     status: str = "success"
     message: str
     total: int
     data: list[FeePaymentMonthStatus]
-    late_fee: FeePaymentLateFee
+    late_fee: FeePaymentLateFeeSettings

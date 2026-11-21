@@ -40,8 +40,9 @@ class RazorpayPaymentTests(unittest.TestCase):
         base = '/schools/student_fees'
         url = f'{base}/razorpay'
         scope = {'school_id': 1, 'session_id': 1}
-        payload = {'student_id': student_id, 'months': [{'fee_month': '2025-01', 'payment_amount': '120.00'}],
-                   'late_fee_payment_amount': '5.50'}
+        payload = {'student_id': student_id, 'months': [
+            {'fee_month': '2025-01', 'payment_amount': '120.00', 'late_fee_payment_amount': '5.50'},
+        ]}
         payment = {'id': 'pay_example', 'order_id': 'order_example', 'currency': 'INR', 'amount': 12550}
         signature = hmac.new(b'checkout-secret', b'order_example|pay_example', 'sha256').hexdigest()
         callback = {'razorpay_order_id': 'order_example', 'razorpay_payment_id': 'pay_example',
@@ -87,5 +88,5 @@ class RazorpayPaymentTests(unittest.TestCase):
         paid = self.client.get(base, params=scope | {'student_id': student_id}).json()['data'][0]
         self.assertEqual(carry.paid_amount, Decimal('20'))
         self.assertEqual((paid['paid_amount'], paid['due_amount'], paid['payment_mode']), ('100.00', '0.00', 'Razorpay'))
-        late_fee = self.client.get('/schools/fee_payments', params=scope | {'student_id': student_id}).json()['late_fee']
-        self.assertEqual((late_fee['paid_amount'], late_fee['due_amount']), ('5.50', '0.00'))
+        balance = self.client.get('/schools/fee_payments', params=scope | {'student_id': student_id}).json()['data'][0]
+        self.assertEqual(balance['late_fee_paid_amount'], '5.50')
