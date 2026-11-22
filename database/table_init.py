@@ -211,6 +211,25 @@ def migrate_student_fee_paid_amount(connection):
     )
 
 
+def add_student_fee_payment_columns(connection, existing):
+    postgres = connection.dialect.name == "postgresql"
+    timestamp = "TIMESTAMP WITH TIME ZONE" if postgres else "DATETIME"
+    if_not_exists = "IF NOT EXISTS " if postgres else ""
+    payment_fields = [("receipt_number", "VARCHAR(125)"), ("tag", "VARCHAR(50)"), ("payment_date", timestamp)]
+    for table, fields in (
+        ("student_fees", payment_fields),
+        ("student_fee_cheque_payments", payment_fields),
+        ("student_fee_razorpay_orders", [("receipt_number", "VARCHAR(125)")]),
+        ("student_fee_receipts", [("payment_at", timestamp), ("payment_details", "JSON")]),
+    ):
+        if table not in existing:
+            continue
+        columns = {column["name"] for column in inspect(connection).get_columns(table)}
+        for name, definition in fields:
+            if name not in columns:
+                connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {if_not_exists}{name} {definition}")
+
+
 def ensure_all_tables(connection):
     register_models()
     ensure_school_status(connection)
@@ -250,6 +269,7 @@ def ensure_all_tables(connection):
             connection.exec_driver_sql(
                 f"ALTER TABLE {table} ADD COLUMN {if_not_exists}late_fee_payment_amount NUMERIC(16, 2) NOT NULL DEFAULT 0"
             )
+    add_student_fee_payment_columns(connection, existing)
     merge_generation_settings(connection)
     ensure_late_fee_enabled_default(connection)
     if set(Base.metadata.tables).issubset(existing):

@@ -1,5 +1,5 @@
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import create_engine, event, inspect, text
@@ -144,10 +144,191 @@ class StudentFeeDiscountTests(unittest.TestCase):
         april = next(row for row in response.json()['data'] if row['fee_month'] == '2025-04')
         self.assertEqual((april['status'], april['due_amount']), ('PARTIAL', '50.00'))
 
+    def test_bulk_payments_use_imported_receipts_and_roll_unspent_cash_into_next_month(self):
+        scope = {'school_id': 1, 'session_id': 1}
+        students = {number: self.make_student(1, 1, number) for number in ('004001', '1')}
+        self.make_student(1, 3, '009999')
+        tuition = FeeHead(**scope, fee_head_name='Tuition', student_type='New')
+        starting_payments = {
+            ('004001', '2025-04'): 100,
+            ('004001', '2025-05'): 75,
+            ('004001', '2025-06'): 0,
+            ('004001', '2025-07'): 0,
+            ('1', '2025-06'): 0,
+        }
+        for (admission_number, month), paid in starting_payments.items():
+            self.db.add(StudentFee(
+                school_id=1, academic_session_id=1, student_id=students[admission_number], fee_month=month,
+                total_amount=100, net_amount=100, paid_amount=paid,
+                status='PAID' if paid == 100 else 'PARTIAL' if paid else 'UNPAID',
+                fee_heads=[StudentFeeHead(fee_head=tuition, amount=100, net_amount=100, paid_amount=paid)],
+            ))
+        self.db.commit()
+        first_scope = scope | {'student_id': students['004001']}
+        for adjustment in (
+            {'type': 'Discount', 'discount_type': 'Charity', 'fee_head_id': tuition.id, 'amount': 20},
+            {'type': 'Penalty', 'amount': 10},
+        ):
+            created = self.client.post('/schools/student_fee_adjustments', params=first_scope, json={
+                **adjustment, 'frequency': 'One Time', 'date': '2025-06',
+            })
+            self.assertEqual(created.status_code, 201, created.text)
+
+        url = '/schools/student_fees/bulk-upload'
+        operation = self.client.get('/openapi.json').json()['paths'][url]['post']
+        example = operation['requestBody']['content']['application/json']['examples']['payment_by_admission_number']
+        self.assertEqual(example['value']['recieptNo'], '2026-2027/000002')
+        first = {
+            'admission_number': '004001', 'recieptNo': '2025-2026/000091', 'payment_mode': 'Cash',
+            'fee_month': 'ignored date', 'payment_amount': 140, 'late_fee_payment_amount': 5,
+            'cheque_number': 'string', 'tag': 'Bulk Upload',
+        }
+        second = {
+            'admission_number': 1, 'recieptNo': '2025-2026/000042', 'payment_mode': 'Cash',
+            'fee_month': '2099-01', 'payment_amount': 100,
+        }
+        for invalid, code in (
+            (second | {'admission_number': '009999'}, 404),
+            (second | {'payment_amount': 101}, 422),
+        ):
+            rejected = self.client.post(url, params=scope, json=[first, invalid])
+            self.assertEqual(rejected.status_code, code, rejected.text)
+            self.assertEqual(rejected.json()['detail']['row'], 2)
+            self.assertEqual(rejected.json()['detail']['admission_number'], str(invalid['admission_number']))
+            records = self.db.query(StudentFee).filter_by(student_id=students['004001']).all()
+            self.assertTrue(all(
+                record.paid_amount == starting_payments['004001', record.fee_month] and record.receipt_number is None
+                for record in records
+            ))
+
+        saved = self.client.post(url, params=scope, json=[first, second])
+        self.assertEqual(saved.status_code, 201, saved.text)
+        response = saved.json()
+        self.assertEqual(response['total'], 2)
+        for row, supplied, amount in zip(response['data'], (first, second), (145, 100), strict=True):
+            self.assertEqual(row['student_id'], students[str(supplied['admission_number'])])
+            payment = row['result']
+            self.assertEqual(payment['receipt_number'], supplied['recieptNo'])
+            self.assertEqual(Decimal(payment['collected_amount']), amount)
+            self.assertEqual({entry['tag'] for entry in payment['data']}, {'Bulk Upload'})
+            self.assertEqual({entry['receipt_number'] for entry in payment['data']}, {supplied['recieptNo']})
+        payment = response['data'][0]['result']
+        self.assertEqual(Decimal(payment['penalty_paid_amount']), 10)
+        self.assertEqual(Decimal(payment['late_fee_paid_amount']), 5)
+        self.assertEqual(
+            [(entry['fee_month'], Decimal(entry['paid_amount'])) for entry in payment['data']],
+            [('2025-05', Decimal(105)), ('2025-06', Decimal(90)), ('2025-07', Decimal(25))],
+        )
+        self.assertEqual(Decimal(payment['data'][0]['late_fee_amount']), 5)
+        previous = self.db.query(StudentFee).filter_by(student_id=students['004001'], fee_month='2025-04').one()
+        self.assertEqual(previous.paid_amount, 100)
+        self.assertIsNone(previous.receipt_number)
+        single = self.client.post(url, params=scope, json={
+            'admission_number': '004001', 'recieptNo': '2025-2026/000092', 'payment_amount': 75,
+            'payment_mode': 'Cheque', 'cheque_number': '4321',
+        })
+        self.assertEqual(single.status_code, 201, single.text)
+        cheque = single.json()['data'][0]['result']['data']
+        self.assertEqual(cheque['receipt_number'], '2025-2026/000092')
+        self.assertEqual(cheque['months'][0]['fee_month'], '2025-07')
+        self.assertEqual(cheque['status'], 'PENDING')
+        cleared = self.client.patch(f"/schools/student_fees/cheque_payments/{cheque['id']}",
+                                    params=scope, json={'status': 'SUCCESS'})
+        self.assertEqual(cleared.status_code, 200, cleared.text)
+        self.assertEqual(cleared.json()['data']['receipt_number'], '2025-2026/000092')
+        july = self.db.query(StudentFee).filter_by(student_id=students['004001'], fee_month='2025-07').one()
+        self.assertEqual(july.paid_amount, 100)
+        self.assertEqual(july.receipt_number, '2025-2026/000092')
+        self.assertEqual(self.db.execute(text("SELECT COUNT(*) FROM student_fee_receipt_counters")).scalar_one(), 0)
+
+    def test_receipt_list_returns_only_student_fee_rows_with_optional_filters(self):
+        scope = {'school_id': 1, 'session_id': 1}
+        student_id = self.make_student(1, 1, '004001')
+        legacy_student_id = self.make_student(1, 1, '004002')
+        student = self.db.get(Student, student_id)
+        student.first_name, student.middle_name, student.last_name = 'Aayat', 'Noor', 'Arbeea'
+        section = Section(**scope, name='A')
+        self.db.add(section)
+        self.db.flush()
+        student.section_id = section.id
+        tuition = FeeHead(**scope, fee_head_name='Tuition', student_type='New')
+        for month in ('2025-05', '2025-06'):
+            self.db.add(StudentFee(
+                school_id=1, academic_session_id=1, student_id=student_id, fee_month=month,
+                total_amount=100, net_amount=100, paid_amount=0, status='UNPAID',
+                fee_heads=[StudentFeeHead(fee_head=tuition, amount=100, net_amount=100)],
+            ))
+        self.db.add(StudentFee(
+            school_id=1, academic_session_id=1, student_id=legacy_student_id, fee_month='2025-05',
+            total_amount=40, net_amount=40, paid_amount=40, status='PAID', receipt_number='legacy/10',
+        ))
+        self.db.add(StudentFee(
+            school_id=1, academic_session_id=1, student_id=legacy_student_id, fee_month='2025-06',
+            total_amount=30, net_amount=30, paid_amount=30, status='PAID', receipt_number='legacy/9',
+        ))
+        self.db.commit()
+
+        imported_dates = (
+            ('import/00001', 150, {'payment_date': '12-06-2025'}),
+            ('import/00002', 25, {'fee_month': '13-06-2025', 'payment_time': '14:30:00'}),
+        )
+        for number, amount, supplied_timestamp in imported_dates:
+            payment = self.client.post('/schools/student_fees/bulk-upload', params=scope, json={
+                'admission_number': '004001', 'recieptNo': number, 'payment_amount': amount,
+                'payment_mode': 'Cash', 'description': 'Imported installment', **supplied_timestamp,
+            })
+            self.assertEqual(payment.status_code, 201, payment.text)
+            result = payment.json()['data'][0]['result']
+            self.assertEqual({entry['payment_date'] for entry in result['data']}, {result['payment_date']})
+
+        url = '/schools/student_fees/receipts'
+
+        def receipts(**filters):
+            response = self.client.get(url, params=scope | filters)
+            self.assertEqual(response.status_code, 200, response.text)
+            return response.json()
+
+        receipt_queries = []
+
+        def capture_receipt_query(_connection, _cursor, statement, _params, _context, _many):
+            receipt_queries.append(statement.lower())
+
+        event.listen(self.engine, 'before_cursor_execute', capture_receipt_query)
+        self.addCleanup(event.remove, self.engine, 'before_cursor_execute', capture_receipt_query)
+        page = receipts(offset=1, limit=1)
+        self.assertEqual(
+            [row['receipt_number'] for row in receipts()['data']],
+            ['import/00002', 'import/00001', 'legacy/10', 'legacy/9'],
+        )
+        self.assertEqual((page['total'], page['offset'], page['limit']), (4, 1, 1))
+        self.assertEqual(page['data'][0]['receipt_number'], 'import/00001')
+        self.assertEqual(datetime.fromisoformat(page['data'][0]['payment_date']).hour, 0)
+        by_date = receipts(start_date='2025-06-13', end_date='2025-06-13')
+        self.assertEqual([row['receipt_number'] for row in by_date['data']], ['import/00002'])
+        self.assertEqual(datetime.fromisoformat(by_date['data'][0]['payment_date']).strftime('%H:%M'), '14:30')
+        self.assertEqual(receipts(class_id=student.class_id, section_id=section.id)['total'], 2)
+        self.assertEqual(receipts(search='004001')['total'], 2)
+        self.assertEqual(receipts(search='aayat arbeea')['total'], 2)
+        self.assertEqual(receipts(search='IMPORT/00002')['data'][0]['paid_amount'], '75.00')
+        exact = receipts(search='₹100.00')['data'][0]
+        self.assertEqual(exact['receipt_number'], 'import/00001')
+        self.assertEqual(exact['description'], 'Imported installment')
+        self.assertEqual(set(exact), set(StudentFee.__table__.columns.keys()))
+        legacy = receipts(search='legacy')['data'][0]
+        self.assertEqual(Decimal(legacy['paid_amount']), 40)
+        self.assertIsNone(legacy['payment_date'])
+        self.assertEqual(set(legacy), set(StudentFee.__table__.columns.keys()))
+        self.assertTrue(receipt_queries)
+        self.assertTrue(all('student_fee_heads' not in query and 'student_fee_receipts' not in query
+                            for query in receipt_queries))
+        invalid = self.client.get(url, params=scope | {'start_date': '2025-06-14', 'end_date': '2025-06-13'})
+        self.assertEqual(invalid.status_code, 422, invalid.text)
+
     def test_pay_now_amount_includes_supplied_late_fee_without_adding_it_again(self):
         student_id = self.make_student(1, 1, '001')
         scope = {'school_id': 1, 'session_id': 1}
         student_scope = scope | {'student_id': student_id}
+        self.db.get(SchoolSession, 1).name = '2026-2027'
         tuition = FeeHead(**scope, fee_head_name='Tuition', student_type='New')
         composite = FeeHead(**scope, fee_head_name='Composite', student_type='New')
         months = ('2025-05', '2025-06')
@@ -171,14 +352,22 @@ class StudentFeeDiscountTests(unittest.TestCase):
                 })
                 self.assertEqual(result.status_code, 201, result.text)
 
+        before_payment = datetime.now(timezone.utc)
         response = self.client.post('/schools/student_fees', params=scope, json={
             'student_id': student_id, 'payment_mode': 'Cash', 'payable_amount': 5643,
-            'late_fee_payment_amount': 43, 'settle_in_full': True,
+            'late_fee_payment_amount': 43, 'settle_in_full': True, 'tag': 'Bulk Upload',
             'months': [{'fee_month': month} for month in months],
         })
         self.assertEqual(response.status_code, 201, response.text)
         result = response.json()
+        posted_at = datetime.fromisoformat(result['payment_date'])
+        self.assertLessEqual(before_payment, posted_at)
+        self.assertLessEqual(posted_at, datetime.now(timezone.utc))
+        self.assertEqual({row['payment_date'] for row in result['data']}, {result['payment_date']})
         self.assertEqual(Decimal(result['collected_amount']), 5643)
+        self.assertEqual(result['receipt_number'], '2026-2027/00001')
+        self.assertEqual({row['receipt_number'] for row in result['data']}, {'2026-2027/00001'})
+        self.assertEqual({row['tag'] for row in result['data']}, {'Bulk Upload'})
         self.assertEqual(Decimal(result['fee_head_paid_amount']), 4800)
         self.assertEqual(Decimal(result['penalty_paid_amount']), 800)
         self.assertEqual(Decimal(result['late_fee_paid_amount']), 43)
@@ -187,6 +376,13 @@ class StudentFeeDiscountTests(unittest.TestCase):
             "SELECT SUM(paid_amount) FROM student_fees WHERE student_id = :student_id"
         ), {'student_id': student_id}).scalar_one()
         self.assertEqual(Decimal(stored), 5643)
+        another = self.client.post('/schools/student_fees', params=scope, json={
+            'student_id': student_id, 'payment_mode': 'Cash', 'payable_amount': 1,
+            'late_fee_payment_amount': 1, 'months': [{'fee_month': months[0]}],
+        })
+        self.assertEqual(another.status_code, 201, another.text)
+        self.assertEqual(another.json()['receipt_number'], '2026-2027/00002')
+        self.assertIsNone(another.json()['data'][0]['tag'])
         self.assertTrue(all(row['status'] == 'PAID' and Decimal(row['total_due_amount']) == 0
                             for row in result['balances']))
 
@@ -282,13 +478,15 @@ class StudentFeeDiscountTests(unittest.TestCase):
         self.assertEqual(Decimal(balance.json()['total_accepted_payment']), 6900)
         remainder = self.client.post(
             url, params=scope, json=payload | {
-                'payment_mode': 'Cheque', 'cheque_number': '00120', 'late_fee_payment_amount': 120,
+                'payment_mode': 'Cheque', 'cheque_number': '00120', 'late_fee_payment_amount': 120, 'tag': 'Bulk Upload',
                 'months': [{'fee_month': '2025-01', 'payment_amount': 0}],
             },
         )
         self.assertEqual(remainder.status_code, 201, remainder.text)
         cheque = remainder.json()['data']
         self.assertEqual(cheque['status'], 'PENDING')
+        self.assertIsNone(cheque['receipt_number'])
+        self.assertEqual(cheque['tag'], 'Bulk Upload')
         self.assertEqual(
             self.client.get('/schools/fee_payments', params=student_scope).json()['data'][0]['late_fee_paid_amount'], '1000.00',
         )
@@ -296,12 +494,14 @@ class StudentFeeDiscountTests(unittest.TestCase):
             f"{url}/cheque_payments/{cheque['id']}", params=scope, json={'status': 'SUCCESS'},
         )
         self.assertEqual(cleared.status_code, 200, cleared.text)
+        self.assertEqual(cleared.json()['data']['receipt_number'], 'First/00002')
         settled = self.client.get('/schools/fee_payments', params=student_scope).json()['data'][0]
         self.assertEqual(settled['late_fee_paid_amount'], '1120.00')
         self.assertEqual(Decimal(settled['paid_amount']), 7020)
         self.assertEqual(Decimal(settled['total_accepted_payment']), 7020)
         record = self.db.query(StudentFee).filter_by(student_id=student_id, fee_month='2025-01').one()
         self.assertEqual(record.late_fee_amount, Decimal('1120.00'))
+        self.assertEqual(record.tag, 'Bulk Upload')
         self.assertEqual(record.total_amount, Decimal('7020.00'))
         self.assertEqual(record.total_accepted_payment, Decimal('7020.00'))
         self.assertNotIn('total_accepted_payment', StudentFee.__table__.columns)
@@ -789,6 +989,13 @@ class StudentFeeDiscountTests(unittest.TestCase):
             self.assertEqual(Decimal(penalty['due_amount']), due)
             self.assertEqual(Decimal(balance['total_penalty_amount']), 200)
             self.assertEqual(Decimal(balance['penalty_paid_amount']), 200 - due)
+            receipt = self.client.get('/schools/student_fees/receipts', params=scope | {
+                'search': result['receipt_number'],
+            })
+            self.assertEqual(receipt.status_code, 200, receipt.text)
+            receipt_row = receipt.json()['data'][0]
+            self.assertEqual(receipt_row['status'], 'PAID')
+            self.assertEqual(Decimal(receipt_row['paid_amount']), 5903 - due)
             self.assertEqual(Decimal(balance['penalty_due_amount']), due)
             self.assertEqual(penalty['status'], 'Partial' if due else 'Paid')
             self.assertEqual(discount['status'], 'Paid')
@@ -843,7 +1050,7 @@ class StudentFeeDiscountTests(unittest.TestCase):
         self.assertEqual(posted['fee_adjustment'][0]['status'], 'Pending')
         self.assertEqual(Decimal(posted['fee_adjustment'][0]['fee_head_payable_amount']), 2000)
         self.assertEqual(Decimal(posted['fee_adjustment'][0]['payable_amount']), 500)
-        self.assertEqual(Decimal(posted['fee_adjustment'][0]['due_amount']), 0)
+        self.assertEqual(Decimal(posted['fee_adjustment'][0]['due_amount']), 500)
         quote = balance(preview=True)
         self.assertEqual(Decimal(quote['due_amount']), 1600)
         quoted_heads = {head['fee_head_id']: head for head in quote['fee_heads']}
@@ -852,7 +1059,7 @@ class StudentFeeDiscountTests(unittest.TestCase):
         self.assertEqual(quote['fee_adjustment'][0]['status'], 'Pending')
         self.assertEqual(Decimal(quote['fee_adjustment'][0]['fee_head_payable_amount']), 1500)
         self.assertEqual(Decimal(quote['fee_adjustment'][0]['payable_amount']), 500)
-        self.assertEqual(Decimal(quote['fee_adjustment'][0]['due_amount']), 0)
+        self.assertEqual(Decimal(quote['fee_adjustment'][0]['due_amount']), 500)
         payment_url = '/schools/student_fees'
         payload = {'student_id': student_id, 'payment_mode': 'Cash', 'months': [{'fee_month': '2025-09'}]}
         excess = self.client.post(payment_url, params=scope, json=payload | {'payment_amount': 2100})

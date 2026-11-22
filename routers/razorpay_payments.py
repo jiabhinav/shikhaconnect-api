@@ -71,6 +71,7 @@ class RazorpayPaymentData(BaseModel):
     payment_status: Literal["captured"] = "captured"
     razorpay_order_id: str
     razorpay_payment_id: str
+    receipt_number: str | None = None
 
 
 class RazorpayPaymentResponse(BaseModel):
@@ -157,6 +158,7 @@ def verify_payment(
     return {"data": {
         "razorpay_order_id": payload.razorpay_order_id,
         "razorpay_payment_id": payload.razorpay_payment_id,
+        "receipt_number": order.receipt_number,
     }}
 
 
@@ -178,7 +180,7 @@ def post_captured_payment(db, order, payment):
         allocation = StudentFeeWrite(
             student_id=order.student_id, months=order.months, late_fee_payment_amount=order.late_fee_payment_amount,
         )
-        apply_student_fee_payment(
+        *_, order.receipt_number = apply_student_fee_payment(
             db, order.school_id, order.session_id, allocation, gateway_mode=PaymentMode.RAZORPAY,
         )
         order.razorpay_payment_id = payment_id

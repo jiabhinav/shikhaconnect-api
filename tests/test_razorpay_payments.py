@@ -83,10 +83,13 @@ class RazorpayPaymentTests(unittest.TestCase):
             self.assertEqual(verified.json(), {'status': 'success', 'data': {
                 'payment_status': 'captured', 'razorpay_order_id': 'order_example',
                 'razorpay_payment_id': 'pay_example',
+                'receipt_number': 'First/00001',
             }})
 
         paid = self.client.get(base, params=scope | {'student_id': student_id}).json()['data'][0]
         self.assertEqual(carry.paid_amount, Decimal('20'))
-        self.assertEqual((paid['paid_amount'], paid['due_amount'], paid['payment_mode']), ('100.00', '0.00', 'Razorpay'))
+        self.assertEqual((paid['paid_amount'], paid['due_amount'], paid['payment_mode']), ('125.50', '0.00', 'Razorpay'))
+        self.assertEqual(paid['fee_head_paid_amount'], '100.00')
+        self.assertEqual(paid['receipt_number'], 'First/00001')
         balance = self.client.get('/schools/fee_payments', params=scope | {'student_id': student_id}).json()['data'][0]
         self.assertEqual(balance['late_fee_paid_amount'], '5.50')

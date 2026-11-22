@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 import os
 
 try:
@@ -19,3 +19,12 @@ def today():
         except Exception:
             return datetime.utcnow().date()
     return date.today()
+
+
+def payment_timezone():
+    if ZoneInfo is not None:
+        try:
+            return ZoneInfo(os.environ.get("APP_TIMEZONE") or "Asia/Kolkata")
+        except KeyError:
+            pass
+    return timezone(timedelta(hours=5, minutes=30))

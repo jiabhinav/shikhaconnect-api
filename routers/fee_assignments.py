@@ -3,9 +3,10 @@ from calendar import month_name
 from collections import defaultdict
 from datetime import datetime, timezone
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import ValidationError
+from fastapi import APIRouter, Body, Depends, HTTPException
+from pydantic import Field, ValidationError
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
@@ -22,7 +23,7 @@ from models.session import Session as SchoolSession
 from models.student import Student
 from models.student_carry_forward import CARRY_FORWARD_TAG, StudentCarryForward
 from models.student_fee_adjustment import StudentFeeAdjustment
-from models.student_fee import StudentFee, StudentFeeChequePayment, StudentFeeHead
+from models.student_fee import StudentFee, StudentFeeChequePayment, StudentFeeHead, StudentFeeReceipt, StudentFeeReceiptCounter
 from routers.fee_structures import fee_structure_school
 from schemas.fee_assignment import (
     FeeAssignmentWrite, FeeAssignmentBatchWrite, FeeAssignmentResult, FeeAssignmentListResult,
@@ -31,10 +32,13 @@ from schemas.fee_assignment import (
 from schemas.student_fee import (
     FeePaymentAdjustmentStatus, FeePaymentFeeHeadStatus, FeePaymentHeadStatus, FeePaymentMonthStatus,
     FeePaymentStatusListResult, calculate_student_fee_status,
-    ChequePaymentStatus, StudentFeeChequeListResult, StudentFeeChequeResult, StudentFeeChequeStatusWrite,
-    StudentFeeListResult, StudentFeeMonthPayment, StudentFeePaymentResult, StudentFeeWrite,
+    ChequePaymentStatus, StudentFeeChequeListResult, StudentFeeChequeResult, StudentFeeChequeSettlement,
+    StudentFeeChequeStatusWrite,
+    StudentFeeBulkResult, StudentFeeBulkWrite, StudentFeeListResult, StudentFeeMonthPayment,
+    StudentFeePaymentResult, StudentFeeReceiptDetails, StudentFeeTableRecord, StudentFeeWrite,
 )
-from schemas.enums import FeeAdjustmentStatus, FeeAdjustmentType, FeeType, PaymentMode
+from schemas.enums import FeeAdjustmentStatus, FeeAdjustmentType, FeeType, PaymentMode, StudentFeeStatus
+from utils.dates import payment_timezone
 from utils.fee_months import session_months
 
 router = APIRouter(tags=['Configure Fees'])
@@ -43,57 +47,157 @@ logger = logging.getLogger(__name__)
 @router.post('/student_fees', response_model=StudentFeePaymentResult | StudentFeeChequeResult, status_code=201)
 def create_student_fee(school_id: int, session_id: int, payload: StudentFeeWrite,
                        db: Session = Depends(fee_structure_school)):
-    is_cheque = payload.payment_mode == PaymentMode.CHEQUE
     try:
-        items, fee_head_paid, carry_forward_paid, penalty_paid, allocations = apply_student_fee_payment(
-            db, school_id, session_id, payload, validate_only=is_cheque,
-        )
-        if is_cheque:
-            cheque = StudentFeeChequePayment(
-                school_id=school_id, session_id=session_id, student_id=payload.student_id,
-                cheque_number=payload.cheque_number, description=payload.description,
-                collected_by=payload.collected_by,
-                months=[entry.model_dump(mode="json") for entry in allocations],
-                late_fee_payment_amount=payload.late_fee_payment_amount,
-            )
-            db.add(cheque)
-            db.commit()
-            db.refresh(cheque)
-            return {'message': 'Cheque payment recorded as pending', 'data': cheque}
-        db.flush()
-        balances = fee_payment_months(
-            db, school_id, session_id, payload.student_id, months=[entry.fee_month for entry in payload.months],
-        )
+        result = prepare_student_fee_payment(db, school_id, session_id, payload)
         db.commit()
-        for item in items:
-            db.refresh(item)
     except IntegrityError as exc:
         db.rollback()
-        diagnostic = getattr(exc.orig, 'diag', None)
-        sqlstate = getattr(exc.orig, 'pgcode', None)
-        constraint = getattr(diagnostic, 'constraint_name', None)
-        column = getattr(diagnostic, 'column_name', None)
-        logger.warning(
-            'Student fee payment failed a database integrity check (sqlstate=%s, constraint=%s, column=%s)',
-            sqlstate, constraint, column,
-        )
-        reason = constraint or column or sqlstate
-        detail = 'The database rejected the student fee payment'
-        if reason:
-            detail = f'{detail} ({reason})'
-        raise HTTPException(409, detail) from exc
+        raise fee_payment_integrity_conflict(exc) from exc
     except Exception:
         db.rollback()
         raise
-    return {
-        'message': 'Student fee records created successfully', 'total': len(items), 'data': items,
-        'balances': balances, 'fee_head_paid_amount': fee_head_paid,
-        'carry_forward_paid_amount': carry_forward_paid, 'penalty_paid_amount': penalty_paid,
-        'late_fee_paid_amount': payload.total_late_fee_payment,
-    }
+    return result
 
 
-def apply_student_fee_payment(db, school_id, session_id, payload, *, validate_only=False, gateway_mode=None):
+@router.post('/student_fees/bulk-upload', response_model=StudentFeeBulkResult, status_code=201)
+def bulk_create_student_fees(
+    school_id: int,
+    session_id: int,
+    payload: Annotated[
+        StudentFeeBulkWrite | Annotated[list[StudentFeeBulkWrite], Field(min_length=1, max_length=1000)],
+        Body(
+            openapi_examples={
+                "payment_by_admission_number": {
+                    "summary": "Import a payment against the oldest unpaid month",
+                    "value": {
+                        "recieptNo": "2026-2027/000002",
+                        "payment_date": "04-11-2026",
+                        "payment_amount": 5000,
+                        "late_fee_payment_amount": 0,
+                        "payment_mode": "Cash",
+                        "cheque_number": "string",
+                        "description": "string",
+                        "collected_by": "string",
+                        "admission_number": 1,
+                        "tag": "Bulk Upload",
+                    },
+                },
+            },
+        ),
+    ],
+    db: Session = Depends(fee_structure_school),
+):
+    """Record imported receipts by admission number against unpaid months in session order."""
+    rows = payload if isinstance(payload, list) else [payload]
+    try:
+        session = db.query(SchoolSession).filter_by(school_id=school_id, id=session_id).one()
+        session_fee_months = list(session_months(session.start_date, session.end_date))
+        # Lock in student ID order so concurrent uploads can overlap safely.
+        student_ids = dict(
+            db.query(Student.admission_number, Student.id)
+            .filter_by(school_id=school_id, session_id=session_id)
+            .filter(Student.admission_number.in_({item.admission_number for item in rows}))
+            .order_by(Student.id)
+            .with_for_update()
+            .all()
+        )
+        results = []
+        for row, item in enumerate(rows, start=1):
+            context = {'row': row, 'admission_number': item.admission_number}
+            student_id = student_ids.get(item.admission_number)
+            if student_id is None:
+                raise HTTPException(404, {**context, 'message': 'Admission number not found in this school session'})
+            fields = item.model_dump(exclude={'admission_number', 'fee_month', 'receipt_number', 'payment_date', 'payment_time'})
+            if item.payment_mode != PaymentMode.CHEQUE:
+                fields['cheque_number'] = None
+            try:
+                payment = StudentFeeWrite(**fields, student_id=student_id, months=[{'fee_month': session_fee_months[0]}])
+                result = prepare_student_fee_payment(
+                    db, school_id, session_id, payment, imported_receipt=item.receipt_number,
+                    eligible_months=session_fee_months, payment_date=item.payment_date,
+                )
+            except ValidationError as exc:
+                raise HTTPException(422, {
+                    **context,
+                    'message': 'Invalid student fee payment',
+                    'errors': exc.errors(include_url=False, include_context=False, include_input=False),
+                }) from exc
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {'message': exc.detail}
+                raise HTTPException(exc.status_code, {**context, **detail}) from exc
+            except IntegrityError as exc:
+                error = fee_payment_integrity_conflict(exc)
+                raise HTTPException(error.status_code, {**context, 'message': error.detail}) from exc
+            results.append({**context, 'student_id': student_id, 'result': result})
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise fee_payment_integrity_conflict(exc) from exc
+    except Exception:
+        db.rollback()
+        raise
+    return {'message': 'Bulk student fee payments saved successfully', 'total': len(results), 'data': results}
+
+
+def prepare_student_fee_payment(
+    db, school_id, session_id, payload, *, imported_receipt=None, eligible_months=None, payment_date=None,
+):
+    is_cheque = payload.payment_mode == PaymentMode.CHEQUE
+    posted_at = payment_date or datetime.now(timezone.utc)
+    items, fee_head_paid, carry_forward_paid, penalty_paid, allocations, receipt_number = apply_student_fee_payment(
+        db, school_id, session_id, payload, validate_only=is_cheque,
+        imported_receipt=imported_receipt, eligible_months=eligible_months, payment_date=posted_at,
+    )
+    if is_cheque:
+        cheque = StudentFeeChequePayment(
+            school_id=school_id, session_id=session_id, student_id=payload.student_id,
+            cheque_number=payload.cheque_number, description=payload.description,
+            collected_by=payload.collected_by, tag=payload.tag, receipt_number=imported_receipt,
+            payment_date=payment_date,
+            months=[entry.model_dump(mode="json") for entry in allocations],
+            late_fee_payment_amount=payload.late_fee_payment_amount,
+        )
+        db.add(cheque)
+        db.flush()
+        db.refresh(cheque)
+        return StudentFeeChequeResult(message='Cheque payment recorded as pending', data=cheque)
+
+    db.flush()
+    response_months = allocations if eligible_months is not None else payload.months
+    balances = fee_payment_months(
+        db, school_id, session_id, payload.student_id, months=[entry.fee_month for entry in response_months],
+    )
+    for item in items:
+        db.refresh(item)
+    return StudentFeePaymentResult(
+        message='Student fee records created successfully', total=len(items), data=items,
+        balances=balances, receipt_number=receipt_number, payment_date=posted_at if receipt_number else None,
+        fee_head_paid_amount=fee_head_paid,
+        carry_forward_paid_amount=carry_forward_paid, penalty_paid_amount=penalty_paid,
+        late_fee_paid_amount=payload.total_late_fee_payment,
+    )
+
+
+def fee_payment_integrity_conflict(exc):
+    diagnostic = getattr(exc.orig, 'diag', None)
+    sqlstate = getattr(exc.orig, 'pgcode', None)
+    constraint = getattr(diagnostic, 'constraint_name', None)
+    column = getattr(diagnostic, 'column_name', None)
+    logger.warning(
+        'Student fee payment failed a database integrity check (sqlstate=%s, constraint=%s, column=%s)',
+        sqlstate, constraint, column,
+    )
+    reason = constraint or column or sqlstate
+    detail = 'The database rejected the student fee payment'
+    if reason:
+        detail = f'{detail} ({reason})'
+    return HTTPException(409, detail)
+
+
+def apply_student_fee_payment(
+    db, school_id, session_id, payload, *, validate_only=False, gateway_mode=None,
+    imported_receipt=None, eligible_months=None, payment_date=None,
+):
     payment_mode = gateway_mode or payload.payment_mode
     student = db.query(Student.id).filter_by(
         id=payload.student_id, school_id=school_id, session_id=session_id,
@@ -101,7 +205,7 @@ def apply_student_fee_payment(db, school_id, session_id, payload, *, validate_on
     if student is None:
         raise HTTPException(404, 'Student not found for this school session')
 
-    requested_months = [entry.fee_month for entry in payload.months]
+    requested_months = eligible_months if eligible_months is not None else [entry.fee_month for entry in payload.months]
     carry_forward = db.query(StudentCarryForward).filter_by(
         school_id=school_id, session_id=session_id, student_id=payload.student_id,
     ).filter(StudentCarryForward.month.in_(requested_months)).with_for_update().one_or_none()
@@ -121,7 +225,8 @@ def apply_student_fee_payment(db, school_id, session_id, payload, *, validate_on
     for entry in payload.months:
         late_payment = payload.late_fee_payment_for(entry)
         if late_payment > 0:
-            late_paid_by_month[entry.fee_month] = late_payment
+            late_month = allocations[0].fee_month if eligible_months is not None and allocations else entry.fee_month
+            late_paid_by_month[late_month] = late_payment
 
     if payload.payment_amount is not None and late_paid_by_month:
         principal_by_month = {entry.fee_month: entry.payment_amount for entry in allocations}
@@ -254,7 +359,48 @@ def apply_student_fee_payment(db, school_id, session_id, payload, *, validate_on
             if balance.fee_heads else max(Decimal("0.00"), record.net_amount + record.discount_amount - record.fine_amount)
         )
         record.total_amount = gross_fees + carry_amount + balance.total_penalty_amount + record.late_fee_amount
-    return list(records.values()), fee_head_paid, carry_forward_paid, penalty_paid, allocations
+    receipt_number = None
+    collected_amount = sum(accepted_by_month.values(), Decimal("0.00"))
+    if collected_amount > 0:
+        receipt_number = imported_receipt or next_fee_receipt_number(db, school_id, session_id)
+        posted_at = payment_date or datetime.now(timezone.utc)
+        if posted_at.tzinfo is None:
+            posted_at = posted_at.replace(tzinfo=timezone.utc)
+        receipt_months = [month for month in records if accepted_by_month[month] > 0]
+        for month in receipt_months:
+            record = records[month]
+            record.receipt_number = receipt_number
+            record.payment_date = posted_at
+            record.tag = payload.tag
+        db.flush()
+        balances = fee_payment_months(db, school_id, session_id, payload.student_id, months=receipt_months)
+        details = StudentFeeReceiptDetails(
+            status=StudentFeeStatus.PARTIAL if any(balance.due_amount > 0 for balance in balances) else StudentFeeStatus.PAID,
+            description=payload.description, cheque_number=payload.cheque_number,
+            fee_head_paid_amount=fee_head_paid, carry_forward_paid_amount=carry_forward_paid,
+            penalty_paid_amount=penalty_paid, late_fee_paid_amount=payload.total_late_fee_payment,
+            payment_data=[StudentFeeTableRecord.model_validate(records[month]) for month in receipt_months],
+        )
+        db.add(StudentFeeReceipt(
+            school_id=school_id, session_id=session_id, student_id=payload.student_id,
+            receipt_number=receipt_number, payment_date=posted_at.astimezone(payment_timezone()).date(),
+            payment_at=posted_at, payment_amount=collected_amount, payment_details=details.model_dump(mode="json"),
+            payment_mode=payment_mode, collected_by=payload.collected_by, tag=payload.tag,
+        ))
+    return list(records.values()), fee_head_paid, carry_forward_paid, penalty_paid, allocations, receipt_number
+
+
+def next_fee_receipt_number(db, school_id, session_id):
+    session_name = db.query(SchoolSession.name).filter_by(id=session_id, school_id=school_id).scalar()
+    insert = sqlite_insert if db.get_bind().dialect.name == 'sqlite' else postgresql_insert
+    statement = insert(StudentFeeReceiptCounter).values(
+        school_id=school_id, session_name=session_name, last_number=1,
+    ).on_conflict_do_update(
+        index_elements=["school_id", "session_name"],
+        set_={"last_number": StudentFeeReceiptCounter.last_number + 1},
+    ).returning(StudentFeeReceiptCounter.last_number)
+    number = db.execute(statement).scalar_one()
+    return f"{session_name}/{number:05d}"
 
 
 def get_or_create_monthly_fee(db, scope, month):
@@ -359,12 +505,16 @@ def resolve_student_fee_cheque(school_id: int, session_id: int, cheque_id: int,
 
     try:
         if payload.status == 'SUCCESS':
-            payment = StudentFeeWrite(
+            payment = StudentFeeChequeSettlement(
                 student_id=cheque.student_id, months=cheque.months, payment_mode=PaymentMode.CHEQUE,
                 cheque_number=cheque.cheque_number, description=cheque.description, collected_by=cheque.collected_by,
+                tag=cheque.tag,
                 late_fee_payment_amount=cheque.late_fee_payment_amount,
             )
-            apply_student_fee_payment(db, school_id, session_id, payment)
+            cheque.payment_date = cheque.payment_date or datetime.now(timezone.utc)
+            *_, cheque.receipt_number = apply_student_fee_payment(
+                db, school_id, session_id, payment, imported_receipt=cheque.receipt_number, payment_date=cheque.payment_date,
+            )
         cheque.status = payload.status
         cheque.resolved_at = datetime.now(timezone.utc)
         db.commit()
@@ -442,6 +592,10 @@ def fee_adjustments_by_month(db, scope, months, *, exclude_adjustment_id=None):
         if month not in months:
             continue
         is_discount = adjustment.type == FeeAdjustmentType.DISCOUNT
+        paid_amount = Decimal("0.00") if is_discount else adjustment.paid_amount
+        due_amount = adjustment.amount - paid_amount
+        if is_discount and adjustment.status == FeeAdjustmentStatus.PAID:
+            due_amount = Decimal("0.00")
         heads[month].append(FeePaymentAdjustmentStatus(
             fee_head_id=adjustment.fee_head_id,
             fee_head_name=adjustment.fee_head_name or adjustment.type,
@@ -456,8 +610,8 @@ def fee_adjustments_by_month(db, scope, months, *, exclude_adjustment_id=None):
             penalty_amount=Decimal("0.00") if is_discount else adjustment.amount,
             penalty_paid_amount=Decimal("0.00") if is_discount else adjustment.paid_amount,
             payable_amount=adjustment.amount,
-            paid_amount=Decimal("0.00") if is_discount else adjustment.paid_amount,
-            due_amount=Decimal("0.00") if is_discount else adjustment.amount - adjustment.paid_amount,
+            paid_amount=paid_amount,
+            due_amount=due_amount,
         ))
     return heads
 

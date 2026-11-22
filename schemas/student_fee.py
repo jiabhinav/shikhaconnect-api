@@ -1,10 +1,42 @@
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StringConstraints, computed_field, field_validator, model_validator
+from pydantic import AfterValidator, AliasChoices, BaseModel, ConfigDict, Field, StringConstraints, computed_field, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 from schemas.enums import FeeAdjustmentFrequency, FeeAdjustmentStatus, FeeDiscountType, LateFeeType, PaymentMode, StudentFeeStatus
+
+from utils.dates import payment_timezone
+
+
+def display_payment_timestamp(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(payment_timezone())
+
+
+PaymentTimestamp = Annotated[datetime, AfterValidator(display_payment_timestamp)]
+
+
+def parse_imported_payment_date(value) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, time.min)
+    if type(value) in (int, float) and 1 <= value < 2958465:
+        return datetime(1899, 12, 30) + timedelta(days=value)
+    if isinstance(value, str):
+        value = value.strip()
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            value = value.replace("/", "-").replace(".", "-")
+        for date_format in ("%d-%m-%Y", "%d-%m-%Y %H:%M", "%d-%m-%Y %H:%M:%S"):
+            try:
+                return datetime.strptime(value, date_format)
+            except ValueError:
+                continue
+    raise ValueError("Enter a valid payment date or datetime")
 
 
 def calculate_student_fee_status(net_amount: Decimal, paid_amount: Decimal) -> StudentFeeStatus:
@@ -15,10 +47,24 @@ def calculate_student_fee_status(net_amount: Decimal, paid_amount: Decimal) -> S
     return StudentFeeStatus.PARTIAL
 
 
-class StudentFeeWrite(BaseModel):
+class StudentFeePaymentDetails(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    student_id: int = Field(gt=0)
+    late_fee_payment_amount: Decimal = Field(default=Decimal("0.00"), ge=0, max_digits=16, decimal_places=2)
+    payment_mode: PaymentMode | None = None
+    cheque_number: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)] | None = None
+    description: str | None = Field(default=None, max_length=1000)
+    collected_by: str | None = Field(default=None, max_length=255)
+
+    @field_validator("cheque_number", mode="before")
+    @classmethod
+    def normalize_blank_cheque_number(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+
+class StudentFeePaymentFields(StudentFeePaymentDetails):
     months: list["StudentFeeMonthPayment | StudentFeeMonthSelection"] = Field(max_length=12)
     payment_amount: Decimal | None = Field(
         default=None, gt=0, max_digits=16, decimal_places=2,
@@ -35,25 +81,12 @@ class StudentFeeWrite(BaseModel):
         default=False,
         description="Require the submitted cash amount to cover the full balance of the selected months.",
     )
-    late_fee_payment_amount: Decimal = Field(default=Decimal("0.00"), ge=0, max_digits=16, decimal_places=2)
-    payment_mode: PaymentMode | None = None
-    cheque_number: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)] | None = None
-    description: str | None = Field(default=None, max_length=1000)
-    collected_by: str | None = Field(default=None, max_length=255)
-
     @model_validator(mode="before")
     @classmethod
     def interpret_payable_amount_as_total_collected(cls, values):
         if isinstance(values, dict) and "payable_amount" in values:
             return {"payment_amount_includes_late_fee": True, **values}
         return values
-
-    @field_validator("cheque_number", mode="before")
-    @classmethod
-    def normalize_blank_cheque_number(cls, value):
-        if isinstance(value, str) and not value.strip():
-            return None
-        return value
 
     @model_validator(mode="after")
     def validate_unique_months(self):
@@ -102,6 +135,64 @@ class StudentFeeWrite(BaseModel):
         return month.late_fee_payment_amount
 
 
+class StudentFeeWrite(StudentFeePaymentFields):
+    student_id: int = Field(gt=0)
+    tag: Literal["Bulk Upload"] | None = None
+
+
+class StudentFeeBulkWrite(StudentFeePaymentDetails):
+    receipt_number: str = Field(
+        validation_alias=AliasChoices("recieptNo", "receipt_number"), min_length=1, max_length=125,
+    )
+    fee_month: str | int | None = Field(default=None, description="Optional Excel date fallback. Allocation uses the session balance.")
+    payment_date: datetime | None = Field(default=None, description="Excel payment date or datetime.")
+    payment_time: time | None = Field(default=None, description="Optional Excel time. Date-only imports use midnight.")
+    payment_amount: Decimal = Field(gt=0, max_digits=16, decimal_places=2)
+    admission_number: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)]
+    tag: Literal["Bulk Upload"] = "Bulk Upload"
+
+    @field_validator("admission_number", mode="before", json_schema_input_type=str | int)
+    @classmethod
+    def accept_numeric_admission_number(cls, value):
+        return str(value) if type(value) is int else value
+
+    @field_validator("receipt_number")
+    @classmethod
+    def require_receipt_value(cls, value):
+        if not value.strip():
+            raise ValueError("Enter the receipt number")
+        return value
+
+    @field_validator("payment_date", mode="before", json_schema_input_type=str | int | float | None)
+    @classmethod
+    def read_payment_date(cls, value):
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return parse_imported_payment_date(value)
+
+    @model_validator(mode="after")
+    def set_import_timestamp(self):
+        payment_date = self.payment_date
+        if payment_date is None and self.fee_month is not None:
+            try:
+                if isinstance(self.fee_month, str) or self.fee_month >= 1000:
+                    payment_date = parse_imported_payment_date(self.fee_month)
+            except ValueError:
+                pass
+        if payment_date is None:
+            if self.payment_time is not None:
+                raise ValueError("payment_time requires a payment date")
+            return self
+        if self.payment_time is not None:
+            payment_date = datetime.combine(
+                payment_date.date(), self.payment_time, tzinfo=self.payment_time.tzinfo or payment_date.tzinfo,
+            )
+        if payment_date.tzinfo is None:
+            payment_date = payment_date.replace(tzinfo=payment_timezone())
+        self.payment_date = payment_date.astimezone(timezone.utc)
+        return self
+
+
 class StudentFeeMonthSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -115,6 +206,10 @@ class StudentFeeMonthPayment(StudentFeeMonthSelection):
         validation_alias=AliasChoices("payment_amount", "payable_amount"),
         description="Amount collected for this month after discounts, including any carry-forward and penalties being paid.",
     )
+
+
+class StudentFeeChequeSettlement(StudentFeeWrite):
+    months: list[StudentFeeMonthPayment]
 
 
 class StudentFeeHeadResponse(BaseModel):
@@ -144,7 +239,7 @@ class StudentFeeHeadResponse(BaseModel):
     def status(self) -> StudentFeeStatus:
         return calculate_student_fee_status(self.net_amount, self.paid_amount)
 
-class StudentFeeResponse(BaseModel):
+class StudentFeeTableRecord(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -156,14 +251,20 @@ class StudentFeeResponse(BaseModel):
     discount_amount: Decimal
     fine_amount: Decimal
     net_amount: Decimal
-    fee_head_paid_amount: Decimal
     paid_amount: Decimal
     late_fee_amount: Decimal
-    total_accepted_payment: Decimal
     status: StudentFeeStatus
+    tag: str | None = None
+    receipt_number: str | None = None
+    payment_date: PaymentTimestamp | None = None
     payment_mode: PaymentMode | None
     description: str | None
     collected_by: str | None
+
+
+class StudentFeeResponse(StudentFeeTableRecord):
+    fee_head_paid_amount: Decimal
+    total_accepted_payment: Decimal
     fee_heads: list[StudentFeeHeadResponse]
 
     @computed_field
@@ -186,6 +287,8 @@ class StudentFeeListResult(BaseModel):
 
 
 class StudentFeePaymentResult(StudentFeeListResult):
+    receipt_number: str | None = None
+    payment_date: PaymentTimestamp | None = None
     balances: list["FeePaymentMonthStatus"]
     fee_head_paid_amount: Decimal
     carry_forward_paid_amount: Decimal
@@ -214,6 +317,9 @@ class StudentFeeChequeResponse(BaseModel):
     school_id: int
     session_id: int
     student_id: int
+    tag: str | None = None
+    receipt_number: str | None = None
+    payment_date: PaymentTimestamp | None = None
     cheque_number: str
     payment_mode: Literal[PaymentMode.CHEQUE] = PaymentMode.CHEQUE
     status: ChequePaymentStatus
@@ -237,6 +343,39 @@ class StudentFeeChequeResult(BaseModel):
     status: str = "success"
     message: str
     data: StudentFeeChequeResponse
+
+
+class StudentFeeReceiptDetails(BaseModel):
+    status: StudentFeeStatus | None = None
+    description: str | None = None
+    cheque_number: str | None = None
+    fee_head_paid_amount: Decimal | None = None
+    carry_forward_paid_amount: Decimal | None = None
+    penalty_paid_amount: Decimal | None = None
+    late_fee_paid_amount: Decimal | None = None
+    payment_data: list[StudentFeeTableRecord] = Field(default_factory=list)
+
+
+class StudentFeeReceiptListResult(BaseModel):
+    status: str = "success"
+    total: int
+    offset: int
+    limit: int
+    data: list[StudentFeeTableRecord]
+
+
+class StudentFeeBulkRowResult(BaseModel):
+    row: int
+    admission_number: str
+    student_id: int
+    result: StudentFeePaymentResult | StudentFeeChequeResult
+
+
+class StudentFeeBulkResult(BaseModel):
+    status: str = "success"
+    message: str
+    total: int
+    data: list[StudentFeeBulkRowResult]
 
 
 class StudentFeeChequeListResult(BaseModel):
@@ -274,6 +413,7 @@ class FeePaymentFeeHeadStatus(FeePaymentHeadStatus):
 
 
 class FeePaymentAdjustmentStatus(FeePaymentHeadStatus):
+    due_amount: Decimal = Field(description="Unapplied discount amount or unpaid penalty amount.")
     amount: Decimal = Field(description="Assigned discount or penalty amount before payment or fee-head limits.")
     status: FeeAdjustmentStatus
     effective_discount_amount: Decimal = Decimal("0.00")

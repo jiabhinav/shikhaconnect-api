@@ -33,6 +33,7 @@ from routers.fee_heads import router as fee_head_router
 from routers.fee_structures import router as fee_structure_router
 from routers.fee_configurations import router as fee_configuration_router
 from routers.fee_assignments import router as fee_assignment_router
+from routers.student_fee_receipts import router as student_fee_receipt_router
 from routers.razorpay_payments import router as razorpay_payment_router
 from routers.caste_categories import router as caste_category_router
 from routers.houses import router as house_router
@@ -57,6 +58,7 @@ router.include_router(fee_structure_router)
 router.include_router(fee_configuration_router, prefix="/{school_id}/sessions/{session_id}", include_in_schema=False)
 router.include_router(fee_configuration_router)
 router.include_router(fee_assignment_router)
+router.include_router(student_fee_receipt_router)
 router.include_router(razorpay_payment_router)
 router.include_router(student_fee_adjustment_router)
 router.include_router(student_carry_forward_router)
