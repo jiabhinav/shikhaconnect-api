@@ -25,6 +25,12 @@ class FeeAdjustmentType(str, Enum):
     PENALTY = "Penalty"
 
 
+class FeeAdjustmentStatus(str, Enum):
+    PENDING = "Pending"
+    PARTIAL = "Partial"
+    PAID = "Paid"
+
+
 class FeeAdjustmentFrequency(str, Enum):
     ONE_TIME = "One Time"
     MONTHLY = "Monthly"

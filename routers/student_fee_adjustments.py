@@ -15,7 +15,7 @@ from models.student import Student
 from models.student_fee_adjustment import StudentFeeAdjustment
 from routers.fee_assignments import fee_payment_months
 from routers.fee_structures import fee_structure_school
-from schemas.enums import FeeAdjustmentFrequency, FeeAdjustmentType, FeeDiscountType
+from schemas.enums import FeeAdjustmentFrequency, FeeAdjustmentStatus, FeeAdjustmentType, FeeDiscountType
 from schemas.student_fee_adjustment import (
     FeeAdjustmentDropdownResult,
     FeeAdjustmentStudentListResult,
@@ -43,6 +43,7 @@ def get_fee_adjustment_dropdowns():
             "types": list(FeeAdjustmentType),
             "frequencies": list(FeeAdjustmentFrequency),
             "discount_types": list(FeeDiscountType),
+            "statuses": list(FeeAdjustmentStatus),
         },
     }
 
@@ -96,29 +97,57 @@ def lock_adjustment_student(db, scope):
     return student.admission_number
 
 
-def discount_due_failures(db, scope, dates, amount, *, exclude_adjustment_id=None):
+def discount_due_failures(db, scope, dates, amount, *, fee_head_id=None, exclude_adjustment_id=None):
     months = [selected.strftime("%Y-%m") for selected in dates]
-    balances = fee_payment_months(db, **scope, months=months, exclude_adjustment_id=exclude_adjustment_id)
+    balances = fee_payment_months(
+        db, **scope, months=months, exclude_adjustment_id=exclude_adjustment_id, include_pending_discounts=True,
+    )
     failures = []
     for balance in balances:
-        if balance.due_amount <= 0 or amount > balance.due_amount:
-            message = (
-                "All fees are paid for this month" if balance.due_amount <= 0
-                else "Discount amount cannot exceed the remaining due"
-            )
-            failures.append({
-                "message": message,
-                "fee_month": balance.fee_month,
-                "due_amount": str(balance.due_amount),
-                "discount_amount": str(amount),
-            })
+        due = sum((head.principal_due for head in balance.fee_heads), Decimal("0.00"))
+        due -= sum(
+            line.effective_discount_amount for line in balance.fee_adjustment
+            if line.tag == "discount" and line.fee_head_id is None
+        )
+        if fee_head_id is not None:
+            if any(head.fee_head_id == fee_head_id for head in balance.fee_heads):
+                continue
+            due = Decimal("0.00")
+            message = "Fee head is not assigned for this month"
+        elif due <= 0:
+            message = "All fees are paid for this month"
+        elif amount > due:
+            message = "Discount amount cannot exceed the remaining due"
+        else:
+            continue
+        failures.append({
+            "message": message,
+            "fee_month": balance.fee_month,
+            "due_amount": str(due),
+            "discount_amount": str(amount),
+        })
     return failures
 
 
-def validate_discount_due(db, scope, dates, amount, *, exclude_adjustment_id=None):
-    failures = discount_due_failures(db, scope, dates, amount, exclude_adjustment_id=exclude_adjustment_id)
+def validate_discount_due(db, scope, dates, amount, *, fee_head_id=None, exclude_adjustment_id=None):
+    failures = discount_due_failures(
+        db, scope, dates, amount, fee_head_id=fee_head_id, exclude_adjustment_id=exclude_adjustment_id,
+    )
     if failures:
         raise HTTPException(422, failures[0])
+
+
+def validate_penalty_head(db, scope, dates, fee_head_id):
+    if fee_head_id is None:
+        return
+    months = [selected.strftime("%Y-%m") for selected in dates]
+    for balance in fee_payment_months(db, **scope, months=months):
+        if all(head.fee_head_id != fee_head_id for head in balance.fee_heads):
+            raise HTTPException(422, {
+                "message": "Fee head is not assigned for this month",
+                "fee_month": balance.fee_month,
+                "fee_head_id": fee_head_id,
+            })
 
 
 def monthly_session_end(db, scope, selected_date, *, by_month=False):
@@ -149,7 +178,7 @@ def prepare_adjustments(db, scope, payload, *, expand_monthly=True):
         dates = list(monthly_dates(payload.date, end_date))
     skipped_months = []
     if is_discount:
-        failures = discount_due_failures(db, scope, dates, payload.amount)
+        failures = discount_due_failures(db, scope, dates, payload.amount, fee_head_id=payload.fee_head_id)
         if failures and (not is_monthly or not expand_monthly):
             raise HTTPException(422, failures[0])
         skipped_months = failures
@@ -157,9 +186,9 @@ def prepare_adjustments(db, scope, payload, *, expand_monthly=True):
         dates = [selected for selected in dates if selected.strftime("%Y-%m") not in months_to_skip]
         if not dates:
             reject_all_skipped(skipped_months)
-    fields = payload.model_dump(exclude={"date"})
-    if is_discount:
-        fields["applied_at"] = datetime.now(timezone.utc)
+    else:
+        validate_penalty_head(db, scope, dates, payload.fee_head_id)
+    fields = payload.model_dump(exclude={"date", "status"})
     items = [StudentFeeAdjustment(**scope, **fields, date=adjustment_date) for adjustment_date in dates]
     return items, skipped_months
 
@@ -177,13 +206,17 @@ def create_adjustment(
     scope: dict = Depends(adjustment_scope),
     db: Session = Depends(fee_structure_school),
 ):
-    lock_adjustment_student(db, scope)
+    """Create a student adjustment. Use fee_head_id to target an assigned fee head."""
+    admission_number = lock_adjustment_student(db, scope)
     items, skipped_months = prepare_adjustments(db, scope, payload)
+    for item in items:
+        item.admission_number = admission_number
     save_adjustments(db, items)
     db.refresh(items[0])
     message = (
-        "Discount applied successfully"
-        if payload.type == FeeAdjustmentType.DISCOUNT else f"Created {len(items)} student fee adjustment(s)"
+        "Discount assigned successfully"
+        if payload.type == FeeAdjustmentType.DISCOUNT
+        else f"Created {len(items)} student fee adjustment(s)"
     )
     return {"message": message, "data": items[0], "skipped_months": skipped_months}
 
@@ -194,6 +227,7 @@ def bulk_create_adjustments(
     scope: dict = Depends(adjustment_scope),
     db: Session = Depends(fee_structure_school),
 ):
+    """Upload discount or penalty rows for one student. Each row can target an assigned fee head."""
     admission_number = lock_adjustment_student(db, scope)
     return save_bulk_adjustments(db, (
         (scope, admission_number, [adjustment]) for adjustment in payload
@@ -218,6 +252,7 @@ def save_bulk_adjustments(db, rows, *, expand_monthly=True):
                 skipped_months.extend(skipped)
             results.append({
                 "row": row,
+                "status": items[0].status,
                 "data": [StudentFeeAdjustmentResponse.model_validate(item) for item in items],
                 "skipped_months": skipped_months,
             })
@@ -242,6 +277,29 @@ def bulk_create_month_adjustments(
             min_length=1,
             max_length=1000,
             openapi_examples={
+                "fee_head_discount": {
+                    "summary": "Pending discount for an assigned fee head",
+                    "value": [{
+                        "admission_number": "004003",
+                        "type": "Discount",
+                        "frequency": "Monthly",
+                        "discount_type": "Charity",
+                        "fee_head_id": 12,
+                        "status": "Pending",
+                        "month": [{"amount": 250, "date": "2026-11"}],
+                    }],
+                },
+                "fee_head_penalty": {
+                    "summary": "Penalty for an assigned fee head",
+                    "value": [{
+                        "admission_number": "004003",
+                        "type": "Penalty",
+                        "frequency": "One Time",
+                        "fee_head_id": 12,
+                        "status": "Pending",
+                        "month": [{"amount": 100, "date": "2026-11"}],
+                    }],
+                },
                 "one_time_discount": {
                     "summary": "Two one-time discounts on the same date",
                     "value": [
@@ -264,7 +322,7 @@ def bulk_create_month_adjustments(
     session_id: int,
     db: Session = Depends(fee_structure_school),
 ):
-    """Save fee adjustments for students identified by admission number."""
+    """Upload discounts or penalties by admission number. Use one row per student and fee head."""
     session = db.query(SchoolSession).filter_by(id=session_id, school_id=school_id).one()
     first_month = session.start_date.replace(day=1)
     rows = []
@@ -310,15 +368,21 @@ def bulk_create_month_adjustments(
 
 @router.get("", response_model=StudentFeeAdjustmentListResult)
 def list_adjustments(
+    status: FeeAdjustmentStatus | None = None,
+    fee_head_id: PositiveInt | None = None,
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     scope: dict = Depends(adjustment_scope),
     db: Session = Depends(fee_structure_school),
 ):
-    return paginate_adjustments(db.query(StudentFeeAdjustment).filter_by(**scope), offset, limit)
+    return paginate_adjustments(db.query(StudentFeeAdjustment).filter_by(**scope), offset, limit, status, fee_head_id)
 
 
-def paginate_adjustments(query, offset, limit):
+def paginate_adjustments(query, offset, limit, status, fee_head_id):
+    if fee_head_id is not None:
+        query = query.filter(StudentFeeAdjustment.fee_head_id == fee_head_id)
+    if status is not None:
+        query = query.filter(StudentFeeAdjustment.status == status)
     total = query.count()
     items = (
         query.order_by(StudentFeeAdjustment.date.asc(), StudentFeeAdjustment.id.asc())
@@ -432,6 +496,8 @@ def list_adjustment_students(
 @router.get("/students/adjustments", response_model=StudentFeeAdjustmentListResult)
 def list_student_adjustments_by_type(
     adjustment_type: FeeAdjustmentType | AllFilter = Query(alias="type"),
+    status: FeeAdjustmentStatus | None = None,
+    fee_head_id: PositiveInt | None = None,
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     scope: dict = Depends(adjustment_scope),
@@ -440,7 +506,7 @@ def list_student_adjustments_by_type(
     query = db.query(StudentFeeAdjustment).filter_by(**scope)
     if isinstance(adjustment_type, FeeAdjustmentType):
         query = query.filter_by(type=adjustment_type.value)
-    return paginate_adjustments(query, offset, limit)
+    return paginate_adjustments(query, offset, limit, status, fee_head_id)
 
 
 @router.get("/{adjustment_id}", response_model=StudentFeeAdjustmentResult)
@@ -468,20 +534,29 @@ def update_adjustment(
     is_discount = payload.type == FeeAdjustmentType.DISCOUNT
     if payload.frequency == FeeAdjustmentFrequency.MONTHLY:
         monthly_session_end(db, scope, payload.date, by_month=is_discount or item.tag == BULK_UPLOAD_TAG)
+    fee_head_id = payload.fee_head_id
+    if "fee_head_id" not in payload.model_fields_set:
+        fee_head_id = item.fee_head_id
     if is_discount:
-        validate_discount_due(db, scope, [payload.date], payload.amount, exclude_adjustment_id=item.id)
-    fields = payload.model_dump()
+        validate_discount_due(
+            db, scope, [payload.date], payload.amount, fee_head_id=fee_head_id, exclude_adjustment_id=item.id,
+        )
+    else:
+        validate_penalty_head(db, scope, [payload.date], fee_head_id)
+    keep_applied = is_discount and item.type == payload.type and item.applied_at is not None
+    fields = payload.model_dump(exclude={"status"})
+    fields["fee_head_id"] = fee_head_id
     if "description" not in payload.model_fields_set:
         fields.pop("description")
     for field, value in fields.items():
         setattr(item, field, value)
-    if is_discount and item.applied_at is None:
-        item.applied_at = datetime.now(timezone.utc)
+    if not keep_applied:
+        item.applied_at = None
     save_adjustments(db, [item])
     db.refresh(item)
     message = (
         "Discount applied successfully"
-        if is_discount else "Student fee adjustment updated successfully"
+        if keep_applied else "Student fee adjustment updated successfully"
     )
     return {"message": message, "data": item}
 
@@ -495,7 +570,7 @@ def delete_adjustment(
     lock_adjustment_student(db, scope)
     item = find_adjustment(db, scope, adjustment_id, lock=True)
     require_editable_adjustment(item)
-    if item.type == FeeAdjustmentType.DISCOUNT:
+    if item.type == FeeAdjustmentType.DISCOUNT and item.fee_head_id is None and item.applied_at is not None:
         validate_discount_due(db, scope, [item.date], item.amount, exclude_adjustment_id=item.id)
     db.delete(item)
     db.commit()
@@ -512,7 +587,9 @@ def mark_adjustment_applied(
     item = find_adjustment(db, scope, adjustment_id, lock=True)
     if item.applied_at is None:
         if item.type == FeeAdjustmentType.DISCOUNT:
-            validate_discount_due(db, scope, [item.date], item.amount, exclude_adjustment_id=item.id)
+            validate_discount_due(
+                db, scope, [item.date], item.amount, fee_head_id=item.fee_head_id, exclude_adjustment_id=item.id,
+            )
         item.applied_at = datetime.now(timezone.utc)
     save_adjustments(db, [item])
     db.refresh(item)

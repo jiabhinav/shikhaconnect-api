@@ -29,31 +29,23 @@ from schemas.fee_assignment import (
     AssignedFeeStructureDetailsResult,
 )
 from schemas.student_fee import (
-    FeePaymentAdjustmentStatus, FeePaymentHeadStatus, FeePaymentMonthStatus, FeePaymentStatusListResult,
+    FeePaymentAdjustmentStatus, FeePaymentFeeHeadStatus, FeePaymentHeadStatus, FeePaymentMonthStatus,
+    FeePaymentStatusListResult, calculate_student_fee_status,
     ChequePaymentStatus, StudentFeeChequeListResult, StudentFeeChequeResult, StudentFeeChequeStatusWrite,
     StudentFeeListResult, StudentFeeMonthPayment, StudentFeePaymentResult, StudentFeeWrite,
 )
-from schemas.enums import FeeAdjustmentType, FeeType, PaymentMode, StudentFeeStatus
+from schemas.enums import FeeAdjustmentStatus, FeeAdjustmentType, FeeType, PaymentMode
 from utils.fee_months import session_months
 
 router = APIRouter(tags=['Configure Fees'])
 logger = logging.getLogger(__name__)
-
-
-def calculate_student_fee_status(net_amount, paid_amount):
-    if paid_amount >= net_amount:
-        return 'PAID'
-    if paid_amount == 0:
-        return 'UNPAID'
-    return 'PARTIAL'
-
 
 @router.post('/student_fees', response_model=StudentFeePaymentResult | StudentFeeChequeResult, status_code=201)
 def create_student_fee(school_id: int, session_id: int, payload: StudentFeeWrite,
                        db: Session = Depends(fee_structure_school)):
     is_cheque = payload.payment_mode == PaymentMode.CHEQUE
     try:
-        items, carry_forward_paid, penalty_paid, allocations = apply_student_fee_payment(
+        items, fee_head_paid, carry_forward_paid, penalty_paid, allocations = apply_student_fee_payment(
             db, school_id, session_id, payload, validate_only=is_cheque,
         )
         if is_cheque:
@@ -68,6 +60,10 @@ def create_student_fee(school_id: int, session_id: int, payload: StudentFeeWrite
             db.commit()
             db.refresh(cheque)
             return {'message': 'Cheque payment recorded as pending', 'data': cheque}
+        db.flush()
+        balances = fee_payment_months(
+            db, school_id, session_id, payload.student_id, months=[entry.fee_month for entry in payload.months],
+        )
         db.commit()
         for item in items:
             db.refresh(item)
@@ -91,6 +87,7 @@ def create_student_fee(school_id: int, session_id: int, payload: StudentFeeWrite
         raise
     return {
         'message': 'Student fee records created successfully', 'total': len(items), 'data': items,
+        'balances': balances, 'fee_head_paid_amount': fee_head_paid,
         'carry_forward_paid_amount': carry_forward_paid, 'penalty_paid_amount': penalty_paid,
         'late_fee_paid_amount': payload.total_late_fee_payment,
     }
@@ -108,11 +105,17 @@ def apply_student_fee_payment(db, school_id, session_id, payload, *, validate_on
     carry_forward = db.query(StudentCarryForward).filter_by(
         school_id=school_id, session_id=session_id, student_id=payload.student_id,
     ).filter(StudentCarryForward.month.in_(requested_months)).with_for_update().one_or_none()
-    balances = fee_payment_months(db, school_id, session_id, payload.student_id, months=requested_months)
+    balances = fee_payment_months(
+        db, school_id, session_id, payload.student_id, months=requested_months, include_pending_discounts=True,
+    )
     by_month = {balance.fee_month: balance for balance in balances}
+    if payload.settle_in_full:
+        validate_full_payment(payload, by_month)
+
     allocations = payload.months
-    if payload.payment_amount is not None:
-        allocations = allocate_selected_months(balances, payload.payment_amount)
+    regular_payment = payload.regular_payment_amount
+    if regular_payment is not None:
+        allocations = allocate_selected_months(balances, regular_payment)
 
     late_paid_by_month = {}
     for entry in payload.months:
@@ -131,18 +134,31 @@ def apply_student_fee_payment(db, school_id, session_id, payload, *, validate_on
         ]
 
     fee_scope = dict(school_id=school_id, academic_session_id=session_id, student_id=payload.student_id)
-    items = []
-    carry_forward_paid = penalty_paid = Decimal('0.00')
+    records = {}
+    accepted_by_month = defaultdict(Decimal)
+    fee_head_paid = carry_forward_paid = penalty_paid = Decimal('0.00')
     for entry in allocations:
         month = entry.fee_month
         balance = by_month[month]
-        if entry.payment_amount == 0:
+        discounts_by_head = {head.fee_head_id: head.discount_amount for head in balance.fee_heads}
+        has_head_discount = any(discounts_by_head.values())
+        discount_credit = sum(
+            (line.effective_discount_amount for line in balance.fee_adjustment
+             if line.tag == "discount" and line.fee_head_id is None),
+            Decimal("0.00"),
+        )
+        if entry.payment_amount == 0 and not (
+            (has_head_discount or discount_credit > 0)
+            and (balance.due_amount == 0 or month in late_paid_by_month)
+        ):
             continue
-        if balance.due_amount == 0 and payment_mode not in (PaymentMode.CHEQUE, PaymentMode.RAZORPAY):
+        if entry.payment_amount > 0 and balance.due_amount == 0 and payment_mode not in (PaymentMode.CHEQUE, PaymentMode.RAZORPAY):
             continue
         if entry.payment_amount > balance.due_amount:
             raise HTTPException(422, f'Payment amount cannot exceed the remaining balance for {month}')
 
+        if not validate_only:
+            accepted_by_month[month] += entry.payment_amount
         remaining = entry.payment_amount
         if carry_forward is not None and carry_forward.month == month and carry_forward.unpaid_amount > 0:
             carry_forward_paid = min(remaining, carry_forward.unpaid_amount)
@@ -150,55 +166,95 @@ def apply_student_fee_payment(db, school_id, session_id, payload, *, validate_on
             if carry_forward_paid > 0:
                 if not validate_only:
                     carry_forward.paid_amount += carry_forward_paid
-                if remaining == 0:
+                    records[month] = get_or_create_monthly_fee(db, fee_scope, month)
+                if remaining == 0 and not has_head_discount:
                     continue
 
-        discount_credit = -sum(
-            (line.payable_amount for line in balance.fee_adjustment if line.tag == 'discount'), Decimal('0.00'),
-        )
-        head_due = sum((head.due_amount for head in balance.fee_heads), Decimal('0.00'))
+        due_by_head = {
+            head.fee_head_id: head.principal_due
+            for head in balance.fee_heads
+        }
+        head_due = sum(due_by_head.values(), Decimal('0.00'))
         head_payment = min(remaining, max(Decimal('0.00'), head_due - discount_credit))
         penalty_payment = remaining - head_payment
         if penalty_payment > 0:
             penalty_paid += allocate_penalty_payment(db, balance, penalty_payment, validate_only=validate_only)
-        if validate_only or (penalty_payment > 0 and head_payment == 0):
+        if validate_only:
+            continue
+        pending_discounts = [
+            line.source_id for line in balance.fee_adjustment
+            if line.tag == "discount" and line.status == FeeAdjustmentStatus.PENDING
+            and line.effective_discount_amount > 0
+            and (line.fee_head_id is not None or head_payment > 0 or head_due == discount_credit)
+        ]
+        if pending_discounts:
+            applied_at = datetime.now(timezone.utc)
+            for adjustment in db.query(StudentFeeAdjustment).filter(StudentFeeAdjustment.id.in_(pending_discounts)):
+                adjustment.applied_at = applied_at
+
+        if head_payment > 0 or has_head_discount or penalty_payment > 0:
+            if month not in records:
+                records[month] = get_or_create_monthly_fee(db, fee_scope, month)
+        if head_payment == 0 and not has_head_discount:
             continue
 
-        existing = get_or_create_monthly_fee(db, fee_scope, month)
+        existing = records[month]
         if existing.net_amount == 0 and not existing.fee_heads:
             if not balance.fee_heads:
                 raise HTTPException(404, f'No fee heads are assigned for {month}')
-            total_amount = sum((head.payable_amount for head in balance.fee_heads), Decimal('0.00'))
-            existing.total_amount = existing.net_amount = total_amount
-            existing.fee_heads = [
-                StudentFeeHead(
-                    fee_head_id=head.fee_head_id, amount=head.payable_amount, net_amount=head.payable_amount,
+            for head in balance.fee_heads:
+                principal = head.payable_amount + head.discount_amount - head.penalty_amount
+                existing.fee_heads.append(StudentFeeHead(
+                    fee_head_id=head.fee_head_id, amount=principal, net_amount=principal,
+                    discount_amount=Decimal('0.00'), adjustment_discount_amount=Decimal('0.00'),
                     paid_amount=Decimal('0.00'),
-                )
-                for head in balance.fee_heads
-            ]
-        elif existing.due_amount == 0:
+                ))
+            existing.net_amount = sum(head.amount for head in existing.fee_heads)
+        elif head_payment > 0 and existing.due_amount == 0:
             raise HTTPException(409, f'Fee for {month} is already fully paid')
 
+        for head in existing.fee_heads:
+            discount = discounts_by_head.get(head.fee_head_id, Decimal("0.00"))
+            change = discount - head.adjustment_discount_amount
+            head.adjustment_discount_amount = discount
+            head.discount_amount += change
+            head.net_amount -= change
+            existing.discount_amount += change
+            existing.net_amount -= change
+
         unallocated = head_payment
-        for head in sorted(existing.fee_heads, key=lambda head: head.fee_head_id):
+        for head in existing.fee_heads:
             if unallocated == 0:
                 break
-            head_paid = min(unallocated, head.due_amount)
+            head_paid = min(unallocated, due_by_head.get(head.fee_head_id, Decimal("0.00")))
             head.paid_amount += head_paid
             unallocated -= head_paid
         if unallocated:
             raise HTTPException(409, f'Fee balance changed for {month}. Refresh the balance and try again.')
-        existing.paid_amount += head_payment
-        existing.status = calculate_student_fee_status(existing.net_amount, existing.paid_amount)
-        existing.payment_mode = payment_mode
-        existing.description = payload.description
-        existing.collected_by = payload.collected_by
-        items.append(existing)
+        fee_head_paid += head_payment
+        existing.status = calculate_student_fee_status(existing.net_amount, existing.fee_head_paid_amount + head_payment)
+        if head_payment > 0:
+            existing.payment_mode = payment_mode
+            existing.description = payload.description
+            existing.collected_by = payload.collected_by
     for month, paid in late_paid_by_month.items() if not validate_only else ():
-        record = get_or_create_monthly_fee(db, fee_scope, month)
-        record.late_fee_amount += paid
-    return items, carry_forward_paid, penalty_paid, allocations
+        if month not in records:
+            records[month] = get_or_create_monthly_fee(db, fee_scope, month)
+        records[month].late_fee_amount += paid
+        accepted_by_month[month] += paid
+
+    for month, record in records.items():
+        record.paid_amount += accepted_by_month[month]
+        balance = by_month[month]
+        carry_amount = balance.carry_forward.payable_amount if balance.carry_forward else Decimal("0.00")
+        if carry_forward is not None and carry_forward.month == month:
+            carry_amount = carry_forward.amount
+        gross_fees = (
+            sum(head.original_amount for head in balance.fee_heads)
+            if balance.fee_heads else max(Decimal("0.00"), record.net_amount + record.discount_amount - record.fine_amount)
+        )
+        record.total_amount = gross_fees + carry_amount + balance.total_penalty_amount + record.late_fee_amount
+    return list(records.values()), fee_head_paid, carry_forward_paid, penalty_paid, allocations
 
 
 def get_or_create_monthly_fee(db, scope, month):
@@ -214,6 +270,29 @@ def get_or_create_monthly_fee(db, scope, month):
     )
     db.execute(statement.on_conflict_do_nothing(index_elements=list(identity)))
     return query.one()
+
+
+def validate_full_payment(payload, balances):
+    if payload.payment_amount is None:
+        amounts = [
+            (entry.fee_month, entry.payment_amount, balances[entry.fee_month].due_amount)
+            for entry in payload.months
+        ]
+    else:
+        due = sum((balance.due_amount for balance in balances.values()), Decimal("0.00"))
+        if payload.payment_amount_includes_late_fee:
+            due += payload.total_late_fee_payment
+        amounts = [(None, payload.payment_amount, due)]
+    for month, received, required in amounts:
+        if received != required:
+            detail = {
+                "message": "Payment amount must match the full remaining balance after discounts",
+                "payment_amount": str(received),
+                "required_amount": str(required),
+            }
+            if month is not None:
+                detail["fee_month"] = month
+            raise HTTPException(422, detail)
 
 
 def allocate_selected_months(balances, amount):
@@ -349,8 +428,12 @@ def fee_adjustments_by_month(db, scope, months, *, exclude_adjustment_id=None):
             StudentFeeAdjustment.date,
             StudentFeeAdjustment.frequency,
             StudentFeeAdjustment.discount_type,
+            StudentFeeAdjustment.fee_head_id,
+            StudentFeeAdjustment.status.label("status"),
+            FeeHead.fee_head_name,
         )
         .filter_by(**scope)
+        .outerjoin(FeeHead, FeeHead.id == StudentFeeAdjustment.fee_head_id)
     )
     if exclude_adjustment_id is not None:
         query = query.filter(StudentFeeAdjustment.id != exclude_adjustment_id)
@@ -358,18 +441,23 @@ def fee_adjustments_by_month(db, scope, months, *, exclude_adjustment_id=None):
         month = adjustment.date.strftime("%Y-%m")
         if month not in months:
             continue
-        amount = -adjustment.amount if adjustment.type == FeeAdjustmentType.DISCOUNT else adjustment.amount
+        is_discount = adjustment.type == FeeAdjustmentType.DISCOUNT
         heads[month].append(FeePaymentAdjustmentStatus(
-            fee_head_id=None,
-            fee_head_name=adjustment.type,
+            fee_head_id=adjustment.fee_head_id,
+            fee_head_name=adjustment.fee_head_name or adjustment.type,
+            status=adjustment.status,
             tag=adjustment.type.lower(),
             source_id=adjustment.id,
             frequency=adjustment.frequency,
             date=adjustment.date,
             discount_type=adjustment.discount_type,
-            payable_amount=amount,
-            paid_amount=adjustment.paid_amount,
-            due_amount=amount - adjustment.paid_amount,
+            amount=adjustment.amount,
+            discount_amount=adjustment.amount if is_discount else Decimal("0.00"),
+            penalty_amount=Decimal("0.00") if is_discount else adjustment.amount,
+            penalty_paid_amount=Decimal("0.00") if is_discount else adjustment.paid_amount,
+            payable_amount=adjustment.amount,
+            paid_amount=Decimal("0.00") if is_discount else adjustment.paid_amount,
+            due_amount=Decimal("0.00") if is_discount else adjustment.amount - adjustment.paid_amount,
         ))
     return heads
 
@@ -377,13 +465,13 @@ def fee_adjustments_by_month(db, scope, months, *, exclude_adjustment_id=None):
 @router.get('/fee_payments', response_model=FeePaymentStatusListResult)
 def get_fee_payment_status(school_id: int, session_id: int, student_id: int,
                            fee_month: str | None = None,
+                           include_pending_discounts: bool = False,
                            db: Session = Depends(fee_structure_school)):
-    balances = fee_payment_months(db, school_id, session_id, student_id)
-    data = balances
-    if fee_month is not None:
-        data = [balance for balance in balances if balance.fee_month == fee_month]
-        if not data:
-            raise HTTPException(422, 'fee_month is not part of this academic session')
+    """Return posted balances. Set include_pending_discounts to preview a new payment."""
+    data = fee_payment_months(
+        db, school_id, session_id, student_id, months=[fee_month] if fee_month is not None else None,
+        include_pending_discounts=include_pending_discounts,
+    )
     scope = dict(school_id=school_id, session_id=session_id, student_id=student_id)
     settings = late_fee_settings(db, scope)
     return {
@@ -407,7 +495,10 @@ def late_fee_settings(db, scope):
     ).one_or_none()
 
 
-def fee_payment_months(db, school_id, session_id, student_id, *, months=None, exclude_adjustment_id=None):
+def fee_payment_months(
+    db, school_id, session_id, student_id, *, months=None, exclude_adjustment_id=None,
+    include_pending_discounts=False,
+):
     student = db.query(Student.id, Student.class_id).filter_by(
         id=student_id, school_id=school_id, session_id=session_id,
     ).first()
@@ -467,36 +558,92 @@ def fee_payment_months(db, school_id, session_id, student_id, *, months=None, ex
                 month_heads[line.fee_head_id] = {
                     'fee_head_id': line.fee_head_id,
                     'fee_head_name': names.get(line.fee_head_id, line.fee_head_name),
-                    'payable_amount': line.net_amount,
+                    'original_amount': line.amount,
+                    'payable_amount': line.net_amount + line.adjustment_discount_amount,
                 }
+
+        monthly_adjustments = adjustment_heads[month]
+        discounts_by_head = defaultdict(Decimal)
+        penalties_by_head = defaultdict(Decimal)
+        penalty_paid_by_head = defaultdict(Decimal)
+        credit_order = sorted(monthly_adjustments, key=lambda line: line.status == FeeAdjustmentStatus.PENDING)
+        if not include_pending_discounts:
+            credit_order = [
+                line for line in credit_order
+                if line.tag != "discount" or line.status != FeeAdjustmentStatus.PENDING
+            ]
+        for adjustment in credit_order:
+            if adjustment.fee_head_id is None:
+                continue
+            if adjustment.tag == "discount":
+                head_id = adjustment.fee_head_id
+                if head_id in month_heads:
+                    principal = month_heads[head_id]['payable_amount']
+                    paid = paid_by_head.get(head_id, Decimal("0.00"))
+                    available = max(Decimal("0.00"), principal - paid - discounts_by_head[head_id])
+                    adjustment.effective_discount_amount = min(adjustment.discount_amount, available)
+                    discounts_by_head[head_id] += adjustment.effective_discount_amount
+            else:
+                penalties_by_head[adjustment.fee_head_id] += adjustment.payable_amount
+                penalty_paid_by_head[adjustment.fee_head_id] += adjustment.paid_amount
 
         fee_heads = []
         for values in sorted(month_heads.values(), key=lambda item: (item['fee_head_name'].casefold(), item['fee_head_id'])):
             paid = min(paid_by_head.get(values['fee_head_id'], Decimal('0.00')), values['payable_amount'])
-            fee_heads.append(FeePaymentHeadStatus(
+            head_id = values['fee_head_id']
+            discount = discounts_by_head[head_id]
+            penalty = penalties_by_head[head_id]
+            penalty_paid = penalty_paid_by_head[head_id]
+            payable = values['payable_amount'] - discount + penalty
+            paid += penalty_paid
+            fee_heads.append(FeePaymentFeeHeadStatus(
                 fee_head_id=values['fee_head_id'],
                 fee_head_name=values['fee_head_name'],
-                payable_amount=values['payable_amount'],
+                original_amount=values.get('original_amount', values['payable_amount']),
+                payable_amount=payable,
                 paid_amount=paid,
-                due_amount=values['payable_amount'] - paid,
+                due_amount=payable - paid,
+                discount_amount=discount,
+                penalty_amount=penalty,
+                penalty_paid_amount=penalty_paid,
             ))
-        monthly_adjustments = adjustment_heads[month]
+        heads_by_id = {head.fee_head_id: head for head in fee_heads}
+        for adjustment in monthly_adjustments:
+            head = heads_by_id.get(adjustment.fee_head_id)
+            if head is not None:
+                adjustment.fee_head_payable_amount = head.payable_amount
+                adjustment.fee_head_paid_amount = head.paid_amount
+                adjustment.fee_head_due_amount = head.due_amount
+                adjustment.fee_head_status = head.status
+
+        remaining_principal = sum((head.principal_due for head in fee_heads), Decimal("0.00"))
+        month_discount = Decimal("0.00")
+        for adjustment in credit_order:
+            if adjustment.tag == "discount" and adjustment.fee_head_id is None:
+                credit = min(adjustment.discount_amount, remaining_principal)
+                adjustment.effective_discount_amount = credit
+                month_discount += credit
+                remaining_principal -= credit
         month_carry_forward = carry_forward if month == first_month else None
-        total_heads = fee_heads + monthly_adjustments
+        total_heads = fee_heads + [
+            line for line in monthly_adjustments
+            if line.tag == "penalty" and line.fee_head_id not in month_heads
+        ]
         if month_carry_forward is not None:
             total_heads.append(month_carry_forward)
-        payable_amount = max(Decimal('0.00'), sum((head.payable_amount for head in total_heads), Decimal('0.00')))
-        paid_amount = sum((head.paid_amount for head in total_heads), Decimal('0.00'))
-        due_amount = max(Decimal('0.00'), payable_amount - paid_amount)
+        late_fee_paid = record.late_fee_amount if record else Decimal("0.00")
+        payable_amount = late_fee_paid + max(
+            Decimal("0.00"), sum((head.payable_amount for head in total_heads), Decimal("0.00")) - month_discount,
+        )
+        paid_amount = late_fee_paid + sum((head.paid_amount for head in total_heads), Decimal("0.00"))
+        due_amount = max(Decimal("0.00"), payable_amount - paid_amount)
         data.append(FeePaymentMonthStatus(
             fee_month=month,
             payable_amount=payable_amount,
             paid_amount=paid_amount,
-            late_fee_paid_amount=record.late_fee_amount if record else Decimal('0.00'),
+            late_fee_paid_amount=late_fee_paid,
             due_amount=due_amount,
-            status=StudentFeeStatus.PAID if due_amount == 0 else (
-                StudentFeeStatus.UNPAID if paid_amount == 0 else StudentFeeStatus.PARTIAL
-            ),
+            status=calculate_student_fee_status(payable_amount, paid_amount),
             fee_heads=fee_heads,
             fee_adjustment=monthly_adjustments,
             carry_forward=month_carry_forward,

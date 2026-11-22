@@ -2,11 +2,14 @@ import re
 from datetime import date as Date
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, StringConstraints, field_validator, model_validator
 
-from schemas.enums import FeeAdjustmentFrequency, FeeAdjustmentType, FeeDiscountType
+from schemas.enums import FeeAdjustmentFrequency, FeeAdjustmentStatus, FeeAdjustmentType, FeeDiscountType
+
+
+InitialFeeAdjustmentStatus = Literal[FeeAdjustmentStatus.PENDING]
 
 
 class StudentFeeAdjustmentKind(BaseModel):
@@ -15,6 +18,20 @@ class StudentFeeAdjustmentKind(BaseModel):
     type: FeeAdjustmentType
     frequency: FeeAdjustmentFrequency
     discount_type: FeeDiscountType | None = None
+
+    fee_head_id: PositiveInt | None = Field(
+        default=None, description="Assigned fee head ID for a discount or penalty. Omit for a month-wide adjustment.",
+    )
+    status: InitialFeeAdjustmentStatus = Field(
+        default=FeeAdjustmentStatus.PENDING, description="Optional upload value. Applying a discount or recording a payment updates the resulting status.",
+    )
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value):
+        if isinstance(value, str):
+            return value.strip().title() or FeeAdjustmentStatus.PENDING
+        return FeeAdjustmentStatus.PENDING if value is None else value
 
     @model_validator(mode="after")
     def validate_discount_type(self):
@@ -57,6 +74,8 @@ class StudentFeeAdjustmentMonthBulkWrite(StudentFeeAdjustmentKind):
 class StudentFeeAdjustmentResponse(StudentFeeAdjustmentWrite):
     model_config = ConfigDict(from_attributes=True)
 
+    status: FeeAdjustmentStatus
+    paid_amount: Decimal
     id: int
     school_id: int
     session_id: int
@@ -86,6 +105,7 @@ class StudentFeeAdjustmentCreateResult(StudentFeeAdjustmentResult):
 
 class StudentFeeAdjustmentBulkRowResult(BaseModel):
     row: int
+    status: FeeAdjustmentStatus
     data: list[StudentFeeAdjustmentResponse]
     skipped_months: list[SkippedDiscountMonth]
 
@@ -147,6 +167,7 @@ class FeeAdjustmentDropdowns(BaseModel):
     types: list[FeeAdjustmentType]
     frequencies: list[FeeAdjustmentFrequency]
     discount_types: list[FeeDiscountType]
+    statuses: list[FeeAdjustmentStatus]
 
 
 class FeeAdjustmentDropdownResult(BaseModel):

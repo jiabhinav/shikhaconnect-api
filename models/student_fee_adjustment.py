@@ -1,12 +1,22 @@
 from sqlalchemy import (
-    CheckConstraint, Column, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, and_, cast, func, or_, select,
+    CheckConstraint, Column, Computed, Date, DateTime, ForeignKey, Index, Integer, Numeric, String,
+    and_, case, cast, func, or_, select,
 )
 from sqlalchemy.orm import column_property
 
 from database.database import Base
 from models.student_carry_forward import StudentCarryForward
 from models.student_fee import StudentFee, StudentFeeHead
-from schemas.enums import FeeAdjustmentType
+from schemas.enums import FeeAdjustmentStatus, FeeAdjustmentType
+
+
+FEE_ADJUSTMENT_PAYMENT_STATUS_SQL = (
+    f"CASE WHEN type = '{FeeAdjustmentType.DISCOUNT.value}' AND applied_at IS NOT NULL "
+    f"THEN '{FeeAdjustmentStatus.PAID.value}' "
+    f"WHEN paid_amount >= amount THEN '{FeeAdjustmentStatus.PAID.value}' "
+    f"WHEN paid_amount > 0 THEN '{FeeAdjustmentStatus.PARTIAL.value}' "
+    f"ELSE '{FeeAdjustmentStatus.PENDING.value}' END"
+)
 
 
 class StudentFeeAdjustment(Base):
@@ -25,8 +35,10 @@ class StudentFeeAdjustment(Base):
     type = Column(String(20), nullable=False)
     frequency = Column(String(20), nullable=False)
     discount_type = Column("name", String(20), nullable=True)
+    fee_head_id = Column(Integer, ForeignKey("fee_heads.id", ondelete="RESTRICT"), nullable=True)
     amount = Column(Numeric(12, 2), nullable=False)
     paid_amount = Column(Numeric(12, 2), nullable=False, server_default="0.00")
+    status = Column(String(10), Computed(FEE_ADJUSTMENT_PAYMENT_STATUS_SQL), nullable=False)
     date = Column(Date, nullable=False)
     description = Column(String(1000), nullable=False)
     tag = Column(String(50), nullable=True)
@@ -35,6 +47,28 @@ class StudentFeeAdjustment(Base):
 
 paid_penalty = StudentFeeAdjustment.__table__.alias()
 fee_month = func.substr(cast(StudentFeeAdjustment.date, String), 1, 7)
+fee_non_principal_paid_amount = (
+    StudentFee.late_fee_amount
+    + select(func.coalesce(func.sum(StudentFeeAdjustment.paid_amount), 0)).where(
+        StudentFeeAdjustment.school_id == StudentFee.school_id,
+        StudentFeeAdjustment.session_id == StudentFee.academic_session_id,
+        StudentFeeAdjustment.student_id == StudentFee.student_id,
+        StudentFeeAdjustment.type == FeeAdjustmentType.PENALTY,
+        fee_month == StudentFee.fee_month,
+    ).correlate(StudentFee).scalar_subquery()
+    + select(func.coalesce(func.sum(StudentCarryForward.paid_amount), 0)).where(
+        StudentCarryForward.school_id == StudentFee.school_id,
+        StudentCarryForward.session_id == StudentFee.academic_session_id,
+        StudentCarryForward.student_id == StudentFee.student_id,
+        StudentCarryForward.month == StudentFee.fee_month,
+    ).correlate(StudentFee).scalar_subquery()
+)
+legacy_principal_paid = StudentFee.paid_amount - fee_non_principal_paid_amount
+StudentFee.fee_head_paid_amount = column_property(func.coalesce(
+    select(func.sum(StudentFeeHead.paid_amount)).where(StudentFeeHead.student_fee_id == StudentFee.id)
+    .correlate(StudentFee).scalar_subquery(),
+    case((legacy_principal_paid > 0, legacy_principal_paid), else_=0),
+))
 StudentFeeAdjustment.editable = column_property(~or_(
     select(StudentFee.id).where(
         StudentFee.school_id == StudentFeeAdjustment.school_id,
@@ -42,7 +76,7 @@ StudentFeeAdjustment.editable = column_property(~or_(
         StudentFee.student_id == StudentFeeAdjustment.student_id,
         StudentFee.fee_month == fee_month,
         or_(
-            StudentFee.paid_amount > 0,
+            StudentFee.fee_head_paid_amount > 0,
             and_(
                 StudentFeeAdjustment.type == FeeAdjustmentType.DISCOUNT,
                 or_(

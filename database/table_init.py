@@ -4,7 +4,7 @@ from importlib import import_module
 from pkgutil import walk_packages
 from pathlib import Path
 
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, text, update
 from sqlalchemy.exc import SQLAlchemyError
 
 from database.database import Base
@@ -84,6 +84,133 @@ def remove_user_school_name(connection):
     connection.execute(text("ALTER TABLE users DROP COLUMN school_name"))
 
 
+def migrate_student_fee_adjustments(connection):
+    from models.student_fee_adjustment import FEE_ADJUSTMENT_PAYMENT_STATUS_SQL
+
+    table = "student_fee_adjustments"
+    if connection.dialect.name == "postgresql":
+        acquire_transaction_lock(connection, 731904218)
+    columns = {column["name"]: column for column in inspect(connection).get_columns(table)}
+    legacy_flag = None
+    if "application_status" in columns:
+        legacy_flag = "application_status"
+    elif "status" in columns and "computed" not in columns["status"]:
+        legacy_flag = "status"
+
+    if legacy_flag is not None:
+        connection.exec_driver_sql(
+            f"UPDATE {table} SET applied_at = CASE WHEN {legacy_flag} = 'Pending' THEN NULL "
+            f"ELSE COALESCE(applied_at, CURRENT_TIMESTAMP) END WHERE type = 'Discount' "
+            f"AND (applied_at IS NULL OR {legacy_flag} = 'Pending')"
+        )
+        connection.exec_driver_sql(f"ALTER TABLE {table} DROP COLUMN {legacy_flag}")
+        columns.pop(legacy_flag)
+    elif "status" not in columns:
+        connection.exec_driver_sql(
+            f"UPDATE {table} SET applied_at = CURRENT_TIMESTAMP WHERE type = 'Discount' AND applied_at IS NULL"
+        )
+
+    current_status = columns.get("status")
+    if current_status is not None and "applied_at" not in current_status["computed"]["sqltext"]:
+        connection.exec_driver_sql(f"ALTER TABLE {table} DROP COLUMN status")
+        columns.pop("status")
+
+    storage = "STORED" if connection.dialect.name == "postgresql" else "VIRTUAL"
+    for name, definition in (
+        ("tag", "VARCHAR(50)"),
+        ("fee_head_id", "INTEGER REFERENCES fee_heads(id) ON DELETE RESTRICT"),
+        ("admission_number", "VARCHAR(150)"),
+        ("paid_amount", "NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (paid_amount >= 0 AND paid_amount <= amount)"),
+        ("status", f"VARCHAR(10) GENERATED ALWAYS AS ({FEE_ADJUSTMENT_PAYMENT_STATUS_SQL}) {storage} NOT NULL"),
+    ):
+        if name not in columns:
+            connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
+
+def migrate_fee_head_adjustment_discounts(connection):
+    if connection.dialect.name == "postgresql":
+        acquire_transaction_lock(connection, 731904218)
+    columns = {column["name"] for column in inspect(connection).get_columns("student_fee_heads")}
+    if "adjustment_discount_amount" in columns:
+        return
+
+    connection.exec_driver_sql(
+        "ALTER TABLE student_fee_heads ADD COLUMN adjustment_discount_amount NUMERIC(12, 2) NOT NULL DEFAULT 0"
+    )
+    connection.exec_driver_sql("""
+        WITH credits AS (
+            SELECT head.id,
+                   CASE WHEN SUM(adjustment.amount) > head.net_amount - head.paid_amount
+                        THEN head.net_amount - head.paid_amount
+                        ELSE SUM(adjustment.amount) END AS credit
+            FROM student_fee_heads AS head
+            JOIN student_fees AS fee ON fee.id = head.student_fee_id
+            JOIN student_fee_adjustments AS adjustment
+              ON adjustment.school_id = fee.school_id
+             AND adjustment.session_id = fee.academic_session_id
+             AND adjustment.student_id = fee.student_id
+             AND adjustment.fee_head_id = head.fee_head_id
+             AND substr(CAST(adjustment.date AS VARCHAR), 1, 7) = fee.fee_month
+            WHERE adjustment.type = 'Discount' AND adjustment.applied_at IS NOT NULL
+            GROUP BY head.id, head.net_amount, head.paid_amount
+        )
+        UPDATE student_fee_heads AS head
+        SET adjustment_discount_amount = credits.credit,
+            discount_amount = head.discount_amount + credits.credit,
+            net_amount = head.net_amount - credits.credit
+        FROM credits
+        WHERE head.id = credits.id AND credits.credit > 0
+    """)
+    connection.exec_driver_sql("""
+        WITH credits AS (
+            SELECT student_fee_id, SUM(adjustment_discount_amount) AS credit
+            FROM student_fee_heads
+            WHERE adjustment_discount_amount > 0
+            GROUP BY student_fee_id
+        )
+        UPDATE student_fees AS fee
+        SET discount_amount = fee.discount_amount + credits.credit,
+            net_amount = fee.net_amount - credits.credit,
+            status = CASE WHEN fee.paid_amount >= fee.net_amount - credits.credit THEN 'PAID'
+                          WHEN fee.paid_amount > 0 THEN 'PARTIAL'
+                          ELSE 'UNPAID' END
+        FROM credits
+        WHERE fee.id = credits.student_fee_id
+    """)
+
+
+def migrate_student_fee_totals(connection):
+    postgres = connection.dialect.name == "postgresql"
+    if postgres:
+        acquire_transaction_lock(connection, 731904218)
+    columns = {column["name"]: column for column in inspect(connection).get_columns("student_fees")}
+    if "total_accepted_payment" in columns:
+        connection.exec_driver_sql("ALTER TABLE student_fees DROP COLUMN total_accepted_payment")
+    if postgres and columns["total_amount"]["type"].precision != 18:
+        connection.exec_driver_sql("ALTER TABLE student_fees ALTER COLUMN total_amount TYPE NUMERIC(18, 2)")
+
+
+def migrate_student_fee_paid_amount(connection):
+    if connection.dialect.name != "postgresql":
+        return
+    acquire_transaction_lock(connection, 731904218)
+    columns = {column["name"]: column for column in inspect(connection).get_columns("student_fees")}
+    if columns["paid_amount"]["type"].precision == 18:
+        return
+
+    from models.student_fee_adjustment import StudentFee, fee_non_principal_paid_amount
+
+    connection.exec_driver_sql("ALTER TABLE student_fees DROP CONSTRAINT IF EXISTS ck_student_fee_payment_range")
+    connection.exec_driver_sql("ALTER TABLE student_fees ALTER COLUMN paid_amount TYPE NUMERIC(18, 2)")
+    connection.exec_driver_sql(
+        "ALTER TABLE student_fees ADD CONSTRAINT ck_student_fee_payment_range CHECK (net_amount >= 0)"
+    )
+    connection.execute(
+        update(StudentFee.__table__).where(fee_non_principal_paid_amount > 0)
+        .values(paid_amount=StudentFee.paid_amount + fee_non_principal_paid_amount)
+    )
+
+
 def ensure_all_tables(connection):
     register_models()
     ensure_school_status(connection)
@@ -95,21 +222,16 @@ def ensure_all_tables(connection):
     remove_legacy_session_year_index(connection)
     existing = set(inspect(connection).get_table_names())
     if "student_fee_adjustments" in existing:
-        columns = {column["name"] for column in inspect(connection).get_columns("student_fee_adjustments")}
-        if_not_exists = "IF NOT EXISTS " if connection.dialect.name == "postgresql" else ""
-        for name, definition in (
-            ("tag", "VARCHAR(50)"),
-            ("admission_number", "VARCHAR(150)"),
-            ("paid_amount", "NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (paid_amount >= 0 AND paid_amount <= amount)"),
-        ):
-            if name not in columns:
-                connection.exec_driver_sql(
-                    f"ALTER TABLE student_fee_adjustments ADD COLUMN {if_not_exists}{name} {definition}"
-                )
+        migrate_student_fee_adjustments(connection)
+    if {"student_fees", "student_fee_heads", "student_fee_adjustments"} <= existing:
+        migrate_fee_head_adjustment_discounts(connection)
     if "student_carry_forwards" in existing:
         migrate_student_carry_forwards(connection)
     if "student_fees" in existing:
         add_student_fee_late_fee_amount(connection, backfill="student_fee_late_payments" in existing)
+        migrate_student_fee_totals(connection)
+    if {"student_fees", "student_fee_adjustments", "student_carry_forwards"} <= existing:
+        migrate_student_fee_paid_amount(connection)
     if "student_fee_late_payments" in existing and connection.dialect.name == "postgresql":
         old_constraint = "uq_student_fee_late_payment_session"
         table = "student_fee_late_payments"
@@ -166,6 +288,7 @@ def ensure_all_tables(connection):
         # Recheck within create_all after serializing concurrent initialization.
         acquire_transaction_lock(connection, 731904218)
     Base.metadata.create_all(bind=connection, checkfirst=True)
+    migrate_student_fee_paid_amount(connection)
     _drop_legacy_session_month_date(connection)
     _normalize_session_month_format(connection)
     ensure_fee_assignment_section_column(connection)
