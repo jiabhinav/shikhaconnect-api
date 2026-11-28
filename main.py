@@ -1,3 +1,4 @@
+import json
 import logging
 from pathlib import Path
 
@@ -8,10 +9,12 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from database.database import initialize_database, test_db_connection
 from routers.auth import router as auth_router
+from routers.student_promotions import StudentPromotionWrite
 from routers.schools import router as school_router
 from routers.super_admin import router as super_admin_router
 from routers.users import router as user_router
 from routers.teachers import router as teacher_router
+from schemas.enums import StudentStatus
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +94,91 @@ def swagger_docs(request: Request):
         return request;
     },
 """
-    return HTMLResponse(page.body.decode("utf-8").replace("    presets: [", upload_confirmation + "    presets: [", 1))
+    status_schema = StudentPromotionWrite.model_json_schema()["properties"]["status"]
+    status_dropdown = r"""
+<script>
+(() => {
+    const promotionStatuses = PROMOTION_STATUS_OPTIONS;
+    const studentStatuses = STUDENT_STATUS_OPTIONS;
+    const swagger = document.getElementById("swagger-ui");
+    const selector = 'textarea.body-param__text';
+    const readBody = (editor, nested) => {
+        try {
+            const body = JSON.parse(editor.value);
+            const rows = nested ? [body?.student_info] : Array.isArray(body) ? body : [body];
+            return rows.every(row => row && typeof row === "object" && !Array.isArray(row))
+                ? {body, rows} : null;
+        } catch {
+            return null;
+        }
+    };
+
+    const renderEditor = (operation, statuses, nested) => {
+        const editor = operation.querySelector(selector);
+        if (!editor) return;
+        let controls = editor.parentElement.querySelector(".student-status-controls");
+        if (!controls) {
+            controls = document.createElement("div");
+            controls.className = "student-status-controls";
+            editor.before(controls);
+        }
+
+        const rows = readBody(editor, nested)?.rows ?? [];
+        const signature = JSON.stringify(rows.map(row => [row.student_id, row.status]));
+        if (controls.dataset.rows === signature) return;
+        controls.dataset.rows = signature;
+        controls.replaceChildren();
+
+        rows.forEach((row, index) => {
+            const label = document.createElement("label");
+            label.style.display = "block";
+            label.textContent = nested ? "Student status " : `Row ${index + 1} status `;
+            const select = document.createElement("select");
+            if (nested) {
+                select.add(new Option(operation.classList.contains("opblock-put") ? "Keep current" : "Default (active)", ""));
+            }
+            statuses.forEach(status => select.add(new Option(status, status)));
+            select.value = row.status ?? (nested ? "" : PROMOTION_DEFAULT_STATUS);
+            select.addEventListener("change", () => {
+                const current = readBody(editor, nested);
+                if (!current?.rows[index]) return;
+                if (select.value) {
+                    current.rows[index].status = select.value;
+                } else {
+                    delete current.rows[index].status;
+                }
+                // Invoke the native setter so Swagger UI's React editor sees the change.
+                const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+                setter.call(editor, JSON.stringify(current.body, null, 2));
+                editor.dispatchEvent(new Event("input", {bubbles: true}));
+            });
+            label.append(select);
+            controls.append(label);
+        });
+    };
+
+    const render = () => {
+        for (const path of swagger.querySelectorAll('[data-path="/schools/students/promote"]')) {
+            renderEditor(path.closest(".opblock"), promotionStatuses, false);
+        }
+        for (const path of swagger.querySelectorAll('[data-path="/schools/students"]')) {
+            const operation = path.closest(".opblock");
+            if (operation.matches(".opblock-post, .opblock-put")) {
+                renderEditor(operation, studentStatuses, true);
+            }
+        }
+    };
+
+    swagger.addEventListener("input", render);
+    new MutationObserver(render).observe(swagger, {childList: true, subtree: true});
+    render();
+})();
+</script>
+""".replace("PROMOTION_STATUS_OPTIONS", json.dumps(status_schema["enum"])).replace(
+        "STUDENT_STATUS_OPTIONS", json.dumps([status.value for status in StudentStatus]),
+    ).replace("PROMOTION_DEFAULT_STATUS", json.dumps(status_schema["default"]))
+    html = page.body.decode("utf-8").replace("    presets: [", upload_confirmation + "    presets: [", 1)
+    return HTMLResponse(html.replace("</body>", status_dropdown + "</body>", 1))
 
 
 @app.get(app.swagger_ui_oauth2_redirect_url, include_in_schema=False)

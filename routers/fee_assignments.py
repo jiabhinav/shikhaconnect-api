@@ -21,6 +21,7 @@ from models.fee_structure import FeeStructure
 from models.generation_settings import FeeGenerationSettings
 from models.session import Session as SchoolSession
 from models.student import Student
+from models.student_promotion import StudentPromotion
 from models.student_carry_forward import CARRY_FORWARD_TAG, StudentCarryForward
 from models.student_fee_adjustment import StudentFeeAdjustment
 from models.student_fee import StudentFee, StudentFeeChequePayment, StudentFeeHead, StudentFeeReceipt, StudentFeeReceiptCounter
@@ -204,6 +205,9 @@ def apply_student_fee_payment(
     ).with_for_update().first()
     if student is None:
         raise HTTPException(404, 'Student not found for this school session')
+
+    if db.get(StudentPromotion, student.id) is not None:
+        raise HTTPException(409, 'This balance was transferred to a later session')
 
     requested_months = eligible_months if eligible_months is not None else [entry.fee_month for entry in payload.months]
     carry_forward = db.query(StudentCarryForward).filter_by(
@@ -651,9 +655,9 @@ def late_fee_settings(db, scope):
 
 def fee_payment_months(
     db, school_id, session_id, student_id, *, months=None, exclude_adjustment_id=None,
-    include_pending_discounts=False,
+    include_pending_discounts=False, for_promotion=False,
 ):
-    student = db.query(Student.id, Student.class_id).filter_by(
+    student = db.query(Student.id, Student.class_id, Student.section_id, Student.fee_category_name).filter_by(
         id=student_id, school_id=school_id, session_id=session_id,
     ).first()
     if student is None:
@@ -676,6 +680,20 @@ def fee_payment_months(
         FeeAssignment.session_id == session_id,
         FeeAssignment.class_id == student.class_id,
     ).all()
+    if for_promotion:
+        category_ids = None
+        if student.fee_category_name:
+            category_ids = {row.id for row in db.query(FeeCategory.id).filter(
+                FeeCategory.school_id == school_id,
+                FeeCategory.name == student.fee_category_name,
+                (FeeCategory.session_id == session_id) | FeeCategory.session_id.is_(None),
+            )}
+        assignments = [
+            (assignment, anchor) for assignment, anchor in assignments
+            if (category_ids is None or anchor.fee_category_id in category_ids)
+            and (not section_id_array(assignment.section_id)
+                 or student.section_id in section_id_array(assignment.section_id))
+        ]
     configuration_ids = list({anchor.configuration_id for _, anchor in assignments})
     configured_rows = []
     if configuration_ids:
@@ -716,6 +734,14 @@ def fee_payment_months(
                     'payable_amount': line.net_amount + line.adjustment_discount_amount,
                 }
 
+        if for_promotion and record and not record.fee_heads and record.net_amount > 0:
+            # Legacy monthly records can store principal without a fee-head breakdown.
+            month_heads = {None: {
+                'fee_head_id': None, 'fee_head_name': 'Fee principal',
+                'original_amount': record.net_amount, 'payable_amount': record.net_amount,
+            }}
+            paid_by_head = {None: record.fee_head_paid_amount}
+
         monthly_adjustments = adjustment_heads[month]
         discounts_by_head = defaultdict(Decimal)
         penalties_by_head = defaultdict(Decimal)
@@ -746,8 +772,8 @@ def fee_payment_months(
             paid = min(paid_by_head.get(values['fee_head_id'], Decimal('0.00')), values['payable_amount'])
             head_id = values['fee_head_id']
             discount = discounts_by_head[head_id]
-            penalty = penalties_by_head[head_id]
-            penalty_paid = penalty_paid_by_head[head_id]
+            penalty = penalties_by_head[head_id] if head_id is not None else Decimal("0.00")
+            penalty_paid = penalty_paid_by_head[head_id] if head_id is not None else Decimal("0.00")
             payable = values['payable_amount'] - discount + penalty
             paid += penalty_paid
             fee_heads.append(FeePaymentFeeHeadStatus(
@@ -781,7 +807,7 @@ def fee_payment_months(
         month_carry_forward = carry_forward if month == first_month else None
         total_heads = fee_heads + [
             line for line in monthly_adjustments
-            if line.tag == "penalty" and line.fee_head_id not in month_heads
+            if line.tag == "penalty" and (line.fee_head_id is None or line.fee_head_id not in month_heads)
         ]
         if month_carry_forward is not None:
             total_heads.append(month_carry_forward)

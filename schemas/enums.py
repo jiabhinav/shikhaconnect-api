@@ -1,6 +1,13 @@
 from enum import Enum
 
 
+class StudentStatus(str, Enum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    COMPLETED = "completed"
+    PROMOTED = "promoted"
+
+
 class StudentFeeStatus(str, Enum):
     UNPAID = "UNPAID"
     PARTIAL = "PARTIAL"

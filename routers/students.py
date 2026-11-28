@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, func, or_
 from utils.passwords import hash_password
@@ -12,10 +13,12 @@ from models.class_section import ClassSectionMapping, SchoolClass, Section
 from models.session import Session as SchoolSession
 from models.fee_category import FeeCategory
 from models.fee_assignment import FeeAssignment
+from schemas.enums import StudentStatus
 from schemas.fee_assignment import AssignedFeeStructureDetailsResult
 from routers.fee_assignments import get_assigned_fee_structure_monthly_details, section_id_array
 from models.student import Student, StudentLogin, StudentAddressRecord, PreviousSchool
 from models.user import User, UserRole
+from models.student_promotion import StudentPromotion
 from schemas.student import StudentWrite, StudentResult, StudentListResult, StudentAdmissionUpdate, StudentDropdownResult, StudentStatusUpdate
 
 router = APIRouter()
@@ -152,18 +155,18 @@ def create_student(school_id: int, payload: StudentWrite, db: Session = Depends(
 @router.get("/{school_id}/students", response_model=StudentListResult, include_in_schema=False)
 @router.get("/students", response_model=StudentListResult)
 def list_students(school_id: int, session_id: int | None = Query(None, gt=0),
-                  status: bool = True, offset: int = Query(0, ge=0),
+                  status: StudentStatus | Literal["all"] | bool = "all", offset: int = Query(0, ge=0),
                   limit: int = Query(50, ge=1, le=200),
                   name: str | None = Query(None, min_length=1, max_length=767),
                   mobile: str | None = Query(None, min_length=1, max_length=20),
-                  class_id: str = Query("all", max_length=100),
-                  section_id: str = Query("all", max_length=100),
-                  house_name: str = Query("all", max_length=100),
-                  student_type: str = Query("all", max_length=100),
-                  gender: str = Query("all", max_length=50),
-                  religion: str = Query("all", max_length=100),
-                  caste_category_name: str = Query("all", max_length=100),
-                  fee_category_name: str = Query("all", max_length=100),
+                  class_id: Annotated[str, Query(max_length=100)] = "all",
+                  section_id: Annotated[str, Query(max_length=100)] = "all",
+                  house_name: Annotated[str, Query(max_length=100)] = "all",
+                  student_type: Annotated[str, Query(max_length=100)] = "all",
+                  gender: Annotated[str, Query(max_length=50)] = "all",
+                  religion: Annotated[str, Query(max_length=100)] = "all",
+                  caste_category_name: Annotated[str, Query(max_length=100)] = "all",
+                  fee_category_name: Annotated[str, Query(max_length=100)] = "all",
                   search: str | None = Query(None, min_length=1, max_length=767),
                   db: Session = Depends(student_school)):
     from dependencies.school_session import require_school_session
@@ -171,7 +174,10 @@ def list_students(school_id: int, session_id: int | None = Query(None, gt=0),
     if session_id is not None:
         require_school_session(db, school_id, session_id)
         query = query.filter(Student.session_id == session_id)
-    query = query.filter(Student.status == ("active" if status else "inactive"))
+    if isinstance(status, bool):
+        status = StudentStatus.ACTIVE if status else StudentStatus.INACTIVE
+    if status != "all":
+        query = query.filter(Student.status == status.value)
     if name is not None:
         if not name.strip():
             raise HTTPException(422, "name must not be blank")
@@ -245,7 +251,7 @@ def list_students(school_id: int, session_id: int | None = Query(None, gt=0),
 @router.get("/{school_id}/students/search", response_model=StudentListResult, include_in_schema=False)
 @router.get("/students/search", response_model=StudentListResult)
 def search_students(school_id: int, search: str = Query(..., min_length=1, max_length=767),
-                    session_id: int | None = Query(None, gt=0), status: bool = True,
+                    session_id: int | None = Query(None, gt=0), status: StudentStatus | Literal["all"] | bool = "all",
                     offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200),
                     db: Session = Depends(student_school)):
     return list_students(school_id=school_id, session_id=session_id, status=status,
@@ -285,9 +291,26 @@ def get_student(school_id: int, student_id: int, db: Session = Depends(student_s
 @router.put("/{school_id}/students/{student_id}", response_model=StudentResult, include_in_schema=False)
 @router.put("/students", response_model=StudentResult)
 def update_student(school_id: int, student_id: int, payload: StudentWrite, db: Session = Depends(student_school)):
-    item = find_student(db, school_id, student_id)
     validate_student_references(db, school_id, payload)
     try:
+        # Use the same school-before-student lock order as admission-number updates.
+        db.query(School.id).filter_by(id=school_id).with_for_update().one()
+        item = db.query(Student).filter_by(
+            school_id=school_id, id=student_id,
+        ).populate_existing().with_for_update().one_or_none()
+        if item is None:
+            raise HTTPException(404, "Student not found")
+        outgoing_promotion = db.get(StudentPromotion, item.id)
+        if (
+            outgoing_promotion is not None and payload.student_info.status is not None
+            and payload.student_info.status.value != item.status
+        ):
+            raise HTTPException(409, "Cancel the promotion to change the source student status")
+        if item.session_id != payload.student_info.session_id and (
+            outgoing_promotion is not None
+            or db.query(StudentPromotion.source_student_id).filter_by(destination_student_id=item.id).first()
+        ):
+            raise HTTPException(409, "A promoted student record cannot move to another session")
         update_student_details(db, school_id, item, payload)
         for key, value in payload.student_values().items():
             if key in {"caste_category_name", "fee_category_name", "house_name"}:
@@ -331,12 +354,16 @@ def update_admission_number(school_id: int, student_id: int, payload: StudentAdm
 def update_student_status(school_id: int, student_id: int, payload: StudentStatusUpdate,
                           session_id: int = Query(..., gt=0),
                           db: Session = Depends(student_school)):
-    item = find_student(db, school_id, student_id)
+    item = db.query(Student).filter_by(school_id=school_id, id=student_id).with_for_update().first()
+    if item is None:
+        raise HTTPException(404, "Student not found")
     from dependencies.school_session import require_school_session
     require_school_session(db, school_id, session_id)
     if item.session_id != session_id:
         raise HTTPException(404, "Student not found in this session")
-    item.status = "active" if payload.status else "inactive"
+    if db.get(StudentPromotion, item.id) is not None:
+        raise HTTPException(409, "Cancel the promotion to change the source student status")
+    item.status = StudentStatus.ACTIVE.value if payload.status else StudentStatus.INACTIVE.value
     action = "activated" if payload.status else "deactivated"
     return save_student(db, item, f"Student {action} successfully")
 
@@ -345,6 +372,12 @@ def update_student_status(school_id: int, student_id: int, payload: StudentStatu
 def delete_student(school_id: int, student_id: int, db: Session = Depends(student_school)):
     item = find_student(db, school_id, student_id)
     try:
+        promotion = db.query(StudentPromotion).filter(
+            StudentPromotion.school_id == school_id,
+            or_(StudentPromotion.source_student_id == item.id, StudentPromotion.destination_student_id == item.id),
+        ).first()
+        if promotion is not None:
+            raise HTTPException(409, "Cancel the promotion to remove the destination student and reactivate the source student")
         db.delete(item)
         db.commit()
     except IntegrityError as exc:

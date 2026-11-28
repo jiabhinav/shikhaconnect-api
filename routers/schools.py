@@ -42,6 +42,7 @@ from routers.timetable_settings import router as timetable_settings_router
 from routers.student_carry_forwards import router as student_carry_forward_router
 from routers.student_fee_adjustments import router as student_fee_adjustment_router
 from routers.students import router as student_router
+from routers.student_promotions import router as student_promotion_router
 from routers.staff import router as staff_router
 from routers.staff_modules import router as staff_module_router
 
@@ -72,6 +73,7 @@ router.include_router(timetable_settings_router, prefix="/school/{school_id}/ses
 from routers.student_assets import router as student_assets_router
 router.include_router(student_assets_router)
 router.include_router(student_router)
+router.include_router(student_promotion_router)
 router.include_router(staff_router)
 router.include_router(staff_module_router)
 

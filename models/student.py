@@ -4,6 +4,7 @@ from sqlalchemy.orm import relationship
 
 from models.session import Session as SchoolSession
 from models.student_carry_forward import StudentCarryForward
+from schemas.enums import StudentStatus
 
 
 class Student(Base):
@@ -18,7 +19,7 @@ class Student(Base):
     admission_date = Column(Date, nullable=True)
     admission_number = Column(String(150), nullable=True)
     admission_sequence = Column(Integer, nullable=True)
-    status = Column(String(20), nullable=False, default="active", server_default="active")
+    status = Column(String(20), nullable=False, default=StudentStatus.ACTIVE.value, server_default=StudentStatus.ACTIVE.value)
     id = Column(Integer, primary_key=True, autoincrement=True)
     school_id = Column(Integer, ForeignKey("schools.id", ondelete="RESTRICT"), nullable=False, index=True)
     date_of_birth = Column(Date, nullable=True)

@@ -572,42 +572,63 @@ class StudentTests(unittest.TestCase):
         self.db.commit()
         self.assertEqual(self.db.query(StudentLogin).count(), 1)
 
-    def test_password_and_status_are_backend_managed(self):
+    def test_student_status_is_writable_and_password_is_backend_managed(self):
         from schemas.student import StudentWrite
+
         payload = nest(self.student_payload())
         schema = StudentWrite.model_json_schema()
-        self.assertNotIn('login', schema['properties'])
-        self.assertNotIn('status', schema['$defs']['StudentInfo']['properties'])
-        url = '/schools/1/students'
-        self.assertEqual(self.client.post(url, json={**payload, 'login': {'password': 'custom-password'}}).status_code, 422)
-        payload['student_info']['status'] = 'inactive'
-        self.assertEqual(self.client.post(url, json=payload).status_code, 422)
-        del payload['student_info']['status']
-        response = self.client.post(url, json=payload)
+        self.assertNotIn("login", schema["properties"])
+        self.assertEqual(schema["$defs"]["StudentStatus"]["enum"],
+                         ["active", "inactive", "completed", "promoted"])
+        url = "/schools/students"
+        params = {"school_id": 1}
+        self.assertEqual(self.client.post(url, params=params, json={
+            **payload, "login": {"password": "custom-password"},
+        }).status_code, 422)
+        payload["student_info"]["status"] = "inactive"
+        response = self.client.post(url, params=params, json=payload)
         self.assertEqual(response.status_code, 201, response.text)
-        student = self.db.get(Student, response.json()['data']['id'])
-        student.status = 'inactive'
-        self.db.commit()
+        self.assertEqual(response.json()["data"]["student_info"]["status"], "inactive")
+        student = self.db.get(Student, response.json()["data"]["id"])
         password_hash = student.login.password
-        response = self.client.put(f"{url}/{student.id}", json=payload)
+
+        del payload["student_info"]["status"]
+        params["student_id"] = student.id
+        response = self.client.put(url, params=params, json=payload)
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()['data']['student_info']['status'], 'inactive')
-        session_id = payload['student_info']['session_id']
-        filtered = {'school_id': 1, 'session_id': session_id, 'status': False}
-        inactive = self.client.get(url, params=filtered)
-        self.assertEqual(inactive.status_code, 200, inactive.text)
-        self.assertEqual([row['id'] for row in inactive.json()['data']], [first['id']])
-        other_session = self.client.post('/schools/school/1/sessions', json={
-            'name': 'Other', 'start_date': '2030-04-01', 'end_date': '2031-03-31'}).json()['data']['id']
-        self.assertEqual(self.client.get(url, params=filtered | {'session_id': other_session}).json()['data'], [])
-        self.assertEqual(self.client.patch(url + '/status', params=params | {'session_id': other_session},
-                                          json={'status': True}).status_code, 404)
-        self.assertEqual(self.client.get(url, params=filtered | {'session_id': 99999}).status_code, 404)
-        self.assertEqual(self.client.get(url, params=filtered | {'session_id': 0}).status_code, 422)
-        self.assertEqual(self.client.get(url, params=filtered | {'status': 'invalid'}).status_code, 422)
-        self.assertEqual(self.client.patch(url + '/status', params={'school_id': 1, 'student_id': first['id']},
-                                          json={'status': False}).status_code, 422)
+        self.assertEqual(response.json()["data"]["student_info"]["status"], "inactive")
+
+        for status in ("completed", "promoted", "active"):
+            payload["student_info"]["status"] = status
+            response = self.client.put(url, params=params, json=payload)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["data"]["student_info"]["status"], status)
+            for list_path, extra in ((url, {}), (f"{url}/search", {"search": student.first_name})):
+                filtered = self.client.get(list_path, params={"school_id": 1, "status": status} | extra)
+                self.assertEqual(filtered.status_code, 200, filtered.text)
+                self.assertEqual([row["id"] for row in filtered.json()["data"]], [student.id])
+        for status, expected in (("true", [student.id]), ("false", [])):
+            filtered = self.client.get(url, params={"school_id": 1, "status": status})
+            self.assertEqual(filtered.status_code, 200, filtered.text)
+            self.assertEqual([row["id"] for row in filtered.json()["data"]], expected)
         self.assertEqual(student.login.password, password_hash)
+
+    def test_student_list_includes_all_statuses_by_default(self):
+        payload = nest(self.student_payload())
+        url = "/schools/students"
+        params = {"school_id": 1, "session_id": payload["student_info"]["session_id"]}
+        ids = []
+        for status in ("active", "inactive", "completed", "promoted"):
+            payload["student_info"]["status"] = status
+            created = self.client.post(url, params=params, json=payload)
+            self.assertEqual(created.status_code, 201, created.text)
+            ids.append(created.json()["data"]["id"])
+        for path, extra in ((url, {}), (f"{url}/search", {"search": payload["student_info"]["first_name"]})):
+            for status_params in ({}, {"status": "all"}):
+                response = self.client.get(path, params=params | extra | status_params)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["total_records"], 4)
+                self.assertCountEqual([row["id"] for row in response.json()["data"]], ids)
 
     def test_siblings_share_login_and_keep_separate_apar(self):
         from models.student import StudentLogin

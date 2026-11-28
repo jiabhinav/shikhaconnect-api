@@ -15,6 +15,7 @@ from models.class_section import SchoolClass, Section
 from models.school_mapping import SchoolMapping, SchoolMappingStatus
 from models.session import Session as SchoolSession
 from models.student import Student
+from models.student_promotion import StudentPromotion
 from models.student_carry_forward import StudentCarryForward
 from models.user import User, UserRole
 from routers.fee_structures import fee_structure_school
@@ -54,6 +55,7 @@ def carry_forward_db(
 def list_carry_forwards(
     school_id: int,
     session_id: int,
+    student_id: int | None = Query(None, gt=0),
     class_id: int | None = Query(None, gt=0),
     section_id: int | None = Query(None, gt=0),
     payment_status: StudentFeeStatus | None = None,
@@ -82,8 +84,12 @@ def list_carry_forwards(
         ))
         .outerjoin(SchoolClass, and_(SchoolClass.id == Student.class_id, SchoolClass.school_id == school_id))
         .outerjoin(Section, and_(Section.id == Student.section_id, Section.school_id == school_id))
-        .filter(*scope, StudentCarryForward.amount > 0)
+        .filter(*scope)
     )
+    if student_id is None:
+        query = query.filter(StudentCarryForward.amount > 0)
+    else:
+        query = query.filter(Student.id == student_id)
     filters = []
     if class_id is not None:
         filters.append(Student.class_id == class_id)
@@ -157,6 +163,8 @@ def get_carry_forward_for_update(db: Session, school_id: int, session_id: int, c
     if result is None:
         raise HTTPException(404, "Carry-forward fee not found")
     item, _ = result
+    if db.get(StudentPromotion, item.student_id) is not None:
+        raise HTTPException(409, "This balance was transferred to a later session")
     if item.paid_amount > 0:
         raise HTTPException(409, "Only unpaid carry-forward fees can be edited or deleted")
     return result
@@ -322,6 +330,11 @@ def save_carry_forwards(db, school_id, session_id, rows):
                 "message": "Admission numbers not found in this school session",
                 "admission_numbers": missing,
             })
+
+        if db.query(StudentPromotion.source_student_id).filter(
+            StudentPromotion.source_student_id.in_(students.values()),
+        ).first() is not None:
+            raise HTTPException(409, "A student balance was transferred to a later session")
 
         saved = {
             item.student_id: item

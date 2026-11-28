@@ -1,6 +1,8 @@
 from datetime import date
-from typing import Literal
 from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, StrictBool, field_validator, model_validator, model_serializer
+
+
+from schemas.enums import StudentStatus
 
 
 class FormSection(BaseModel):
@@ -15,6 +17,10 @@ class FormSection(BaseModel):
 
 
 class StudentInfo(FormSection):
+    status: StudentStatus | None = Field(
+        default=None,
+        description="Defaults to active when creating a student. Omit to keep the saved status when updating.",
+    )
     admission_date: date | None = Field(default=None, description="Defaults to today when creating a student.")
     date_of_birth: date | None = None
     caste_category_name: str = Field(min_length=1, max_length=100)
@@ -120,7 +126,10 @@ class StudentWrite(BaseModel):
 
     def student_values(self):
         address = self.present_address
-        return {**self.student_info.model_dump(), **self.parent_info.model_dump(),
+        student_info = self.student_info.model_dump(exclude={"status"})
+        if self.student_info.status is not None:
+            student_info["status"] = self.student_info.status.value
+        return {**student_info, **self.parent_info.model_dump(),
                 **address.model_dump(exclude={"district", "landline_number"})}
 
 
@@ -136,7 +145,7 @@ class StudentInfoResponse(StudentInfo):
     fee_category_name: str | None = None
     fee_category_id: int | None = None
     house_name: str | None = None
-    status: Literal["active", "inactive", "completed", "promoted"] | None = None
+    status: StudentStatus | None = None
     admission_number: str | None = None
     admission_sequence: int | None = None
     # Older records may not have these details until they are updated.

@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PositiveInt, StringConstraints, field_validator, model_validator
 
-from schemas.enums import FeeAdjustmentFrequency, FeeAdjustmentStatus, FeeAdjustmentType, FeeDiscountType
+from schemas.enums import FeeAdjustmentFrequency, FeeAdjustmentStatus, FeeAdjustmentType, FeeDiscountType, StudentStatus
 
 
 InitialFeeAdjustmentStatus = Literal[FeeAdjustmentStatus.PENDING]
@@ -147,7 +147,7 @@ class FeeAdjustmentStudentRow(BaseModel):
     class_name: str | None
     section_id: int | None
     section_name: str | None
-    status: str
+    status: StudentStatus
     total_discount_amount: Decimal
     total_penalty_amount: Decimal
     discount: FeeAdjustmentTotals

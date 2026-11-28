@@ -12,10 +12,11 @@ from sqlalchemy.orm import Session
 from models.class_section import SchoolClass, Section
 from models.session import Session as SchoolSession
 from models.student import Student
+from models.student_promotion import StudentPromotion
 from models.student_fee_adjustment import StudentFeeAdjustment
 from routers.fee_assignments import fee_payment_months
 from routers.fee_structures import fee_structure_school
-from schemas.enums import FeeAdjustmentFrequency, FeeAdjustmentStatus, FeeAdjustmentType, FeeDiscountType
+from schemas.enums import FeeAdjustmentFrequency, FeeAdjustmentStatus, FeeAdjustmentType, FeeDiscountType, StudentStatus
 from schemas.student_fee_adjustment import (
     FeeAdjustmentDropdownResult,
     FeeAdjustmentStudentListResult,
@@ -94,7 +95,13 @@ def lock_adjustment_student(db, scope):
     ).with_for_update().first()
     if student is None:
         raise HTTPException(404, "Student not found for this school session")
+    require_untransferred_balance(db, student.id)
     return student.admission_number
+
+
+def require_untransferred_balance(db, student_id):
+    if db.get(StudentPromotion, student_id) is not None:
+        raise HTTPException(409, "This balance was transferred to a later session")
 
 
 def discount_due_failures(db, scope, dates, amount, *, fee_head_id=None, exclude_adjustment_id=None):
@@ -359,6 +366,7 @@ def bulk_create_month_adjustments(
                 "message": "Admission number not found in this school session",
             })
         scope = {"school_id": school_id, "session_id": session_id, "student_id": student_id}
+        require_untransferred_balance(db, student_id)
         scoped_rows.append((scope, admission_number, entries))
     result = save_bulk_adjustments(db, scoped_rows, expand_monthly=False)
     for saved_row, adjustment in zip(result["data"], payload, strict=True):
@@ -407,7 +415,7 @@ def list_adjustment_students(
     class_id: PositiveInt | AllFilter | None = None,
     section_id: PositiveInt | AllFilter | None = None,
     adjustment_type: FeeAdjustmentType | AllFilter | None = Query(None, alias="type"),
-    status: Literal["active", "inactive", "completed", "promoted"] | None = None,
+    status: StudentStatus | None = None,
     search: str | None = Query(None, max_length=767),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -416,7 +424,7 @@ def list_adjustment_students(
     query = db.query(Student).filter_by(school_id=school_id, session_id=session_id)
     for column, value in (
         (Student.id, student_id), (Student.class_id, class_id), (Student.section_id, section_id),
-        (Student.status, status),
+        (Student.status, status.value if status is not None else None),
     ):
         if value not in (None, "all", "All", "ALL"):
             query = query.filter(column == value)

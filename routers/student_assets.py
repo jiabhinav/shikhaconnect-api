@@ -69,6 +69,10 @@ def replace_profile_file(path, data):
             os.unlink(temporary)
 
 
+def shared_profile_path(db, item, path):
+    return db.query(Student.id).filter(Student.id != item.id, Student.profile_img == path).first() is not None
+
+
 @router.put('/students/profile')
 @router.post('/students/profile', status_code=201)
 def upload_student_profile(school_id: int, student_id: int, file: UploadFile = File(...),
@@ -85,6 +89,8 @@ def upload_student_profile(school_id: int, student_id: int, file: UploadFile = F
     # Keep admission numbers containing separators inside a single filename.
     admission_number = re.sub(r'[^\w.-]', '_', item.admission_number)
     relative = f'{school_id}/students/{student_id}/profile/{admission_number}{extension}'
+    if shared_profile_path(db, item, relative):
+        relative = f'{school_id}/students/{student_id}/profile/{admission_number}_{uuid4().hex}{extension}'
     path = asset_path(relative)
     previous_data = path.read_bytes() if path.is_file() else None
     replace_profile_file(path, data)
@@ -98,7 +104,8 @@ def upload_student_profile(school_id: int, student_id: int, file: UploadFile = F
         else:
             replace_profile_file(path, previous_data)
         raise
-    if old_path and old_path != relative and old_path.startswith(f'{school_id}/students/{student_id}/profile/'):
+    if (old_path and old_path != relative and old_path.startswith(f'{school_id}/students/{student_id}/profile/')
+            and not shared_profile_path(db, item, old_path)):
         asset_path(old_path).unlink(missing_ok=True)
     return {'status': 'success', 'data': {'student_id': student_id, 'profile_img': relative}}
 
@@ -117,7 +124,8 @@ def delete_student_profile(school_id: int, student_id: int,
     old_path = item.profile_img
     # Resolve the owned path before committing; remove the file only after saving.
     path = (asset_path(old_path) if old_path and
-            old_path.startswith(f'{school_id}/students/{student_id}/profile/') else None)
+            old_path.startswith(f'{school_id}/students/{student_id}/profile/')
+            and not shared_profile_path(db, item, old_path) else None)
     try:
         item.profile_img = None
         db.commit()
@@ -150,6 +158,9 @@ def upload_student_document(school_id: int, student_id: int, document_type: Docu
         file.file.seek(0)
         data, extension = validate_image(file)
         media_type = {'.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp'}[extension]
+    student = db.query(Student.id).filter_by(id=student_id, school_id=school_id).with_for_update().first()
+    if student is None:
+        raise HTTPException(404, 'Student not found in this school')
     relative = write_file(school_id, student_id, 'documents', document_type.value, extension, data)
     try:
         item = StudentDocument(student_id=student_id, document_type=document_type.value,

@@ -19,6 +19,7 @@ from dependencies.db import get_db_session
 from models.school import School
 from models.student import Student
 from routers.students import validate_student_references, update_student_details
+from schemas.enums import StudentStatus
 from schemas.student_bulk import StudentBulkRow, bulk_payload, FailedStudentsExportRequest
 from utils.dates import today
 
@@ -163,7 +164,7 @@ def bulk_upload_students(
                     values = payload.student_values()
                     values['admission_date'] = values.get('admission_date') or today()
                     item = Student(school_id=school_id, admission_number=row.admission_number,
-                                   status=status.lower(), **values)
+                                   status=StudentStatus(status.lower()).value, **values)
                     # Follow the Schools create API for login, addresses and previous school.
                     # The supplied admission number skips automatic admission allocation.
                     update_student_details(db, school_id, item, payload)
